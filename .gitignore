@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+.kotlin/
+
+# Session-local Claude Code state
+.claude/
