@@ -11,6 +11,13 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <!--
+                  A MediaLibraryService must advertise its own action for SessionToken
+                  resolution; the MediaSessionService action keeps plain MediaController
+                  clients working, and the legacy browser action is what Android Auto
+                  and older system surfaces look for.
+                -->
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
