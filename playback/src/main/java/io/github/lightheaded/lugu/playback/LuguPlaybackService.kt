@@ -100,6 +100,8 @@ class LuguPlaybackService : MediaLibraryService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
+            .setSeekBackIncrementMs(10_000)
+            .setSeekForwardIncrementMs(30_000)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
             .apply {
@@ -110,7 +112,11 @@ class LuguPlaybackService : MediaLibraryService() {
 
         player.addListener(PersistenceListener())
 
-        session = MediaLibrarySession.Builder(this, player, LibrarySessionCallback())
+        // The session sees a chapter-aware wrapper: notification and lock-screen
+        // buttons must never be able to seek a book back to zero.
+        val sessionPlayer = ChapterAwarePlayer(player, stateHolder)
+
+        session = MediaLibrarySession.Builder(this, sessionPlayer, LibrarySessionCallback())
             .setSessionActivity(openAppIntent())
             .build()
 
@@ -270,7 +276,47 @@ class LuguPlaybackService : MediaLibraryService() {
             newPosition: Player.PositionInfo,
             reason: Int,
         ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK) persistPosition(reason = "seek")
+            if (reason != Player.DISCONTINUITY_REASON_SEEK) return
+
+            // Record before persisting, so the position we are leaving is recoverable
+            // even if the seek came from a notification button we do not control.
+            val context = stateHolder.nowPlaying.value
+            if (context != null) {
+                val from = AbsoluteTiming.toAbsoluteSec(
+                    context.tracks,
+                    oldPosition.mediaItemIndex,
+                    oldPosition.positionMs.coerceAtLeast(0),
+                )
+                val to = AbsoluteTiming.toAbsoluteSec(
+                    context.tracks,
+                    newPosition.mediaItemIndex,
+                    newPosition.positionMs.coerceAtLeast(0),
+                )
+                scope.launch {
+                    val account = authRepository.account() ?: return@launch
+                    withContext(Dispatchers.IO) {
+                        progressRepository.recordJump(
+                            account = account,
+                            itemId = context.libraryItemId,
+                            episodeId = context.episodeId,
+                            fromSec = from,
+                            toSec = to,
+                            reason = "seek",
+                        )
+                    }
+                    if (kotlin.math.abs(to - from) >= UNDO_PROMPT_SEC) {
+                        stateHolder.setUndoableJump(
+                            io.github.lightheaded.lugu.core.sync.ProgressJump(
+                                libraryItemId = context.libraryItemId,
+                                episodeId = context.episodeId,
+                                fromSec = from,
+                                toSec = to,
+                            ),
+                        )
+                    }
+                }
+            }
+            persistPosition(reason = "seek")
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -344,6 +390,9 @@ class LuguPlaybackService : MediaLibraryService() {
 
         /** Within this much of the end counts as finished. */
         const val FINISHED_TAIL_SEC = 20.0
+
+        /** A jump at least this large offers an undo, because it may not have been meant. */
+        const val UNDO_PROMPT_SEC = 120.0
     }
 }
 

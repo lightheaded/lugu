@@ -300,3 +300,50 @@ interface QueueDao {
     @Query("DELETE FROM queue WHERE serverId = :serverId AND userId = :userId")
     suspend fun clear(serverId: String, userId: String)
 }
+
+@Dao
+interface PositionHistoryDao {
+    @Query(
+        """
+        SELECT * FROM position_history
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        ORDER BY atMs DESC LIMIT :limit
+        """,
+    )
+    fun observeForItem(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        limit: Int = 50,
+    ): Flow<List<PositionHistoryEntity>>
+
+    @Query(
+        """
+        SELECT * FROM position_history
+        WHERE serverId = :serverId AND userId = :userId
+        ORDER BY atMs DESC LIMIT :limit
+        """,
+    )
+    fun observeRecent(serverId: String, userId: String, limit: Int = 50): Flow<List<PositionHistoryEntity>>
+
+    @Query(
+        """
+        SELECT * FROM position_history
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        ORDER BY atMs DESC LIMIT 1
+        """,
+    )
+    suspend fun mostRecentForItem(serverId: String, userId: String, itemId: String): PositionHistoryEntity?
+
+    @Insert
+    suspend fun insert(entry: PositionHistoryEntity)
+
+    /** Keeps the history bounded; recovery only ever needs the recent past. */
+    @Query(
+        """
+        DELETE FROM position_history
+        WHERE serverId = :serverId AND userId = :userId AND atMs < :before
+        """,
+    )
+    suspend fun trimOlderThan(serverId: String, userId: String, before: Long)
+}

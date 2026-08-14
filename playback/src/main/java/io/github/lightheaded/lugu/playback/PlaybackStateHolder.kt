@@ -61,6 +61,14 @@ class PlaybackStateHolder @Inject constructor() {
         _nowPlaying.value = nowPlaying
     }
 
+    /**
+     * A large seek the listener may not have meant — including one from a notification
+     * button. Offered as an undo rather than silently applied.
+     */
+    fun setUndoableJump(jump: ProgressJump) {
+        _pendingJump.value = jump
+    }
+
     fun setJump(jump: ProgressJump?) {
         _pendingJump.value = jump
     }

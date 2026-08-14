@@ -22,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -52,6 +54,15 @@ data class PlayerUiState(
  * resolve conflicting progress — lives in the service and the resolver instead, so
  * Android Auto and the notification get the same behaviour for free.
  */
+/** One recorded position change, as the recovery UI shows it. */
+data class PositionJump(
+    val fromSec: Double,
+    val toSec: Double,
+    val atMs: Long,
+    val reason: String,
+)
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Singleton
 class PlaybackConnection @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -277,6 +288,44 @@ class PlaybackConnection @Inject constructor(
     fun hasChapters(): Boolean = (stateHolder.nowPlaying.value?.chapters?.size ?: 0) > 1
 
     val sleepTimer get() = stateHolder.sleepTimer
+
+    /** Recent large position changes for the loaded item, newest first. */
+    fun observePositionHistory(): kotlinx.coroutines.flow.Flow<List<PositionJump>> =
+        stateHolder.nowPlaying.flatMapLatest { now ->
+            val itemId = now?.libraryItemId
+            if (itemId == null) {
+                kotlinx.coroutines.flow.flowOf(emptyList())
+            } else {
+                val account = authRepository.account()
+                if (account == null) {
+                    kotlinx.coroutines.flow.flowOf(emptyList())
+                } else {
+                    progressRepository.observeHistory(account, itemId).map { rows ->
+                        rows.map { PositionJump(it.fromSec, it.toSec, it.atMs, it.reason) }
+                    }
+                }
+            }
+        }
+
+    /** Restores a position from history. An explicit user action, so it may move backwards. */
+    fun restorePosition(toSec: Double) {
+        scope.launch {
+            val account = authRepository.account() ?: return@launch
+            val context = stateHolder.nowPlaying.value ?: return@launch
+            withContext(Dispatchers.IO) {
+                progressRepository.record(
+                    account = account,
+                    itemId = context.libraryItemId,
+                    episodeId = context.episodeId,
+                    positionSec = toSec,
+                    durationSec = context.durationSec,
+                    force = true,
+                )
+            }
+            seekTo(toSec)
+            stateHolder.clearJump()
+        }
+    }
 
     /** Arms the sleep timer from the current position. Pass null to cancel. */
     fun setSleepTimer(mode: SleepMode?) {

@@ -19,6 +19,7 @@ import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.db.OutboxDao
+import io.github.lightheaded.lugu.core.db.PositionHistoryDao
 import io.github.lightheaded.lugu.core.db.ProgressDao
 import io.github.lightheaded.lugu.core.db.QueueDao
 import io.github.lightheaded.lugu.core.db.ServerDao
@@ -54,6 +55,8 @@ object DatabaseModule {
     @Provides fun outboxDao(db: LuguDatabase): OutboxDao = db.outboxDao()
 
     @Provides fun queueDao(db: LuguDatabase): QueueDao = db.queueDao()
+
+    @Provides fun positionHistoryDao(db: LuguDatabase): PositionHistoryDao = db.positionHistoryDao()
 }
 
 @Module
