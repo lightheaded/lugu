@@ -2,11 +2,32 @@
 
 *Started 2026-08-14 during M0. Server branch: `advplyr/audiobookshelf@master` (v2.36 era).*
 
-**Status: source-verified, not yet capture-verified.** No live server was reachable in
-the session that built M0, so the shapes below were read out of the server's own code
-rather than off the wire. Each entry names the file it came from. Anything marked
-**UNVERIFIED** still needs a real request/response pair before it can be trusted —
-that is the remaining part of Phase 2 task 1 in [../EXECUTION-PLAN.md](../EXECUTION-PLAN.md).
+**Status: endpoint paths capture-verified against a live 2.36.0 server; payload shapes
+still source-verified.** The shapes below were read out of the server's own code, and
+each entry names the file it came from. Unauthenticated endpoints have since been
+confirmed live (below). Anything marked **UNVERIFIED** still needs a real
+request/response pair — that is the remaining part of Phase 2 task 1 in
+[../EXECUTION-PLAN.md](../EXECUTION-PLAN.md), and it needs credentials in
+`local.properties` to finish.
+
+## Live capture — unauthenticated (server 2.36.0)
+
+```
+GET /status  → 200
+{"app":"audiobookshelf","serverVersion":"2.36.0","isInit":true,
+ "language":"en-us","authMethods":["local"],
+ "authFormData":{"authLoginCustomMessage":""}}
+
+POST /login         (empty body) → 400   endpoint exists at the server root
+POST /auth/refresh  (no token)   → 401   endpoint exists at the server root
+```
+
+Confirms the three auth paths lugu uses. The `app` field is the identity check the
+login probe now relies on: parsing alone is not identity, because every field of
+`ServerStatusDto` has a default and any JSON would satisfy it.
+
+`authMethods: ["local"]` means username/password is the only method on this server —
+OIDC is deferred to M4 anyway.
 
 ## Auth
 
