@@ -1,0 +1,126 @@
+import java.util.Properties
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+}
+
+// Dev-only convenience: prefill the login screen from a gitignored local.properties.
+// Keys: lugu.dev.serverUrl, lugu.dev.user, lugu.dev.pass. Never committed.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun devProp(key: String): String = localProps.getProperty(key).orEmpty()
+
+android {
+    namespace = "io.github.lightheaded.lugu"
+    compileSdk = 37
+
+    defaultConfig {
+        applicationId = "io.github.lightheaded.lugu"
+        minSdk = 26
+        targetSdk = 37
+        versionCode = 1
+        versionName = "0.1.0-alpha01"
+    }
+
+    signingConfigs {
+        create("release") {
+            // Populated in CI from repository secrets; absent locally.
+            val storePath = System.getenv("LUGU_KEYSTORE_PATH")
+            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
+                storeFile = file(storePath)
+                storePassword = System.getenv("LUGU_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("LUGU_KEY_ALIAS")
+                keyPassword = System.getenv("LUGU_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            buildConfigField("String", "DEV_SERVER_URL", "\"${devProp("lugu.dev.serverUrl")}\"")
+            buildConfigField("String", "DEV_USER", "\"${devProp("lugu.dev.user")}\"")
+            buildConfigField("String", "DEV_PASS", "\"${devProp("lugu.dev.pass")}\"")
+        }
+        release {
+            // R8 stays off until M1: Media3/Room/Hilt keep-rules are not yet proven,
+            // and a testable alpha matters more than a smaller APK.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            buildConfigField("String", "DEV_SERVER_URL", "\"\"")
+            buildConfigField("String", "DEV_USER", "\"\"")
+            buildConfigField("String", "DEV_PASS", "\"\"")
+            if (System.getenv("LUGU_KEYSTORE_PATH") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+dependencies {
+    implementation(project(":core:model"))
+    implementation(project(":core:api"))
+    implementation(project(":core:db"))
+    implementation(project(":core:sync"))
+    implementation(project(":playback"))
+    implementation(project(":feature:library"))
+    implementation(project(":feature:player"))
+    implementation(project(":feature:settings"))
+
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
+    debugImplementation(libs.compose.ui.tooling)
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+
+    implementation(libs.hilt.android)
+    implementation(libs.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.hilt.compiler)
+    ksp(libs.androidx.hilt.compiler)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
+}
