@@ -210,3 +210,29 @@ data class QueueEntity(
     /** Distinguishes a user-added entry from one an auto-continuation rule appended. */
     val source: String,
 )
+
+/**
+ * Every large position change, so no jump is ever unrecoverable.
+ *
+ * Added after a real incident: the notification's previous button seeked a book to
+ * zero, that position was persisted and synced, and there was no way back — the local
+ * database only ever holds *current* progress. A forty-hour book lost to one
+ * mistaken tap is the exact failure lugu exists to prevent, so every jump big enough
+ * to be unintended is now recorded and can be undone.
+ */
+@Entity(
+    tableName = "position_history",
+    indices = [Index(value = ["serverId", "userId", "libraryItemId", "atMs"])],
+)
+data class PositionHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val rowId: Long = 0,
+    val serverId: String,
+    val userId: String,
+    val libraryItemId: String,
+    val episodeKey: String,
+    val fromSec: Double,
+    val toSec: Double,
+    val atMs: Long,
+    /** Why the position moved: "seek", "chapter", "notification", "adopted-remote". */
+    val reason: String,
+)

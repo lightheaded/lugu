@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -16,8 +18,9 @@ import androidx.room.RoomDatabase
         SessionLedgerEntity::class,
         OutboxEntity::class,
         QueueEntity::class,
+        PositionHistoryEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class LuguDatabase : RoomDatabase() {
@@ -39,11 +42,44 @@ abstract class LuguDatabase : RoomDatabase() {
 
     abstract fun queueDao(): QueueDao
 
+    abstract fun positionHistoryDao(): PositionHistoryDao
+
     companion object {
         const val NAME = "lugu.db"
 
+        /**
+         * Adds the position history table. Purely additive — no existing row is read,
+         * rewritten or dropped, so an upgrade cannot cost anyone their library mirror
+         * or their progress.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `position_history` (
+                        `rowId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `serverId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `libraryItemId` TEXT NOT NULL,
+                        `episodeKey` TEXT NOT NULL,
+                        `fromSec` REAL NOT NULL,
+                        `toSec` REAL NOT NULL,
+                        `atMs` INTEGER NOT NULL,
+                        `reason` TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS " +
+                        "`index_position_history_serverId_userId_libraryItemId_atMs` " +
+                        "ON `position_history` (`serverId`, `userId`, `libraryItemId`, `atMs`)",
+                )
+            }
+        }
+
         fun build(context: Context): LuguDatabase =
             Room.databaseBuilder(context.applicationContext, LuguDatabase::class.java, NAME)
+                .addMigrations(MIGRATION_1_2)
                 .build()
     }
 }

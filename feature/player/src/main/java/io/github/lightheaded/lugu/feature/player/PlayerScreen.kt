@@ -2,6 +2,7 @@ package io.github.lightheaded.lugu.feature.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
@@ -56,6 +58,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.SleepMode
+import io.github.lightheaded.lugu.playback.PositionJump
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,8 +73,21 @@ fun PlayerScreen(
     val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
     val sleep by viewModel.sleepTimer.collectAsStateWithLifecycle()
     var showSleepSheet by remember { mutableStateOf(false) }
+    var showHistorySheet by remember { mutableStateOf(false) }
+    val history by viewModel.positionHistory.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var scrubbing by remember { mutableStateOf<Float?>(null) }
+
+    if (showHistorySheet) {
+        PositionHistorySheet(
+            history = history,
+            onRestore = {
+                viewModel.restorePosition(it)
+                showHistorySheet = false
+            },
+            onDismiss = { showHistorySheet = false },
+        )
+    }
 
     if (showSleepSheet) {
         SleepTimerSheet(
@@ -121,7 +137,7 @@ fun PlayerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Moved to ${formatTime(pending.toSec)} from another device",
+                        "Jumped from ${formatTime(pending.fromSec)} to ${formatTime(pending.toSec)}",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
@@ -285,10 +301,23 @@ fun PlayerScreen(
                     TextButton(onClick = { viewModel.setSleepTimer(null) }) { Text("Cancel") }
                 }
             } else {
-                TextButton(onClick = { showSleepSheet = true }) {
-                    Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("Sleep timer")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { showSleepSheet = true }) {
+                        Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Sleep timer")
+                    }
+                    if (history.isNotEmpty()) {
+                        TextButton(onClick = { showHistorySheet = true }) {
+                            Icon(
+                                Icons.Default.History,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("History")
+                        }
+                    }
                 }
             }
 
@@ -364,6 +393,52 @@ fun MiniPlayer(
                     if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (state.isPlaying) "Pause" else "Play",
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Recovery for a position that moved unexpectedly.
+ *
+ * Exists because a notification button once seeked a book to zero and there was no way
+ * back: the database holds only *current* progress, so an accidental jump was
+ * permanent. Every large move is now recorded and restorable.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PositionHistorySheet(
+    history: List<PositionJump>,
+    onRestore: (Double) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Text("Where you were", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Tap a position to go back to it",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            history.take(20).forEach { jump ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onRestore(jump.fromSec) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(formatTime(jump.fromSec), style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "jumped to ${formatTime(jump.toSec)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { onRestore(jump.fromSec) }) { Text("Restore") }
+                }
             }
         }
     }

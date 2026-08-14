@@ -8,6 +8,8 @@ import io.github.lightheaded.lugu.core.api.toDomain
 import io.github.lightheaded.lugu.core.db.OutboxDao
 import io.github.lightheaded.lugu.core.db.OutboxEntity
 import io.github.lightheaded.lugu.core.db.OutboxKind
+import io.github.lightheaded.lugu.core.db.PositionHistoryDao
+import io.github.lightheaded.lugu.core.db.PositionHistoryEntity
 import io.github.lightheaded.lugu.core.db.ProgressDao
 import io.github.lightheaded.lugu.core.db.ProgressEntity
 import io.github.lightheaded.lugu.core.db.episodeKeyOf
@@ -53,8 +55,48 @@ class ProgressRepository @Inject constructor(
     private val client: AbsClient,
     private val progressDao: ProgressDao,
     private val outboxDao: OutboxDao,
+    private val positionHistoryDao: PositionHistoryDao,
     private val clock: Clock,
 ) {
+    /**
+     * Records a position change big enough that it might not have been intended, so it
+     * can always be undone. Normal listening drifts forward a few seconds at a time and
+     * is not worth recording; a jump is.
+     */
+    suspend fun recordJump(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        fromSec: Double,
+        toSec: Double,
+        reason: String,
+    ) {
+        if (kotlin.math.abs(toSec - fromSec) < MIN_NOTABLE_JUMP_SEC) return
+        positionHistoryDao.insert(
+            PositionHistoryEntity(
+                serverId = account.serverId,
+                userId = account.userId,
+                libraryItemId = itemId,
+                episodeKey = episodeKeyOf(episodeId),
+                fromSec = fromSec,
+                toSec = toSec,
+                atMs = clock.nowMs(),
+                reason = reason,
+            ),
+        )
+        positionHistoryDao.trimOlderThan(
+            account.serverId,
+            account.userId,
+            clock.nowMs() - HISTORY_RETENTION_MS,
+        )
+    }
+
+    fun observeHistory(account: ActiveAccount, itemId: String) =
+        positionHistoryDao.observeForItem(account.serverId, account.userId, itemId)
+
+    suspend fun lastJump(account: ActiveAccount, itemId: String) =
+        positionHistoryDao.mostRecentForItem(account.serverId, account.userId, itemId)
+
     fun observe(account: ActiveAccount, itemId: String, episodeId: String?): Flow<MediaProgress?> =
         progressDao.observeOne(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
             .map { it?.toDomain() }
@@ -233,6 +275,12 @@ class ProgressRepository @Inject constructor(
             serverLastUpdateMs = payload.lastUpdateMs,
         )
         return true
+    }
+
+    private companion object {
+        /** Below this, a position change is ordinary listening rather than a jump. */
+        const val MIN_NOTABLE_JUMP_SEC = 45.0
+        const val HISTORY_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
     }
 
     /** Full reconciliation sweep: the server's whole progress table, merged in. */

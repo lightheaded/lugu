@@ -115,8 +115,31 @@ Confirmed working on Tom's device first, then extended:
   nothing and cost a schema migration on an already-installed device. Setting a book
   back to 1× forgets the override rather than pinning it.
 
-Still outstanding for M1: sleep timer, bookmarks, silence skipping, volume boost,
-BT-disconnect pause, polished notification actions.
+### Data loss from the notification — found in user testing, fixed
+
+Tom pressed rewind on the notification and it **reset the book to zero**, with no way
+back. Two separate defects, both now fixed:
+
+1. **The button did the wrong thing.** Media3's stock transport is built for music: on a
+   single-file audiobook (one MediaItem, forty hours) `seekToPrevious()` seeks to
+   position zero, and on a multi-file book "next" jumps to the next *file*, which is not
+   a chapter. The lock screen therefore offered a one-tap button that destroyed the
+   listener's place — and the resulting position was persisted and synced like any
+   ordinary seek. `ChapterAwarePlayer` now wraps the player for the session and remaps
+   previous/next to chapter navigation, falling back to a plain skip.
+2. **There was no way back.** The database only ever held *current* progress, so an
+   accidental jump was permanent. Schema v2 adds `position_history`: every move of 45s
+   or more is recorded, a jump over two minutes offers an immediate undo, and the player
+   has a "Where you were" sheet to restore any recent position.
+
+The migration is additive and its output is asserted against the schema Room generates
+for the same entity — a hand-written DDL that disagrees crashes the app on upgrade,
+after the user has already installed over a working version. That test compares parsed
+column and index metadata rather than raw CREATE text, because SQLite ignores
+whitespace and a textual comparison fails on formatting while passing real faults.
+
+Still outstanding for M1: bookmarks, silence skipping, volume boost, BT-disconnect
+pause, polished notification actions.
 
 ### Next
 
