@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- An open book seen from the spine, with a listening arc rising from it. -->
+    <path
+        android:fillColor="#EDC08B"
+        android:pathData="M32,42 L52,46 L52,72 L32,68 Z" />
+    <path
+        android:fillColor="#EDC08B"
+        android:pathData="M76,42 L56,46 L56,72 L76,68 Z" />
+    <path
+        android:strokeColor="#EDC08B"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M40,38 A16,16 0 0 1 68,38" />
+</vector>
