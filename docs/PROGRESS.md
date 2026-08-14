@@ -46,6 +46,23 @@ Phase 0–2 of [EXECUTION-PLAN.md](EXECUTION-PLAN.md) implemented and building.
   (`{deviceInfo, sessions}`), and the sync payload fields. `docs/research/05-api-live-notes.md`
   still needs writing from a real session.
 
+## 2026-08-14 (evening) — M0 confirmed working on hardware
+
+Tom signed in and played from his phone. The login failure was two stacked network
+faults, neither in the app: a DNS misconfiguration for a service wired only to the
+internal proxy entrypoint, and then lugu not being in the VPN configuration.
+
+One real crash came out of first contact and is fixed: **podcasts crashed the
+continue-listening shelf**. The query joined items to progress on `libraryItemId`
+alone — a book has one progress row, a podcast has one per episode, so a podcast
+returned once per episode played. The shelf keys by item id and Compose throws on a
+duplicate key, so the app died the moment a podcast library finished syncing. Fixed by
+grouping per item and ordering by `MAX(lastUpdateMs)`; four Room tests cover it and two
+failed before the change.
+
+Lesson worth keeping: **anything that fans out a join is a crash risk, not a display
+bug**, because the UI keys lists by id. The repository now dedupes on the way out too.
+
 ## 2026-08-14 (later) — first M1 slice, and a real bug from first contact
 
 Tom installed 0.1.0 and could not sign in. The server turned out to be fine; the
@@ -79,8 +96,27 @@ headset complaints and they cannot be tested by hand reliably.
   `PauseGlitch`, so a stuttering headset never arms a rewind (app #1048). A property
   test drives fifty glitch pairs through it and asserts the total rewind is zero.
 
-Still outstanding for M1: chapters UI, sleep timer, bookmarks, per-book speed,
-serialized seek queue, silence skipping.
+### M1 continued: chapters, per-book speed, serialized seeking
+
+Confirmed working on Tom's device first, then extended:
+
+- **Chapter navigation** with the behaviour people expect without naming it — once a
+  few seconds into a chapter, "previous" restarts *it*; press again straight away and
+  you step back one. Jumping back immediately would make restarting a chapter
+  impossible. Player shows "Chapter 3 of 24 · 4:12 / 18:30", chapter-relative time
+  being how listeners actually think about place.
+- **Serialized seek queue.** Presses accumulate into one pending target instead of each
+  reading the player's position, so three quick taps of -10s move exactly 30s rather
+  than racing the player's unfinished seek. The display updates optimistically and one
+  seek is issued once presses settle.
+- **Per-book speed memory** in DataStore. The server has no field for it and three open
+  requests asking for one (#3485, #911, #1980). DataStore rather than Room on purpose:
+  it is not synced data and nothing joins against it, so a Room column would have bought
+  nothing and cost a schema migration on an already-installed device. Setting a book
+  back to 1× forgets the override rather than pinning it.
+
+Still outstanding for M1: sleep timer, bookmarks, silence skipping, volume boost,
+BT-disconnect pause, polished notification actions.
 
 ### Next
 

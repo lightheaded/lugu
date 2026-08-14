@@ -19,9 +19,11 @@ import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -160,6 +162,14 @@ fun PlayerScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (state.chapterCount > 1) {
+                    Text(
+                        "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
+                            "${formatTime(state.chapterPositionSec)} / ${formatTime(state.chapterDurationSec)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -187,8 +197,15 @@ fun PlayerScreen(
             Spacer(Modifier.height(24.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                IconButton(
+                    onClick = viewModel::previousChapter,
+                    enabled = state.chapterCount > 1,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous chapter")
+                }
                 IconButton(onClick = { viewModel.seekBy(-10.0) }, modifier = Modifier.size(56.dp)) {
                     Icon(Icons.Default.Replay10, contentDescription = "Back 10 seconds")
                 }
@@ -205,17 +222,30 @@ fun PlayerScreen(
                 IconButton(onClick = { viewModel.seekBy(30.0) }, modifier = Modifier.size(56.dp)) {
                     Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds")
                 }
+                IconButton(
+                    onClick = viewModel::nextChapter,
+                    enabled = state.chapterCount > 1,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "Next chapter")
+                }
             }
 
             Spacer(Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0.8f, 1.0f, 1.2f, 1.5f, 2.0f).forEach { speed ->
-                    AssistChip(
+                viewModel.speedPresets.forEach { speed ->
+                    FilterChip(
+                        selected = kotlin.math.abs(state.speed - speed) < 0.01f,
                         onClick = { viewModel.setSpeed(speed) },
                         label = { Text("${speed}x") },
                     )
                 }
             }
+            Text(
+                "Speed is remembered for this book",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             state.error?.let {
                 Spacer(Modifier.height(16.dp))

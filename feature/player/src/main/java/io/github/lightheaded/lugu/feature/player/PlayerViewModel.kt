@@ -32,6 +32,12 @@ class PlayerViewModel @Inject constructor(
 
     fun setSpeed(speed: Float) = connection.setSpeed(speed)
 
+    fun previousChapter() = connection.previousChapter()
+
+    fun nextChapter() = connection.nextChapter()
+
+    val speedPresets = io.github.lightheaded.lugu.core.sync.PlaybackPrefs.PRESETS
+
     fun undoJump() = connection.undoJump()
 
     fun dismissJump() = connection.dismissJump()

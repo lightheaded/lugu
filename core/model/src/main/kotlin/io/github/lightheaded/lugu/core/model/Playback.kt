@@ -82,4 +82,49 @@ object Chapters {
     /** The chapter containing [positionSec], or null when there are no chapters. */
     fun at(chapters: List<Chapter>, positionSec: Double): Chapter? =
         chapters.lastOrNull { positionSec >= it.startSec }
+
+    /** Index of the chapter containing [positionSec], or -1. */
+    fun indexAt(chapters: List<Chapter>, positionSec: Double): Int =
+        chapters.indexOfLast { positionSec >= it.startSec }
+
+    /** How far into the current chapter [positionSec] is. */
+    fun offsetInChapter(chapters: List<Chapter>, positionSec: Double): Double {
+        val chapter = at(chapters, positionSec) ?: return positionSec
+        return (positionSec - chapter.startSec).coerceAtLeast(0.0)
+    }
+
+    /**
+     * Where "previous chapter" should land.
+     *
+     * The behaviour every music player and audiobook app shares, and which people
+     * expect without being able to name it: once you are a few seconds into a chapter,
+     * the button restarts *this* chapter; press it again straight away and you go to
+     * the one before. Jumping to the previous chapter immediately would make it
+     * impossible to simply restart the chapter you are in.
+     */
+    fun previousChapterStart(
+        chapters: List<Chapter>,
+        positionSec: Double,
+        restartThresholdSec: Double = 3.0,
+    ): Double? {
+        if (chapters.isEmpty()) return null
+        val index = indexAt(chapters, positionSec)
+        if (index < 0) return null
+
+        val current = chapters[index]
+        val intoChapter = positionSec - current.startSec
+        return when {
+            intoChapter > restartThresholdSec -> current.startSec
+            index > 0 -> chapters[index - 1].startSec
+            // Already at the first chapter and near its start: go to the very beginning.
+            else -> 0.0
+        }
+    }
+
+    /** Start of the next chapter, or null when this is the last one. */
+    fun nextChapterStart(chapters: List<Chapter>, positionSec: Double): Double? {
+        if (chapters.isEmpty()) return null
+        val index = indexAt(chapters, positionSec)
+        return chapters.getOrNull(index + 1)?.startSec
+    }
 }

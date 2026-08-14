@@ -74,3 +74,59 @@ class ChaptersTest {
         assertThat(Chapters.at(chapters, 2_999.0)?.title).isEqualTo("Part 5")
     }
 }
+
+class ChapterNavigationTest {
+
+    private val chapters = listOf(
+        Chapter(0, 0.0, 600.0, "One"),
+        Chapter(1, 600.0, 1_200.0, "Two"),
+        Chapter(2, 1_200.0, 1_800.0, "Three"),
+    )
+
+    @Test
+    fun `well into a chapter, previous restarts it`() {
+        assertThat(Chapters.previousChapterStart(chapters, positionSec = 700.0)).isEqualTo(600.0)
+    }
+
+    @Test
+    fun `just after a chapter starts, previous goes to the one before`() {
+        // The double-press case: restart, then immediately press again.
+        assertThat(Chapters.previousChapterStart(chapters, positionSec = 601.0)).isEqualTo(0.0)
+    }
+
+    @Test
+    fun `previous at the very start of the book goes to zero, not below`() {
+        assertThat(Chapters.previousChapterStart(chapters, positionSec = 1.0)).isEqualTo(0.0)
+    }
+
+    @Test
+    fun `next advances one chapter and stops at the end`() {
+        assertThat(Chapters.nextChapterStart(chapters, positionSec = 0.0)).isEqualTo(600.0)
+        assertThat(Chapters.nextChapterStart(chapters, positionSec = 700.0)).isEqualTo(1_200.0)
+        assertThat(Chapters.nextChapterStart(chapters, positionSec = 1_500.0)).isNull()
+    }
+
+    @Test
+    fun `navigation is inert without chapters`() {
+        assertThat(Chapters.previousChapterStart(emptyList(), 100.0)).isNull()
+        assertThat(Chapters.nextChapterStart(emptyList(), 100.0)).isNull()
+    }
+
+    @Test
+    fun `chapter-relative position counts from the chapter start`() {
+        assertThat(Chapters.offsetInChapter(chapters, 700.0)).isEqualTo(100.0)
+        assertThat(Chapters.offsetInChapter(chapters, 0.0)).isEqualTo(0.0)
+        assertThat(Chapters.indexAt(chapters, 1_250.0)).isEqualTo(2)
+    }
+
+    /** Pressing previous repeatedly must always reach the start and never overshoot. */
+    @Test
+    fun `repeated previous presses walk back to zero`() {
+        var position = 1_500.0
+        repeat(10) {
+            position = Chapters.previousChapterStart(chapters, position) ?: 0.0
+            assertThat(position).isAtLeast(0.0)
+        }
+        assertThat(position).isEqualTo(0.0)
+    }
+}
