@@ -111,12 +111,17 @@ class AbsClient(
         if (!response.status.isSuccess()) {
             throw AbsHttpException(response.status.value, NOT_A_SERVER)
         }
-        // A proxy error page can still return 200; insist the body parses as a status.
-        return try {
-            response.body()
+        // A proxy error page can still return 200, so parsing is not enough: a real
+        // server identifies itself with app="audiobookshelf" (verified live on 2.36.0).
+        val status = try {
+            response.body<ServerStatusDto>()
         } catch (e: Exception) {
             throw AbsHttpException(response.status.value, NOT_A_SERVER)
         }
+        if (!status.app.equals(APP_NAME, ignoreCase = true)) {
+            throw AbsHttpException(response.status.value, NOT_A_SERVER)
+        }
+        return status
     }
 
     /**
@@ -317,6 +322,8 @@ class AbsClient(
 
     companion object {
         const val DEFAULT_PAGE_SIZE = 200
+
+        private const val APP_NAME = "audiobookshelf"
 
         internal const val NOT_A_SERVER =
             "That address answered, but it is not an Audiobookshelf server. " +

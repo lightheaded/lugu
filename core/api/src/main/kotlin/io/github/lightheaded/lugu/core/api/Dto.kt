@@ -40,6 +40,8 @@ data class RefreshResponse(val user: UserDto? = null)
 
 @Serializable
 data class ServerStatusDto(
+    /** Literally "audiobookshelf" on a real server — the cheapest identity check there is. */
+    val app: String? = null,
     val isInit: Boolean = true,
     val serverVersion: String? = null,
     val language: String? = null,

@@ -209,6 +209,37 @@ class AbsClientAuthTest {
     }
 
     @Test
+    fun `the status probe rejects valid JSON from some other service`() = runTest {
+        // Parsing is not identity: another JSON API on the same host would sail through
+        // a shape-only check, since every field of ServerStatusDto has a default.
+        val engine = MockEngine { respond("""{"ok":true,"service":"grafana"}""", HttpStatusCode.OK, jsonHeaders) }
+
+        val failure = runCatching {
+            client(InMemoryTokenStore(), handler = engine).status("https://books.example")
+        }.exceptionOrNull()
+
+        assertThat(failure).hasMessageThat().contains("not an Audiobookshelf server")
+    }
+
+    /** Shape captured live from a v2.36.0 server. */
+    @Test
+    fun `a real status response is accepted`() = runTest {
+        val engine = MockEngine {
+            respond(
+                """{"app":"audiobookshelf","serverVersion":"2.36.0","isInit":true,
+                   "language":"en-us","authMethods":["local"],"authFormData":{"authLoginCustomMessage":""}}""",
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+
+        val status = client(InMemoryTokenStore(), handler = engine).status("https://books.example")
+
+        assertThat(status.serverVersion).isEqualTo("2.36.0")
+        assertThat(status.authMethods).containsExactly("local")
+    }
+
+    @Test
     fun `wrong credentials stay reported as wrong credentials`() = runTest {
         val engine = MockEngine { respond("""{"error":"Invalid"}""", HttpStatusCode.Unauthorized, jsonHeaders) }
 
