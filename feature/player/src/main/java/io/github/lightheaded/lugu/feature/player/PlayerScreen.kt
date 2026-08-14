@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.player
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,13 +16,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import io.github.lightheaded.lugu.core.model.SleepMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,8 +68,22 @@ fun PlayerScreen(
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val jump by viewModel.pendingJump.collectAsStateWithLifecycle()
     val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
+    val sleep by viewModel.sleepTimer.collectAsStateWithLifecycle()
+    var showSleepSheet by remember { mutableStateOf(false) }
 
     var scrubbing by remember { mutableStateOf<Float?>(null) }
+
+    if (showSleepSheet) {
+        SleepTimerSheet(
+            hasChapters = state.chapterCount > 1,
+            presets = viewModel.sleepPresets,
+            onPick = {
+                viewModel.setSleepTimer(it)
+                showSleepSheet = false
+            },
+            onDismiss = { showSleepSheet = false },
+        )
+    }
 
     Scaffold(
         modifier = modifier,
@@ -247,6 +266,32 @@ fun PlayerScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            Spacer(Modifier.height(12.dp))
+            if (sleep.isArmed) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Bedtime,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.secondary,
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        sleep.remainingSec?.let { "Sleeping in ${formatTime(it)}" } ?: "Sleep timer on",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                    TextButton(onClick = { viewModel.extendSleepTimer(5) }) { Text("+5 min") }
+                    TextButton(onClick = { viewModel.setSleepTimer(null) }) { Text("Cancel") }
+                }
+            } else {
+                TextButton(onClick = { showSleepSheet = true }) {
+                    Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Sleep timer")
+                }
+            }
+
             state.error?.let {
                 Spacer(Modifier.height(16.dp))
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -318,6 +363,42 @@ fun MiniPlayer(
                 Icon(
                     if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (state.isPlaying) "Pause" else "Play",
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepTimerSheet(
+    hasChapters: Boolean,
+    presets: List<Int>,
+    onPick: (SleepMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Text("Sleep timer", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                presets.forEach { minutes ->
+                    AssistChip(
+                        onClick = { onPick(SleepMode.Duration(minutes)) },
+                        label = { Text("$minutes min") },
+                    )
+                }
+            }
+            if (hasChapters) {
+                Spacer(Modifier.height(12.dp))
+                AssistChip(
+                    onClick = { onPick(SleepMode.EndOfChapter) },
+                    label = { Text("End of chapter") },
+                )
+                Text(
+                    "Follows you if you skip a chapter",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

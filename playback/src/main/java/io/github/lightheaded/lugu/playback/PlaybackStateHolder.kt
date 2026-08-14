@@ -2,6 +2,8 @@ package io.github.lightheaded.lugu.playback
 
 import io.github.lightheaded.lugu.core.model.AudioTrack
 import io.github.lightheaded.lugu.core.model.Chapter
+import io.github.lightheaded.lugu.core.model.SleepMode
+import io.github.lightheaded.lugu.core.model.SleepTimerState
 import io.github.lightheaded.lugu.core.sync.ProgressJump
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -36,6 +38,15 @@ class PlaybackStateHolder @Inject constructor() {
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
 
+    private val _sleepTimer = MutableStateFlow(SleepTimerState())
+
+    /** The sleep timer lives app-side, not in the audio pipeline, so it also works when casting. */
+    val sleepTimer: StateFlow<SleepTimerState> = _sleepTimer.asStateFlow()
+
+    /** Whole-book position at which the timer was armed; a duration counts from here. */
+    @Volatile var sleepArmedAtPositionSec: Double = 0.0
+        private set
+
     private val _rewindNotice = MutableStateFlow<String?>(null)
 
     /** "Rewound 12s" after a resume, so an automatic correction is never invisible. */
@@ -56,6 +67,21 @@ class PlaybackStateHolder @Inject constructor() {
 
     fun clearJump() {
         _pendingJump.update { null }
+    }
+
+    fun armSleepTimer(mode: SleepMode?, atPositionSec: Double) {
+        sleepArmedAtPositionSec = atPositionSec
+        _sleepTimer.value = SleepTimerState(mode = mode)
+    }
+
+    fun updateSleepTimer(remainingSec: Double?, isFading: Boolean) {
+        val current = _sleepTimer.value
+        if (current.remainingSec == remainingSec && current.isFading == isFading) return
+        _sleepTimer.value = current.copy(remainingSec = remainingSec, isFading = isFading)
+    }
+
+    fun clearSleepTimer() {
+        _sleepTimer.value = SleepTimerState()
     }
 
     fun setRewindNotice(text: String?) {

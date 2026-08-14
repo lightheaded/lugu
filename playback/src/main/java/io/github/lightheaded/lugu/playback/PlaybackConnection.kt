@@ -8,6 +8,7 @@ import androidx.media3.session.SessionToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.Chapters
+import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
@@ -274,6 +275,22 @@ class PlaybackConnection @Inject constructor(
     }
 
     fun hasChapters(): Boolean = (stateHolder.nowPlaying.value?.chapters?.size ?: 0) > 1
+
+    val sleepTimer get() = stateHolder.sleepTimer
+
+    /** Arms the sleep timer from the current position. Pass null to cancel. */
+    fun setSleepTimer(mode: SleepMode?) {
+        stateHolder.armSleepTimer(mode, _state.value.positionSec)
+        if (mode == null) {
+            scope.launch { controller().volume = 1.0f }
+        }
+    }
+
+    fun extendSleepTimer(byMinutes: Int) {
+        val extended = io.github.lightheaded.lugu.core.model.SleepTimer
+            .extend(stateHolder.sleepTimer.value.mode, byMinutes)
+        stateHolder.armSleepTimer(extended, _state.value.positionSec)
+    }
 
     /** Sets the speed and remembers it for this book; the server has nowhere to store it. */
     fun setSpeed(speed: Float) {

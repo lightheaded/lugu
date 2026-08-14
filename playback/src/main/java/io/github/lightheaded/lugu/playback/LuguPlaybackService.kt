@@ -22,6 +22,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
+import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
@@ -140,6 +141,44 @@ class LuguPlaybackService : MediaLibraryService() {
                 delay(TICK_MS)
                 if (player.isPlaying) persistPosition(reason = "tick")
             }
+        }
+        // The sleep timer ticks faster than the persistence loop because it has to fade
+        // smoothly. It lives here, app-side, rather than inside the audio pipeline, so
+        // it behaves identically when playback moves to a Cast device later.
+        scope.launch {
+            while (true) {
+                delay(SLEEP_TICK_MS)
+                evaluateSleepTimer()
+            }
+        }
+    }
+
+    private fun evaluateSleepTimer() {
+        val mode = stateHolder.sleepTimer.value.mode ?: return
+        if (!player.isPlaying) return
+
+        val context = stateHolder.nowPlaying.value ?: return
+        val position = currentAbsoluteSec() ?: return
+
+        val remaining = SleepTimer.remainingSec(
+            mode = mode,
+            chapters = context.chapters,
+            positionSec = position,
+            armedAtPositionSec = stateHolder.sleepArmedAtPositionSec,
+            speed = player.playbackParameters.speed,
+        )
+
+        val volume = SleepTimer.fadeVolume(remaining)
+        stateHolder.updateSleepTimer(remaining, isFading = volume < 1.0f)
+        player.volume = volume
+
+        if (remaining != null && remaining <= 0.0) {
+            player.pause()
+            // Restore the volume so the next play is not silent — the commonest way a
+            // fade-out implementation leaves the app apparently broken.
+            player.volume = 1.0f
+            stateHolder.clearSleepTimer()
+            persistPosition(reason = "sleep-timer")
         }
     }
 
@@ -301,6 +340,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private companion object {
         const val TICK_MS = 5_000L
+        const val SLEEP_TICK_MS = 500L
 
         /** Within this much of the end counts as finished. */
         const val FINISHED_TAIL_SEC = 20.0
