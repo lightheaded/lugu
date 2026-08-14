@@ -21,6 +21,7 @@ class PlayerViewModel @Inject constructor(
     val nowPlaying = connection.nowPlaying
     val pendingJump = connection.pendingJump
     val rewindNotice = connection.rewindNotice
+    val sleepTimer = connection.sleepTimer
 
     fun play(itemId: String, episodeId: String?) = connection.play(itemId, episodeId)
 
@@ -35,6 +36,13 @@ class PlayerViewModel @Inject constructor(
     fun previousChapter() = connection.previousChapter()
 
     fun nextChapter() = connection.nextChapter()
+
+    fun setSleepTimer(mode: io.github.lightheaded.lugu.core.model.SleepMode?) =
+        connection.setSleepTimer(mode)
+
+    fun extendSleepTimer(minutes: Int) = connection.extendSleepTimer(minutes)
+
+    val sleepPresets = io.github.lightheaded.lugu.core.model.SleepTimer.PRESET_MINUTES
 
     val speedPresets = io.github.lightheaded.lugu.core.sync.PlaybackPrefs.PRESETS
 
