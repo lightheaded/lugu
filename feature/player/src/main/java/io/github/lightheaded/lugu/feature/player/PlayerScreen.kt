@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,7 @@ fun PlayerScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val jump by viewModel.pendingJump.collectAsStateWithLifecycle()
+    val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
 
     var scrubbing by remember { mutableStateOf<Float?>(null) }
 
@@ -132,6 +134,20 @@ fun PlayerScreen(
                     it,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // The smart rewind announces itself and then fades out of the way.
+            rewindNotice?.let { notice ->
+                LaunchedEffect(notice) {
+                    kotlinx.coroutines.delay(4_000)
+                    viewModel.dismissRewindNotice()
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    notice,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.secondary,
                 )
             }
 

@@ -1,0 +1,10 @@
+# Copy to local.properties (gitignored) and fill in. Never commit the real file.
+#
+# sdk.dir is written by Android Studio; set it by hand for a headless build.
+sdk.dir=/path/to/Android/sdk
+
+# Optional: prefills the login screen on debug builds and feeds scripts/capture-api.sh.
+# Release builds never see these.
+lugu.dev.serverUrl=https://your-server.example
+lugu.dev.user=you
+lugu.dev.pass=
