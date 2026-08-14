@@ -43,7 +43,10 @@ class AuthRepository @Inject constructor(
 
     suspend fun login(rawUrl: String, username: String, password: String): Result<ActiveAccount> = runCatching {
         val url = ServerUrl.normalise(rawUrl) ?: error("That does not look like a server address")
-        val status = runCatching { client.status(url) }.getOrNull()
+        // Probe first, and let its error stand. Otherwise a wrong address surfaces as
+        // whatever the login endpoint happened to say — "404 page not found" from a
+        // proxy reads as an app bug, and worse, as doubt about the password.
+        val status = client.status(url)
         val result = client.login(url, username, password)
 
         tokenStore.save(result.tokens)
@@ -55,7 +58,7 @@ class AuthRepository @Inject constructor(
             userId = result.userId,
             username = result.username,
             defaultLibraryId = result.defaultLibraryId,
-            serverVersion = status?.serverVersion,
+            serverVersion = status.serverVersion,
             isActive = true,
         )
         serverDao.setActive(server)

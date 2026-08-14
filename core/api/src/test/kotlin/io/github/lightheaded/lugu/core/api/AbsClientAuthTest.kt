@@ -164,6 +164,62 @@ class AbsClientAuthTest {
         assertThat(result.defaultLibraryId).isEqualTo("lib1")
     }
 
+    /**
+     * A reverse proxy with no route for the hostname answers every path with a plain
+     * `404 page not found`. Echoing that back told a real user nothing and implied the
+     * app was broken; worse, reaching login at all implies the address was fine and
+     * invites them to doubt their password instead.
+     */
+    @Test
+    fun `a 404 from a proxy is reported as a wrong address, not as its own body`() = runTest {
+        val engine = MockEngine { respond("404 page not found", HttpStatusCode.NotFound) }
+
+        val failure = runCatching {
+            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "tom", "pw")
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(AbsHttpException::class.java)
+        assertThat(failure).hasMessageThat().contains("not an Audiobookshelf server")
+        assertThat(failure).hasMessageThat().doesNotContain("404 page not found")
+    }
+
+    @Test
+    fun `the status probe rejects a non-Audiobookshelf response`() = runTest {
+        val engine = MockEngine { respond("404 page not found", HttpStatusCode.NotFound) }
+
+        val failure = runCatching {
+            client(InMemoryTokenStore(), handler = engine).status("https://books.example")
+        }.exceptionOrNull()
+
+        assertThat(failure).hasMessageThat().contains("not an Audiobookshelf server")
+    }
+
+    @Test
+    fun `the status probe rejects a 200 that is not a status payload`() = runTest {
+        // Some proxies serve an HTML error page with a 200.
+        val engine = MockEngine {
+            respond("<html><body>Gateway</body></html>", HttpStatusCode.OK, jsonHeaders)
+        }
+
+        val failure = runCatching {
+            client(InMemoryTokenStore(), handler = engine).status("https://books.example")
+        }.exceptionOrNull()
+
+        assertThat(failure).hasMessageThat().contains("not an Audiobookshelf server")
+    }
+
+    @Test
+    fun `wrong credentials stay reported as wrong credentials`() = runTest {
+        val engine = MockEngine { respond("""{"error":"Invalid"}""", HttpStatusCode.Unauthorized, jsonHeaders) }
+
+        val failure = runCatching {
+            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "tom", "pw")
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(AuthExpiredException::class.java)
+        assertThat(failure).hasMessageThat().contains("username or password")
+    }
+
     @Test
     fun `asking for every row in one page is refused`() = runTest {
         val store = InMemoryTokenStore(

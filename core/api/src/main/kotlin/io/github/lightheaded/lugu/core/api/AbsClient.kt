@@ -69,10 +69,17 @@ class AbsClient(
             setBody(LoginRequest(username, password))
         }
         if (!response.status.isSuccess()) {
-            throw if (response.status.value == 401) {
-                AuthExpiredException("Wrong username or password")
-            } else {
-                AbsHttpException(response.status.value, response.bodyAsText().take(300))
+            throw when (response.status.value) {
+                401 -> AuthExpiredException("Wrong username or password")
+                // A 404 here means something answered but it was not Audiobookshelf —
+                // usually a reverse proxy with no route for that hostname. Echoing the
+                // server's own body ("404 page not found") tells the user nothing.
+                404 -> AbsHttpException(404, NOT_A_SERVER)
+                429 -> AbsHttpException(429, "Too many sign-in attempts. Wait a few minutes.")
+                else -> AbsHttpException(
+                    response.status.value,
+                    "The server refused the sign-in (HTTP ${response.status.value})",
+                )
             }
         }
         val body: LoginResponse = response.body()
@@ -91,13 +98,25 @@ class AbsClient(
         )
     }
 
-    /** Unauthenticated probe used by the login screen to check a URL before asking for credentials. */
+    /**
+     * Unauthenticated probe of `/status`, used to tell "wrong address" apart from
+     * "wrong password" before the user is asked to doubt their credentials.
+     */
     suspend fun status(baseUrl: String): ServerStatusDto {
-        val response = http.request("$baseUrl/status") { method = HttpMethod.Get }
-        if (!response.status.isSuccess()) {
-            throw AbsHttpException(response.status.value, "Not an Audiobookshelf server")
+        val response = try {
+            http.request("$baseUrl/status") { method = HttpMethod.Get }
+        } catch (e: Exception) {
+            throw AbsHttpException(0, "Could not reach $baseUrl — ${e.message ?: "no response"}")
         }
-        return response.body()
+        if (!response.status.isSuccess()) {
+            throw AbsHttpException(response.status.value, NOT_A_SERVER)
+        }
+        // A proxy error page can still return 200; insist the body parses as a status.
+        return try {
+            response.body()
+        } catch (e: Exception) {
+            throw AbsHttpException(response.status.value, NOT_A_SERVER)
+        }
     }
 
     /**
@@ -298,6 +317,10 @@ class AbsClient(
 
     companion object {
         const val DEFAULT_PAGE_SIZE = 200
+
+        internal const val NOT_A_SERVER =
+            "That address answered, but it is not an Audiobookshelf server. " +
+                "Check the host, port and any subpath."
         private const val DEFAULT_ACCESS_TTL_MS = 55 * 60 * 1000L
     }
 }
