@@ -26,6 +26,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -114,6 +115,13 @@ fun LibraryScreen(
                 )
             }
 
+            // The grid is fed by the local database, so this gesture re-mirrors from
+            // the server rather than being what makes content appear.
+            PullToRefreshBox(
+                isRefreshing = state.isSyncing,
+                onRefresh = viewModel::refresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 140.dp),
                 contentPadding = PaddingValues(16.dp),
@@ -137,6 +145,7 @@ fun LibraryScreen(
                         onClick = { onOpenItem(row.item.id) },
                     )
                 }
+            }
             }
         }
     }
