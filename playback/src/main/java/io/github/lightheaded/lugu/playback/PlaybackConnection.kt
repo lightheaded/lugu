@@ -10,6 +10,7 @@ import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +35,11 @@ data class PlayerUiState(
     val durationSec: Double = 0.0,
     val speed: Float = 1.0f,
     val chapter: Chapter? = null,
+    val chapterIndex: Int = -1,
+    val chapterCount: Int = 0,
+    /** Position within the current chapter, which is how listeners think about place. */
+    val chapterPositionSec: Double = 0.0,
+    val chapterDurationSec: Double = 0.0,
     val error: String? = null,
 )
 
@@ -52,6 +58,7 @@ class PlaybackConnection @Inject constructor(
     private val authRepository: AuthRepository,
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
+    private val playbackPrefs: PlaybackPrefs,
     private val stateHolder: PlaybackStateHolder,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -60,6 +67,19 @@ class PlaybackConnection @Inject constructor(
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+
+    /**
+     * Pending relative seek, in whole-book seconds.
+     *
+     * Rapid skip presses must accumulate deterministically: three taps of -10s move
+     * exactly 30s, never 10 or 20. Each press adds to this offset and updates the
+     * displayed position immediately, and a single seek is issued once the flurry
+     * settles — reading the player's own position between presses would race, because
+     * the player has not finished the previous seek yet.
+     */
+    private val pendingSeekMutex = Mutex()
+    private var pendingSeekTargetSec: Double? = null
+    private var seekJob: kotlinx.coroutines.Job? = null
 
     val nowPlaying: StateFlow<NowPlaying?> get() = stateHolder.nowPlaying
     val pendingJump get() = stateHolder.pendingJump
@@ -107,13 +127,21 @@ class PlaybackConnection @Inject constructor(
         } else {
             player.currentPosition / 1000.0
         }
+        // While a seek is settling, trust the optimistic target over the player.
+        val effectivePosition = pendingSeekTargetSec ?: positionSec
+        val chapters = context?.chapters.orEmpty()
+        val chapter = Chapters.at(chapters, effectivePosition)
         _state.value = _state.value.copy(
             isPlaying = player.isPlaying,
             isBuffering = player.playbackState == Player.STATE_BUFFERING,
-            positionSec = positionSec,
+            positionSec = effectivePosition,
             durationSec = context?.durationSec ?: (player.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0),
             speed = player.playbackParameters.speed,
-            chapter = context?.chapters?.let { Chapters.at(it, positionSec) },
+            chapter = chapter,
+            chapterIndex = Chapters.indexAt(chapters, effectivePosition),
+            chapterCount = chapters.size,
+            chapterPositionSec = Chapters.offsetInChapter(chapters, effectivePosition),
+            chapterDurationSec = chapter?.let { (it.endSec - it.startSec).coerceAtLeast(0.0) } ?: 0.0,
         )
     }
 
@@ -160,8 +188,10 @@ class PlaybackConnection @Inject constructor(
             stateHolder.setJump(resolved.jump)
 
             val start = AbsoluteTiming.toTrack(resolved.session.tracks, resolved.startPositionSec)
+            val speed = withContext(Dispatchers.IO) { playbackPrefs.speedFor(libraryItemId) }
             val player = controller()
             player.setMediaItems(resolved.mediaItems, start.trackIndex, start.positionMs)
+            player.setPlaybackSpeed(speed)
             player.prepare()
             player.play()
             pushState()
@@ -173,41 +203,89 @@ class PlaybackConnection @Inject constructor(
     fun pause() = withController { it.pause() }
 
     /**
-     * Relative seek in whole-book seconds. Crossing a file boundary is handled here
-     * rather than by the player, so "back 30 seconds" at the start of a track lands in
-     * the previous file instead of stopping at zero.
+     * Relative seek in whole-book seconds.
+     *
+     * Presses accumulate into a single pending target rather than each reading the
+     * player's current position — three quick taps of -10s therefore move exactly 30s,
+     * which is the behaviour that makes skip buttons trustworthy. The displayed
+     * position updates instantly; the actual seek is issued once presses stop.
      */
     fun seekBy(deltaSec: Double) {
         scope.launch {
-            val player = controller()
-            val context = stateHolder.nowPlaying.value
-            val current = _state.value.positionSec
-            val target = (current + deltaSec).coerceIn(0.0, maxOf(_state.value.durationSec, 0.0))
-            if (context == null || context.tracks.size <= 1) {
-                player.seekTo((target * 1000).toLong())
-            } else {
-                val position = AbsoluteTiming.toTrack(context.tracks, target)
-                player.seekTo(position.trackIndex, position.positionMs)
-            }
+            val duration = maxOf(_state.value.durationSec, 0.0)
+            val base = pendingSeekTargetSec ?: _state.value.positionSec
+            val target = (base + deltaSec).coerceIn(0.0, duration)
+
+            pendingSeekMutex.withLock { pendingSeekTargetSec = target }
             pushState()
+
+            seekJob?.cancel()
+            seekJob = scope.launch {
+                delay(SEEK_SETTLE_MS)
+                commitPendingSeek()
+            }
+        }
+    }
+
+    private suspend fun commitPendingSeek() {
+        val target = pendingSeekMutex.withLock { pendingSeekTargetSec } ?: return
+        applySeek(target)
+        // Clear only after the seek is issued, so state keeps reporting the target
+        // rather than briefly snapping back to where the player still is.
+        pendingSeekMutex.withLock {
+            if (pendingSeekTargetSec == target) pendingSeekTargetSec = null
+        }
+        pushState()
+    }
+
+    private suspend fun applySeek(absoluteSec: Double) {
+        val player = controller()
+        val context = stateHolder.nowPlaying.value
+        if (context == null || context.tracks.size <= 1) {
+            player.seekTo((absoluteSec * 1000).toLong())
+        } else {
+            val position = AbsoluteTiming.toTrack(context.tracks, absoluteSec)
+            player.seekTo(position.trackIndex, position.positionMs)
         }
     }
 
     fun seekTo(absoluteSec: Double) {
         scope.launch {
-            val player = controller()
-            val context = stateHolder.nowPlaying.value
-            if (context == null || context.tracks.size <= 1) {
-                player.seekTo((absoluteSec * 1000).toLong())
-            } else {
-                val position = AbsoluteTiming.toTrack(context.tracks, absoluteSec)
-                player.seekTo(position.trackIndex, position.positionMs)
-            }
+            seekJob?.cancel()
+            pendingSeekMutex.withLock { pendingSeekTargetSec = null }
+            applySeek(absoluteSec)
             pushState()
         }
     }
 
-    fun setSpeed(speed: Float) = withController { it.setPlaybackSpeed(speed.coerceIn(0.5f, 3.5f)) }
+    /** Restarts the current chapter, or steps back one if we only just entered it. */
+    fun previousChapter() {
+        val chapters = stateHolder.nowPlaying.value?.chapters.orEmpty()
+        val target = Chapters.previousChapterStart(chapters, _state.value.positionSec)
+            ?: return seekBy(-SKIP_BACK_FALLBACK_SEC)
+        seekTo(target)
+    }
+
+    fun nextChapter() {
+        val chapters = stateHolder.nowPlaying.value?.chapters.orEmpty()
+        val target = Chapters.nextChapterStart(chapters, _state.value.positionSec)
+            ?: return seekBy(SKIP_FORWARD_FALLBACK_SEC)
+        seekTo(target)
+    }
+
+    fun hasChapters(): Boolean = (stateHolder.nowPlaying.value?.chapters?.size ?: 0) > 1
+
+    /** Sets the speed and remembers it for this book; the server has nowhere to store it. */
+    fun setSpeed(speed: Float) {
+        scope.launch {
+            val clamped = speed.coerceIn(PlaybackPrefs.MIN_SPEED, PlaybackPrefs.MAX_SPEED)
+            controller().setPlaybackSpeed(clamped)
+            stateHolder.nowPlaying.value?.libraryItemId?.let { itemId ->
+                withContext(Dispatchers.IO) { playbackPrefs.setSpeedFor(itemId, clamped) }
+            }
+            pushState()
+        }
+    }
 
     /** Puts the position back where it was before a jump was adopted from another device. */
     fun undoJump() {
@@ -232,5 +310,12 @@ class PlaybackConnection @Inject constructor(
 
     private companion object {
         const val POLL_MS = 500L
+
+        /** How long presses are allowed to accumulate before a seek is issued. */
+        const val SEEK_SETTLE_MS = 350L
+
+        /** Chapter buttons fall back to a plain skip when an item has no chapters. */
+        const val SKIP_BACK_FALLBACK_SEC = 30.0
+        const val SKIP_FORWARD_FALLBACK_SEC = 30.0
     }
 }
