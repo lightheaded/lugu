@@ -18,3 +18,6 @@ local.properties
 
 # Session-local Claude Code state
 .claude/
+
+# Redacted live API captures
+build/api-capture/

@@ -36,6 +36,11 @@ class PlaybackStateHolder @Inject constructor() {
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
 
+    private val _rewindNotice = MutableStateFlow<String?>(null)
+
+    /** "Rewound 12s" after a resume, so an automatic correction is never invisible. */
+    val rewindNotice: StateFlow<String?> = _rewindNotice.asStateFlow()
+
     private val _pendingJump = MutableStateFlow<ProgressJump?>(null)
 
     /** A position adopted from another device, waiting to be shown to the user with an undo. */
@@ -51,5 +56,13 @@ class PlaybackStateHolder @Inject constructor() {
 
     fun clearJump() {
         _pendingJump.update { null }
+    }
+
+    fun setRewindNotice(text: String?) {
+        _rewindNotice.value = text
+    }
+
+    fun clearRewindNotice() {
+        _rewindNotice.value = null
     }
 }

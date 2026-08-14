@@ -20,6 +20,7 @@ class PlayerViewModel @Inject constructor(
     val state = connection.state
     val nowPlaying = connection.nowPlaying
     val pendingJump = connection.pendingJump
+    val rewindNotice = connection.rewindNotice
 
     fun play(itemId: String, episodeId: String?) = connection.play(itemId, episodeId)
 
@@ -34,4 +35,6 @@ class PlayerViewModel @Inject constructor(
     fun undoJump() = connection.undoJump()
 
     fun dismissJump() = connection.dismissJump()
+
+    fun dismissRewindNotice() = connection.dismissRewindNotice()
 }

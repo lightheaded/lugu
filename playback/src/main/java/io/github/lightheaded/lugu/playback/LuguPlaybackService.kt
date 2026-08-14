@@ -21,6 +21,8 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
+import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
@@ -67,6 +69,14 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private var lastPersistedSec = -1.0
     private var lastTickWallClockMs = 0L
+
+    /**
+     * Wall clock at which playback last paused, used to size the smart rewind. Kept
+     * here rather than in the classifier because a pause can also come from audio
+     * focus loss or a Bluetooth disconnect, not just a button.
+     */
+    private var pausedAtWallClockMs: Long? = null
+    private val buttonClassifier = MediaButtonClassifier()
 
     override fun onCreate() {
         super.onCreate()
@@ -175,13 +185,43 @@ class LuguPlaybackService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Applies the smart rewind, once, at the moment playback resumes.
+     *
+     * Doing it here rather than at pause time is the whole point: rewinding on pause
+     * makes the stored position drift backwards on every pause, which is how a book
+     * ends up minutes out of place (app #1147, #622). Computed from the real pause
+     * duration, so a headset stutter moves nothing.
+     */
+    private fun applySmartRewindOnResume() {
+        val pausedAt = pausedAtWallClockMs ?: return
+        pausedAtWallClockMs = null
+
+        val pausedForMs = System.currentTimeMillis() - pausedAt
+        val rewindSec = SmartRewind.rewindSeconds(pausedForMs)
+        if (rewindSec <= 0.0) return
+
+        val context = stateHolder.nowPlaying.value ?: return
+        val absolute = currentAbsoluteSec() ?: return
+        val target = (absolute - rewindSec).coerceAtLeast(0.0)
+
+        val position = AbsoluteTiming.toTrack(context.tracks, target)
+        player.seekTo(position.trackIndex, position.positionMs)
+        // Announce it: an automatic correction the listener cannot see is a bug to them.
+        stateHolder.setRewindNotice(SmartRewind.describe(pausedForMs))
+    }
+
     private inner class PersistenceListener : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            val now = System.currentTimeMillis()
+            buttonClassifier.onPlaybackStateChanged(isPlaying, now)
             if (!isPlaying) {
                 lastTickWallClockMs = 0L
+                pausedAtWallClockMs = now
                 persistPosition(reason = "pause")
                 SyncScheduler.flushNow(this@LuguPlaybackService)
             } else {
+                applySmartRewindOnResume()
                 lastTickWallClockMs = System.currentTimeMillis()
             }
         }
