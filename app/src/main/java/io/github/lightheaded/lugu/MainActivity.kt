@@ -21,6 +21,7 @@ import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
+import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -29,6 +30,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             LuguTheme {
+                RequestNotificationPermission()
                 LuguApp()
             }
         }
