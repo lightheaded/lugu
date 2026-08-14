@@ -76,7 +76,10 @@ class LibraryRepository @Inject constructor(
 
     fun observeContinueListening(account: ActiveAccount): Flow<List<LibraryItem>> =
         itemDao.observeContinueListening(account.serverId, account.userId).map { rows ->
-            rows.map { it.toDomain() }
+            // The query already groups by item, but the UI keys this list by id and
+            // Compose throws on a duplicate key — a crash, not a glitch. Cheap insurance
+            // against any future join that reintroduces fan-out.
+            rows.distinctBy { it.id }.map { it.toDomain() }
         }
 
     suspend fun itemCount(account: ActiveAccount): Int = itemDao.count(account.serverId, account.userId)
