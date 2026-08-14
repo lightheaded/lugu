@@ -75,11 +75,12 @@ jobs:
           NOTES="lugu $VERSION — rolling alpha build from \`${GITHUB_SHA::7}\`.
           Install over any previous lugu build; the signing key is stable.
           Pre-alpha: see the README for what works and what does not."
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create latest lugu-latest.apk \
-            --title "lugu $VERSION (latest)" \
-            --notes "$NOTES" \
-            --prerelease
+          # Upload in place rather than delete-and-recreate: a run cancelled between
+          # the two would leave the download link pointing at nothing.
+          gh release view latest >/dev/null 2>&1 || \
+            gh release create latest --title "lugu $VERSION (latest)" --notes "$NOTES" --prerelease
+          gh release upload latest lugu-latest.apk --clobber
+          gh release edit latest --title "lugu $VERSION (latest)" --notes "$NOTES" --prerelease
 
     permissions:
       contents: write
