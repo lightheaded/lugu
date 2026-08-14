@@ -98,6 +98,12 @@ interface LibraryItemDao {
 
     /**
      * Continue-listening, computed locally so it renders on a cold start with no network.
+     *
+     * The GROUP BY is load-bearing. A book has one progress row, but a podcast has one
+     * per episode, and joining on `libraryItemId` alone returns that podcast once per
+     * episode listened to. The UI keys this list by item id, and Compose throws on a
+     * duplicate key — so a duplicate row here crashes the app rather than looking odd.
+     * Ordering by MAX(lastUpdateMs) ranks a podcast by its most recent episode.
      */
     @Query(
         """
@@ -106,7 +112,8 @@ interface LibraryItemDao {
             ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId
           AND p.isFinished = 0 AND p.currentTimeSec > 0
-        ORDER BY p.lastUpdateMs DESC
+        GROUP BY i.serverId, i.userId, i.id
+        ORDER BY MAX(p.lastUpdateMs) DESC
         LIMIT :limit
         """,
     )
