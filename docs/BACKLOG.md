@@ -79,63 +79,34 @@ Three pieces that exist to shorten the loop between a bug happening and it being
 fixed. Researched 2026-08-15; the decisions below are made, the work is not done.
 They are ordered by dependency: 2 is independent, 3 depends on 1.
 
-### 1. Crash reporting — Sentry, opt-in, off by default
+### 1. Crash reporting — Sentry, opt-in, off by default — **DONE 2026-08-15**
 
-**Why.** The app crashes after playing for a while (Tom, 15 Aug) and nothing survives
-to say what happened. A long-session Media3 failure is most likely an ANR or an OOM,
-and neither is something a `try`/`catch` ever sees — which is the argument for a real
-reporter rather than more logging.
+Wired up: `sentry-android` 8.53.0 in `:app` only, `io.sentry.auto-init=false` in the
+manifest, and `CrashReporting` initialising the SDK solely after consent. The toggle is
+Settings → Diagnostics, off by default, stored in `CrashReportingPrefs`.
 
-**Why Sentry.** It is the only free option that can attach a user's comment to a
-*specific* crash event (`associatedEventId`), which is what makes item 3 below work.
-EU (Germany) data storage is confirmed available on the free Developer plan.
+Decisions worth keeping:
 
-Steps:
+- **Not `enabled = false`.** Sentry's docs say that "doesn't prevent all overhead from
+  Sentry instrumentation", and whether a disabled SDK still opens a connection is not
+  something their docs answer. Never initialising it is the only version of the claim
+  that can be verified by reading the code.
+- **`SharedPreferences`, not DataStore**, for the consent flag alone — it is read in
+  `Application.onCreate` before anything may suspend, and the crash id is written from a
+  process that is dying, where an asynchronous write does not land.
+- **`autoSessionTracking` off.** It defaults to on and sends pings with no crash
+  involved, which would have quietly falsified the README.
+- **The Application observes the flag**, so withdrawing consent stops reporting at once
+  rather than at the next launch, and `:feature:settings` never sees the Sentry
+  dependency.
+- **Accepted cost:** a crash before consent is lost. Documented and unavoidable.
 
-1. Create the Sentry org **with EU data storage selected at creation**. The region
-   appears to be fixed once the org exists — Sentry's help-centre articles on this are
-   login-walled and could not be read directly, so treat it as a one-way door and
-   choose deliberately rather than planning to migrate.
-2. Add `sentry-android` + the Sentry Gradle plugin to `libs.versions.toml`. Costs
-   roughly 2 MB of APK. The plugin's mapping upload is moot until R8 is turned on.
-3. `AndroidManifest.xml`: `io.sentry.auto-init` = `false`. **Do not** reach for
-   `enabled = false` instead — Sentry's own docs say it "doesn't prevent all overhead
-   from Sentry instrumentation", and whether the SDK still opens connections in that
-   state is unconfirmed. Deferred init is the only documented way to ship a genuine
-   nothing-until-consent guarantee.
-4. Consent toggle in `:feature:settings`, DataStore-backed, default false, with search
-   synonyms ("crash", "diagnostics", "privacy"). `SentryAndroid.init()` runs only once
-   it is true.
-5. Options at init: `sendDefaultPii = false` (already the default), `attachScreenshot`
-   and `attachViewHierarchy` false (already the default), and
-   **`autoSessionTracking = false` explicitly** — it defaults to `true` and sends
-   session pings with no crash involved, which would quietly break the claim in 7.
-6. `beforeSend`: when `event.isCrashed`, persist `event.eventId` to prefs. That
-   callback runs in the crashing process before it dies, and it is the only way to
-   recover the id later — see item 3.
-7. Amend the README Privacy section: "No telemetry, no analytics, no crash reporting"
-   → no analytics, opt-in crash reporting off by default. The locked decision and the
-   executing-agent guardrail in [EXECUTION-PLAN.md](EXECUTION-PLAN.md) are already
-   amended to match.
-8. Once the repo is public, apply for the Sentry open-source grant (5M errors/month,
-   no term limit). **Caveat:** the stated guidance is "a friendly license like Apache
-   or MIT", and whether **GPL-3.0 copyleft qualifies is unstated by Sentry either
-   way** — ask in the application rather than assuming, and do not make the plan
-   depend on the grant. The free Developer plan (5k errors/month) is already far
-   beyond what this app will produce.
+The Gradle plugin was skipped: its job is uploading R8 mappings, and minification is off
+(see *Architecture and tech debt*). Turning R8 on means adding the plugin at the same
+time, or release stack traces arrive obfuscated.
 
-**Accepted cost:** a crash occurring before consent is given is lost. Documented and
-unavoidable — "the SDK can catch errors and crashes only after you've initialized it".
-
-**Reversible later:** GlitchTip or Bugsink self-hosted use the same SDK with a
-different DSN. One catch — GlitchTip silently drops the feedback API, which would cost
-the crash↔comment link in item 3.
-
-**Rejected.** *Firebase Crashlytics*: cannot attach a user comment to the crash being
-sent — the value lands on the *next* report (firebase-ios-sdk#6431) — and it would
-block F-Droid permanently. *ACRA*: fully FLOSS and has a comment dialog built in, but
-captures Java/Kotlin exceptions only, so it would miss the ANR and native cases that
-are the leading suspects here.
+`beforeSend` already records the crashing event's id, which is the hook item 3 needs —
+Android has no `crashedLastRunEventId` (getsentry/sentry-java#2560, open since 2023).
 
 ### 2. Update channel — Obtainium, plus a per-build tagged release
 

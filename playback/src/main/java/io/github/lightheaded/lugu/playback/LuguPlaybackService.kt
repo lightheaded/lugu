@@ -64,6 +64,8 @@ class LuguPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var resumptionResolver: ResumptionResolver
 
+    @Inject lateinit var continuationResolver: ContinuationResolver
+
     @Inject lateinit var playbackPrefs: PlaybackPrefs
 
     /** Latest settings, kept current so the player can read them synchronously. */
@@ -333,7 +335,36 @@ class LuguPlaybackService : MediaLibraryService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) persistPosition(reason = "ended")
+            if (playbackState != Player.STATE_ENDED) return
+            persistPosition(reason = "ended")
+            continueToNext()
+        }
+    }
+
+    /**
+     * The end of a book, and the moment a queue is for.
+     *
+     * Done here rather than in the UI because this is exactly when the UI is least
+     * likely to exist: a book finishing in a car, or with the screen off. The resolver
+     * decides *what* comes next and whether it may start itself; this only loads it.
+     */
+    private fun continueToNext() {
+        val finished = stateHolder.nowPlaying.value ?: return
+        scope.launch {
+            val continuation = withContext(Dispatchers.IO) {
+                continuationResolver.resolveNext(finished.libraryItemId, finished.episodeId)
+            } ?: return@launch
+
+            stateHolder.set(continuation.resumption.nowPlaying)
+            player.setMediaItems(
+                continuation.resumption.mediaItems,
+                continuation.resumption.startTrackIndex,
+                continuation.resumption.startPositionMs,
+            )
+            player.prepare()
+            // Cueing without playing is the whole of the "ask first" setting: the next
+            // book is loaded and one press away, and nothing started on its own.
+            if (continuation.autoStart) player.play()
         }
     }
 

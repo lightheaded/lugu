@@ -137,7 +137,7 @@ Upstream contributions, in order of acceptance likelihood (external PRs merge in
 
 - **Trust first**: never lose position, never lose a download, never silently jump. Every automatic correction is visible and undoable.
 - **Instant**: cold start to playing < 2s; all lists render from local DB with zero spinners for cached data.
-- **Privacy**: zero telemetry/analytics; no third-party network calls except the user's server (and Cast/Auto system services); crash reporting opt-in and local-export only.
+- **Privacy**: no analytics; no third-party network calls except the user's server (and Cast/Auto system services). Crash reporting is opt-in and off by default — the SDK is not initialised at all until consent, so an untouched install contacts nothing but the server. Amended 2026-08-15: this said "local-export only", which was overtaken by the need to diagnose crashes on a phone that is being daily-driven.
 - **Longevity signals** (the community's stated #1 fear with new clients): clean architecture, real test suite, CI, documented contribution guide, conventional releases.
 - Accessibility (TalkBack on all controls), Material 3 + dynamic color, generous typography for the player screen.
 

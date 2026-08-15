@@ -18,7 +18,7 @@ client. The official app is a Capacitor/webview hybrid with architectural proble
 have outlived years of issue reports: lost positions, headset rewind inaccuracy, no
 queue, Android Auto that needs the phone app open, weak offline support. lugu is the
 attempt at the app a discerning listener can daily-drive without a single workaround —
-native, offline-first, open source, zero telemetry.
+native, offline-first, open source, no analytics.
 
 The evidence behind that claim is in [docs/research/](docs/research/); the plan is
 [docs/PLAN.md](docs/PLAN.md).
@@ -102,8 +102,16 @@ The local database is the source of truth; the server is a sync target.
 
 ## Privacy
 
-No telemetry, no analytics, no crash reporting. The only host lugu talks to is the
-Audiobookshelf server you point it at.
+No analytics, ever. No advertising, no tracking, no usage statistics.
+
+**Crash reporting is opt-in and off by default.** Leave it off — the default — and the
+only host lugu talks to is the Audiobookshelf server you point it at; the reporting SDK
+is never initialised, so it cannot run, phone home, or watch anything.
+
+Turn it on in Settings → Diagnostics and a crash sends its stack trace, the app version
+and the device model to a Sentry project hosted in the EU. It does not send your account,
+your server address, your library, or what you were listening to. Turning it back off
+stops it immediately, not at the next launch.
 
 ## License
 

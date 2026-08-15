@@ -146,6 +146,10 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.aboutlibraries.compose.m3)
 
+    // Initialised only after consent; see CrashReporting and the manifest's
+    // io.sentry.auto-init=false. MIT licensed, so GPL-compatible.
+    implementation(libs.sentry.android)
+
     implementation(libs.hilt.android)
     implementation(libs.hilt.navigation.compose)
     implementation(libs.androidx.hilt.work)

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
@@ -23,6 +24,7 @@ data class SettingsUiState(
     val settings: PlayerSettings = PlayerSettings(),
     val downloads: DownloadSettings = DownloadSettings(),
     val account: ActiveAccount? = null,
+    val crashReporting: Boolean = false,
     val query: String = "",
 )
 
@@ -31,6 +33,7 @@ class SettingsViewModel @Inject constructor(
     private val prefs: PlaybackPrefs,
     private val downloadPrefs: DownloadPrefs,
     private val authRepository: AuthRepository,
+    private val crashReportingPrefs: CrashReportingPrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -39,9 +42,10 @@ class SettingsViewModel @Inject constructor(
         prefs.settings,
         downloadPrefs.settings,
         authRepository.observeAccount(),
+        crashReportingPrefs.enabled,
         query,
-    ) { settings, downloads, account, text ->
-        SettingsUiState(settings, downloads, account, text)
+    ) { settings, downloads, account, crashReporting, text ->
+        SettingsUiState(settings, downloads, account, crashReporting, text)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     fun onQueryChange(value: String) = query.update { value }
@@ -93,6 +97,12 @@ class SettingsViewModel @Inject constructor(
         // Never leave the speed sheet with nothing to tap.
         if (remaining.isNotEmpty()) prefs.setSpeedPresets(remaining)
     }
+
+    /**
+     * Writes the flag only. The Application observes it and starts or stops Sentry, so
+     * nothing here — and nothing in this module — needs to know the reporter exists.
+     */
+    fun setCrashReporting(enabled: Boolean) = crashReportingPrefs.setEnabled(enabled)
 
     fun signOut() = viewModelScope.launch { authRepository.logout() }
 }

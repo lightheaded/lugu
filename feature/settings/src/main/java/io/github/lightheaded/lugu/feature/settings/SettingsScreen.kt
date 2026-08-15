@@ -406,6 +406,24 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "crash-reporting",
+                category = "Diagnostics",
+                title = "Send crash reports",
+                keywords = "crash reports diagnostics telemetry analytics privacy bug error sentry data",
+            ) {
+                SwitchRow(
+                    title = "Send crash reports",
+                    subtitle = "Off by default. When on, a crash sends its stack trace, " +
+                        "app version and device model — no account details, and nothing " +
+                        "about what you were listening to.",
+                    checked = state.crashReporting,
+                    onChange = viewModel::setCrashReporting,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "licenses",
                 category = "About",
                 title = "Open source licenses",
