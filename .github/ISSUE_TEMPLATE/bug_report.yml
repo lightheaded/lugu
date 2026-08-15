@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaved wrongly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [docs/BACKLOG.md](../blob/main/docs/BACKLOG.md) first — if it is listed
+        there, it is known and deliberately unfinished, and the entry says why.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >
+        What you did, what happened, what you expected. For anything involving
+        positions or playback, the exact sequence matters: pauses, seeks, headset
+        buttons, network drops, app kills.
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: lugu version
+      placeholder: e.g. 0.2.0-alpha01
+    validations:
+      required: true
+  - type: input
+    id: android-version
+    attributes:
+      label: Android version and device
+      placeholder: e.g. Android 15, Pixel 8
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Audiobookshelf server version
+      placeholder: e.g. 2.36.0
+    validations:
+      required: true
+  - type: dropdown
+    id: media
+    attributes:
+      label: What was playing
+      options:
+        - Book, streamed
+        - Book, downloaded
+        - Podcast episode, streamed
+        - Podcast episode, downloaded
+        - Not playback-related
+    validations:
+      required: true
