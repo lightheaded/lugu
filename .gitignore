@@ -28,3 +28,7 @@ secrets.yaml
 
 # Redacted live API captures
 build/api-capture/
+
+# Python bytecode from scripts/
+__pycache__/
+*.pyc

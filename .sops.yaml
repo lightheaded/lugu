@@ -4,9 +4,13 @@
 # any other project: this file is public, so its recipient list is public too, and a
 # key reused elsewhere would tie this repo to whatever else it encrypts.
 #
-# Private key: only in the maintainer's ~/.config/sops/age/keys.txt. Back it up —
-# losing it means regenerating the key, re-encrypting every value here, and rotating
-# whatever could not be recovered.
+# Private key: only in the maintainer's ~/.config/sops/age/keys.txt, backed up in
+# 1Password. Losing it means regenerating the key and re-encrypting every value here.
+#
+# Exposing it is worse than losing it: this file's ciphertext is public, so the key is
+# the only thing protecting sentry_agent_token — a real credential. Leak the key and
+# that token must be rotated in Sentry, not merely re-encrypted. (sentry_dsn needs no
+# such care; it ships in the APK and is public by nature.)
 #
 # CI does not decrypt this file. It reads the same values from repository secrets, so
 # the release job needs no sops binary and no decryption key. The cost is two copies:
