@@ -261,6 +261,25 @@ separate user-visible faults — a rewind that reset a forty-hour book to zero, 
 Both were behaviours no type checker could object to. Eight tests, including one that
 reproduces this bug exactly and one that pins the original data loss.
 
+### The "jumped" notice was still reflowing the screen
+
+Also reported during the same session. The earlier round moved the *rewound* notice to a
+snackbar but left the jump banner as inline `Column` content — so it went on pushing the
+cover art and the whole transport down as it appeared and back up as it went. Announcing
+a correction was a bigger interruption than the correction.
+
+Both notices are now overlays, and both auto-dismiss. They use
+`SnackbarDuration.Indefinite` with an explicit timeout rather than a built-in duration,
+because Material offers only four and ten seconds, neither is configurable, and a notice
+carrying an Undo has to stay up long enough to read a timestamp and decide. Ten seconds
+by default, settable under Settings → Notices. Letting it time out keeps the new
+position — exactly what the old "Keep" button did — so that button is gone and Undo is
+the snackbar's action.
+
+A lesson worth keeping: *"make it a toast"* was applied to the notice that prompted the
+feedback and not to its twin. When feedback names a pattern, the fix is the pattern
+everywhere it applies, not the one instance that was pointed at.
+
 ### Next
 
 1. Daily-drive M2: download a long book, go offline, confirm it plays and that the
