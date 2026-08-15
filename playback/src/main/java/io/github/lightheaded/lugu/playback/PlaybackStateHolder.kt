@@ -26,6 +26,9 @@ data class NowPlaying(
     val isTranscoded: Boolean,
 )
 
+/** Why the player is holding something the listener did not pick. */
+data class ContinuationNotice(val reason: String?, val cued: Boolean)
+
 /**
  * Playback context that outlives any single MediaItem.
  *
@@ -56,6 +59,17 @@ class PlaybackStateHolder @Inject constructor() {
 
     /** A position adopted from another device, waiting to be shown to the user with an undo. */
     val pendingJump: StateFlow<ProgressJump?> = _pendingJump.asStateFlow()
+
+    private val _continuation = MutableStateFlow<ContinuationNotice?>(null)
+
+    /**
+     * What lugu moved on to at the end of a book, and whether it started it.
+     *
+     * Something loaded into the player that the listener did not choose has to say so.
+     * The alternative is a book they never picked playing in a dark car with no
+     * explanation of where it came from.
+     */
+    val continuation: StateFlow<ContinuationNotice?> = _continuation.asStateFlow()
 
     fun set(nowPlaying: NowPlaying?) {
         _nowPlaying.value = nowPlaying
@@ -90,6 +104,19 @@ class PlaybackStateHolder @Inject constructor() {
 
     fun clearSleepTimer() {
         _sleepTimer.value = SleepTimerState()
+    }
+
+    /**
+     * @param reason why this followed the last thing, or null when the queue said so
+     *   plainly and no explanation is owed.
+     * @param cued true when it is loaded but waiting to be started.
+     */
+    fun setContinuationNotice(reason: String?, cued: Boolean) {
+        _continuation.value = ContinuationNotice(reason = reason, cued = cued)
+    }
+
+    fun clearContinuationNotice() {
+        _continuation.value = null
     }
 
     fun setRewindNotice(text: String?) {

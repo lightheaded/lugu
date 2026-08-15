@@ -4,6 +4,8 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.github.lightheaded.lugu.playback.ContinuationResolver
+import io.github.lightheaded.lugu.playback.DefaultContinuationResolver
 import io.github.lightheaded.lugu.playback.DefaultResumptionResolver
 import io.github.lightheaded.lugu.playback.ResumptionResolver
 
@@ -12,4 +14,7 @@ import io.github.lightheaded.lugu.playback.ResumptionResolver
 abstract class PlaybackModule {
     @Binds
     abstract fun resumptionResolver(impl: DefaultResumptionResolver): ResumptionResolver
+
+    @Binds
+    abstract fun continuationResolver(impl: DefaultContinuationResolver): ContinuationResolver
 }

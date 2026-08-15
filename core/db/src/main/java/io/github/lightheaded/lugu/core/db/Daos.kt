@@ -270,6 +270,37 @@ interface LibraryItemDao {
         """,
     )
     fun observeDownloaded(serverId: String, userId: String, limit: Int = 50): Flow<List<LibraryItemEntity>>
+
+    /**
+     * The volume that follows this one in its series, if it has not been started.
+     *
+     * Distinct from [observeNextInSeries], which surveys every series at once for a
+     * shelf. This answers the narrower question end-of-book continuation asks: someone
+     * has just finished *this* book, so what is next in *this* series. Ordered by
+     * sequence, never by name, for the same reason as everywhere else — "#10" sorts
+     * before "#2" as text.
+     */
+    @Query(
+        """
+        SELECT n.* FROM library_item n
+        WHERE n.serverId = :serverId AND n.userId = :userId
+          AND n.seriesTitle = :seriesTitle
+          AND n.seriesSequence IS NOT NULL AND n.seriesSequence > :afterSequence
+          AND NOT EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = n.serverId AND p.userId = n.userId AND p.libraryItemId = n.id
+              AND (p.currentTimeSec > 0 OR p.isFinished = 1)
+          )
+        ORDER BY n.seriesSequence
+        LIMIT 1
+        """,
+    )
+    suspend fun nextInSeriesAfter(
+        serverId: String,
+        userId: String,
+        seriesTitle: String,
+        afterSequence: Double,
+    ): LibraryItemEntity?
 }
 
 @Dao
@@ -412,6 +443,35 @@ interface EpisodeDao {
 
     @Query("SELECT * FROM episode WHERE serverId = :serverId AND userId = :userId AND id = :id")
     suspend fun byId(serverId: String, userId: String, id: String): EpisodeEntity?
+
+    /**
+     * The next episode of this podcast after the one just finished, if it is unplayed.
+     *
+     * Forwards in publication order rather than "the newest one": someone working
+     * through a backlog is moved along it, and someone already at the newest episode is
+     * given nothing rather than being sent back to the start of the archive.
+     */
+    @Query(
+        """
+        SELECT e.* FROM episode e
+        WHERE e.serverId = :serverId AND e.userId = :userId AND e.libraryItemId = :itemId
+          AND e.publishedAtMs > :afterPublishedAtMs
+          AND NOT EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = e.serverId AND p.userId = e.userId
+              AND p.libraryItemId = e.libraryItemId AND p.episodeKey = e.id
+              AND p.isFinished = 1
+          )
+        ORDER BY e.publishedAtMs
+        LIMIT 1
+        """,
+    )
+    suspend fun nextAfter(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        afterPublishedAtMs: Long,
+    ): EpisodeEntity?
 
     @Upsert
     suspend fun upsertAll(episodes: List<EpisodeEntity>)
@@ -568,17 +628,154 @@ interface OutboxDao {
     }
 }
 
+/**
+ * A queue entry with everything needed to draw it, resolved in the query.
+ *
+ * The queue stores identity only — an item id and an episode key — because a queue that
+ * copied titles would show a stale one after a rename, and would have to be migrated
+ * every time the UI wanted one more field. The join is against the mirror, so this works
+ * with the network off.
+ */
+data class QueueRow(
+    val libraryItemId: String,
+    val episodeKey: String,
+    val position: Int,
+    val source: String,
+    val title: String,
+    val author: String?,
+    val mediaType: String,
+    val durationSec: Double,
+    val coverPath: String?,
+    val isDownloaded: Boolean,
+    val currentTimeSec: Double,
+)
+
 @Dao
 interface QueueDao {
     @Query("SELECT * FROM queue WHERE serverId = :serverId AND userId = :userId ORDER BY position")
     fun observeQueue(serverId: String, userId: String): Flow<List<QueueEntity>>
 
+    /**
+     * The queue as a screen or a car sees it.
+     *
+     * `LEFT JOIN` throughout, deliberately: an item that has fallen out of the mirror
+     * still appears, with whatever is known about it, rather than silently vanishing
+     * from a list the listener built by hand.
+     */
+    @Query(
+        """
+        SELECT q.libraryItemId AS libraryItemId,
+               q.episodeKey AS episodeKey,
+               q.position AS position,
+               q.source AS source,
+               COALESCE(NULLIF(e.title, ''), i.title, '') AS title,
+               i.authorName AS author,
+               COALESCE(i.mediaType, 'book') AS mediaType,
+               COALESCE(NULLIF(e.durationSec, 0), i.durationSec, 0) AS durationSec,
+               i.coverPath AS coverPath,
+               CASE WHEN d.state = 'completed' THEN 1 ELSE 0 END AS isDownloaded,
+               COALESCE(p.currentTimeSec, 0) AS currentTimeSec
+        FROM queue q
+        LEFT JOIN library_item i
+            ON i.serverId = q.serverId AND i.userId = q.userId AND i.id = q.libraryItemId
+        LEFT JOIN episode e
+            ON e.serverId = q.serverId AND e.userId = q.userId AND e.id = q.episodeKey
+        LEFT JOIN download d
+            ON d.serverId = q.serverId AND d.userId = q.userId
+           AND d.libraryItemId = q.libraryItemId AND d.episodeKey = q.episodeKey
+        LEFT JOIN progress p
+            ON p.serverId = q.serverId AND p.userId = q.userId
+           AND p.libraryItemId = q.libraryItemId AND p.episodeKey = q.episodeKey
+        WHERE q.serverId = :serverId AND q.userId = :userId
+        ORDER BY q.position
+        """,
+    )
+    fun observeRows(serverId: String, userId: String): Flow<List<QueueRow>>
+
+    @Query("SELECT * FROM queue WHERE serverId = :serverId AND userId = :userId ORDER BY position")
+    suspend fun all(serverId: String, userId: String): List<QueueEntity>
+
+    @Query("SELECT * FROM queue WHERE serverId = :serverId AND userId = :userId ORDER BY position LIMIT 1")
+    suspend fun head(serverId: String, userId: String): QueueEntity?
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM queue
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :libraryItemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun count(serverId: String, userId: String, libraryItemId: String, episodeKey: String): Int
+
     @Upsert
     suspend fun upsertAll(entries: List<QueueEntity>)
 
+    @Query(
+        """
+        DELETE FROM queue
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :libraryItemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun delete(serverId: String, userId: String, libraryItemId: String, episodeKey: String)
+
     @Query("DELETE FROM queue WHERE serverId = :serverId AND userId = :userId")
     suspend fun clear(serverId: String, userId: String)
+
+    /**
+     * Appends, having first removed any existing entry for the same thing.
+     *
+     * Queuing something already queued moves it rather than duplicating it: two rows for
+     * one book would play it twice, and no one has ever meant that.
+     */
+    @Transaction
+    suspend fun addLast(entry: QueueEntity) {
+        delete(entry.serverId, entry.userId, entry.libraryItemId, entry.episodeKey)
+        val rows = all(entry.serverId, entry.userId)
+        upsertAll(rows.renumbered() + entry.copy(position = rows.size))
+    }
+
+    /** Puts it at the head, so it plays when whatever is playing now finishes. */
+    @Transaction
+    suspend fun addFirst(entry: QueueEntity) {
+        delete(entry.serverId, entry.userId, entry.libraryItemId, entry.episodeKey)
+        val rows = all(entry.serverId, entry.userId)
+        upsertAll(listOf(entry.copy(position = 0)) + rows.renumbered(from = 1))
+    }
+
+    @Transaction
+    suspend fun removeAndRenumber(serverId: String, userId: String, libraryItemId: String, episodeKey: String) {
+        delete(serverId, userId, libraryItemId, episodeKey)
+        upsertAll(all(serverId, userId).renumbered())
+    }
+
+    /** Reorder, by index. Out-of-range indices are a no-op rather than an exception. */
+    @Transaction
+    suspend fun move(serverId: String, userId: String, from: Int, to: Int) {
+        val rows = all(serverId, userId).toMutableList()
+        if (from !in rows.indices || to !in rows.indices || from == to) return
+        rows.add(to, rows.removeAt(from))
+        upsertAll(rows.renumbered())
+    }
+
+    /** Pops the head — what end-of-book continuation calls, so an entry is consumed once. */
+    @Transaction
+    suspend fun takeHead(serverId: String, userId: String): QueueEntity? {
+        val head = head(serverId, userId) ?: return null
+        delete(serverId, userId, head.libraryItemId, head.episodeKey)
+        upsertAll(all(serverId, userId).renumbered())
+        return head
+    }
 }
+
+/**
+ * Positions are kept contiguous from zero after every mutation.
+ *
+ * Gaps would work for ordering but not for the queue screen, which moves a row by index;
+ * keeping them dense means the index a listener drags is the position stored.
+ */
+private fun List<QueueEntity>.renumbered(from: Int = 0): List<QueueEntity> =
+    sortedBy { it.position }.mapIndexed { index, entry -> entry.copy(position = from + index) }
 
 @Dao
 interface PositionHistoryDao {

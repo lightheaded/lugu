@@ -25,6 +25,16 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Nothing about crash reporting starts on its own. The SDK is initialised by
+            CrashReporting only after consent, so a build nobody has opted into never
+            loads it at all. Setting `enabled = false` at init instead would still run
+            its instrumentation, which is not what the README promises.
+        -->
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
+
         <!-- Hilt supplies the worker factory; the default initialiser must stand down. -->
         <provider
             android:name="androidx.startup.InitializationProvider"

@@ -213,7 +213,15 @@ object OutboxKind {
     const val LOCAL_SESSION = "local_session"
 }
 
-/** Queue rows land in schema v1 so M3 does not need a migration; unused until then. */
+/**
+ * The play queue: what happens after the thing playing now.
+ *
+ * Identity only — no title, no duration — so a rename on the server does not leave a
+ * stale copy here, and a new column on the UI does not need a migration. [position] is
+ * dense from zero (see `QueueDao`), so the row a listener drags is the row that moves.
+ *
+ * These rows landed in schema v1 ahead of use, which is why M3 needs no migration.
+ */
 @Entity(
     tableName = "queue",
     primaryKeys = ["serverId", "userId", "libraryItemId", "episodeKey"],
@@ -228,6 +236,14 @@ data class QueueEntity(
     /** Distinguishes a user-added entry from one an auto-continuation rule appended. */
     val source: String,
 )
+
+object QueueSource {
+    /** Put there on purpose. Plays without asking, because it was already asked for. */
+    const val USER = "user"
+
+    /** Suggested by a continuation rule — series, or the next podcast episode. */
+    const val AUTO = "auto"
+}
 
 /**
  * One downloaded item (or podcast episode), and everything needed to play it with the
