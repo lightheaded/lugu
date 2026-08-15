@@ -5,6 +5,7 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import io.github.lightheaded.lugu.core.model.Chapters
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
 
 /**
  * Makes the transport buttons mean what a listener expects on a book.
@@ -24,9 +25,12 @@ import io.github.lightheaded.lugu.core.model.Chapters
 class ChapterAwarePlayer(
     player: Player,
     private val stateHolder: PlaybackStateHolder,
-    private val skipBackSec: Double = 30.0,
-    private val skipForwardSec: Double = 30.0,
+    /** Read live, so changing a setting takes effect without restarting playback. */
+    private val settings: () -> PlayerSettings,
 ) : ForwardingPlayer(player) {
+
+    private val skipBackSec: Double get() = settings().skipBackSec.toDouble()
+    private val skipForwardSec: Double get() = settings().skipForwardSec.toDouble()
 
     private fun chapters() = stateHolder.nowPlaying.value?.chapters.orEmpty()
 
@@ -69,27 +73,46 @@ class ChapterAwarePlayer(
     }
 
     /**
-     * Advertise the previous/next commands even for a single-file book, so the
-     * notification offers chapter navigation rather than hiding the buttons.
+     * Seek back and forward are always offered; chapter skip only when asked for.
+     *
+     * The notification has room for very few buttons, and seeking back to catch a
+     * missed sentence is far and away the most common action. Advertising the chapter
+     * commands unconditionally would let the system fill that scarce space with the
+     * rarest control.
      */
-    override fun getAvailableCommands(): Player.Commands =
-        super.getAvailableCommands()
-            .buildUpon()
-            .addAll(
-                Player.COMMAND_SEEK_TO_PREVIOUS,
-                Player.COMMAND_SEEK_TO_NEXT,
-                Player.COMMAND_SEEK_BACK,
-                Player.COMMAND_SEEK_FORWARD,
-            )
-            .build()
+    override fun getAvailableCommands(): Player.Commands {
+        val builder = super.getAvailableCommands().buildUpon()
+            .addAll(Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD)
+        return if (settings().showsChapterButtonsInNotification) {
+            builder.addAll(Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_NEXT).build()
+        } else {
+            builder
+                .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .remove(Player.COMMAND_SEEK_TO_NEXT)
+                .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .build()
+        }
+    }
 
     override fun isCommandAvailable(command: Int): Boolean = when (command) {
+        Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD -> true
+
         Player.COMMAND_SEEK_TO_PREVIOUS,
         Player.COMMAND_SEEK_TO_NEXT,
-        Player.COMMAND_SEEK_BACK,
-        Player.COMMAND_SEEK_FORWARD,
-        -> true
+        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+        -> settings().showsChapterButtonsInNotification
 
         else -> super.isCommandAvailable(command)
     }
+
+    /** Seek back/forward honour the configured durations rather than Media3 defaults. */
+    override fun seekBack() = seekToAbsolute(absolutePositionSec() - skipBackSec)
+
+    override fun seekForward() = seekToAbsolute(absolutePositionSec() + skipForwardSec)
+
+    override fun getSeekBackIncrement(): Long = (skipBackSec * 1000).toLong()
+
+    override fun getSeekForwardIncrement(): Long = (skipForwardSec * 1000).toLong()
 }

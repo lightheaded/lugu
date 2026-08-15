@@ -8,10 +8,13 @@ import androidx.media3.session.SessionToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.Chapters
+import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -19,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -200,7 +204,8 @@ class PlaybackConnection @Inject constructor(
             stateHolder.setJump(resolved.jump)
 
             val start = AbsoluteTiming.toTrack(resolved.session.tracks, resolved.startPositionSec)
-            val speed = withContext(Dispatchers.IO) { playbackPrefs.speedFor(libraryItemId) }
+            val mediaType = if (episodeId != null) MediaType.PODCAST else MediaType.BOOK
+            val speed = withContext(Dispatchers.IO) { playbackPrefs.speedFor(libraryItemId, mediaType) }
             val player = controller()
             player.setMediaItems(resolved.mediaItems, start.trackIndex, start.positionMs)
             player.setPlaybackSpeed(speed)
@@ -341,17 +346,27 @@ class PlaybackConnection @Inject constructor(
         stateHolder.armSleepTimer(extended, _state.value.positionSec)
     }
 
-    /** Sets the speed and remembers it for this book; the server has nowhere to store it. */
+    /**
+     * Sets the speed and remembers it for this item; the server has nowhere to store it.
+     * For a podcast the key is the podcast itself, not the episode — the narrator is
+     * the same next week.
+     */
     fun setSpeed(speed: Float) {
         scope.launch {
-            val clamped = speed.coerceIn(PlaybackPrefs.MIN_SPEED, PlaybackPrefs.MAX_SPEED)
+            val clamped = speed.coerceIn(SpeedSettings.MIN, SpeedSettings.MAX)
             controller().setPlaybackSpeed(clamped)
-            stateHolder.nowPlaying.value?.libraryItemId?.let { itemId ->
-                withContext(Dispatchers.IO) { playbackPrefs.setSpeedFor(itemId, clamped) }
+            stateHolder.nowPlaying.value?.let { now ->
+                val mediaType = if (now.episodeId != null) MediaType.PODCAST else MediaType.BOOK
+                withContext(Dispatchers.IO) {
+                    playbackPrefs.setSpeedFor(now.libraryItemId, mediaType, clamped)
+                }
             }
             pushState()
         }
     }
+
+    /** Live player settings, so the UI lays out the controls the listener asked for. */
+    val settings: Flow<PlayerSettings> get() = playbackPrefs.settings
 
     /** Puts the position back where it was before a jump was adopted from another device. */
     fun undoJump() {

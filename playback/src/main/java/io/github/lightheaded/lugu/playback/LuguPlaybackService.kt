@@ -26,6 +26,8 @@ import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
@@ -64,6 +66,11 @@ class LuguPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var resumptionResolver: ResumptionResolver
 
+    @Inject lateinit var playbackPrefs: PlaybackPrefs
+
+    /** Latest settings, kept current so the player can read them synchronously. */
+    @Volatile private var currentSettings: PlayerSettings = PlayerSettings()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var session: MediaLibrarySession? = null
     private lateinit var player: ExoPlayer
@@ -100,8 +107,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(30_000)
+
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
             .apply {
@@ -114,11 +120,17 @@ class LuguPlaybackService : MediaLibraryService() {
 
         // The session sees a chapter-aware wrapper: notification and lock-screen
         // buttons must never be able to seek a book back to zero.
-        val sessionPlayer = ChapterAwarePlayer(player, stateHolder)
+        val sessionPlayer = ChapterAwarePlayer(player, stateHolder) { currentSettings }
 
         session = MediaLibrarySession.Builder(this, sessionPlayer, LibrarySessionCallback())
             .setSessionActivity(openAppIntent())
             .build()
+
+        // Settings are read live, so changing a skip duration or hiding a button takes
+        // effect immediately rather than at the next playback session.
+        scope.launch {
+            playbackPrefs.settings.collect { currentSettings = it }
+        }
 
         startPositionTicker()
     }

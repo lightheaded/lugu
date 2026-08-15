@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
@@ -28,7 +30,10 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,16 +59,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.SleepMode
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.playback.PositionJump
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     onBack: () -> Unit,
+    onOpenItem: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
@@ -75,8 +84,29 @@ fun PlayerScreen(
     var showSleepSheet by remember { mutableStateOf(false) }
     var showHistorySheet by remember { mutableStateOf(false) }
     val history by viewModel.positionHistory.collectAsStateWithLifecycle(initialValue = emptyList())
+    val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = PlayerSettings())
+    var showSpeedSheet by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Toast-like, so it never reflows the screen. An inline notice made the whole
+    // player jump as it appeared and vanished.
+    LaunchedEffect(rewindNotice) {
+        rewindNotice?.let {
+            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
+            viewModel.dismissRewindNotice()
+        }
+    }
 
     var scrubbing by remember { mutableStateOf<Float?>(null) }
+
+    if (showSpeedSheet) {
+        SpeedSheet(
+            current = state.speed,
+            presets = settings.speed.presets,
+            onPick = viewModel::setSpeed,
+            onDismiss = { showSpeedSheet = false },
+        )
+    }
 
     if (showHistorySheet) {
         PositionHistorySheet(
@@ -103,6 +133,7 @@ fun PlayerScreen(
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Now playing") },
@@ -165,26 +196,16 @@ fun PlayerScreen(
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                // The title is a link to the item wherever it is shown.
+                modifier = Modifier.clickable(enabled = nowPlaying != null) {
+                    nowPlaying?.libraryItemId?.let(onOpenItem)
+                },
             )
             nowPlaying?.author?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // The smart rewind announces itself and then fades out of the way.
-            rewindNotice?.let { notice ->
-                LaunchedEffect(notice) {
-                    kotlinx.coroutines.delay(4_000)
-                    viewModel.dismissRewindNotice()
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    notice,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.secondary,
                 )
             }
 
@@ -230,97 +251,79 @@ fun PlayerScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+            /*
+             * Laid out by how often each control is actually used: seeking back to
+             * re-hear a missed sentence dominates, finding a place is next, and chapter
+             * skipping is occasional. So the seek pair flanks play/pause at full size
+             * and the chapter pair sits outside it, smaller and dimmer.
+             */
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconButton(
-                    onClick = viewModel::previousChapter,
-                    enabled = state.chapterCount > 1,
-                    modifier = Modifier.size(48.dp),
+                if (TransportButton.PREVIOUS_CHAPTER in settings.playerButtons) {
+                    IconButton(
+                        onClick = viewModel::previousChapter,
+                        enabled = state.chapterCount > 1,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "Previous chapter",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                FilledTonalIconButton(
+                    onClick = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
+                    modifier = Modifier.size(60.dp),
                 ) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous chapter")
+                    SeekIcon(
+                        seconds = settings.skipBackSec,
+                        icon = Icons.Default.Replay10,
+                        description = "Back ${settings.skipBackSec} seconds",
+                    )
                 }
-                IconButton(onClick = { viewModel.seekBy(-10.0) }, modifier = Modifier.size(56.dp)) {
-                    Icon(Icons.Default.Replay10, contentDescription = "Back 10 seconds")
-                }
+
                 FilledIconButton(
                     onClick = viewModel::togglePlayPause,
-                    modifier = Modifier.size(72.dp),
+                    modifier = Modifier.size(76.dp),
                 ) {
                     Icon(
                         if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (state.isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(38.dp),
                     )
                 }
-                IconButton(onClick = { viewModel.seekBy(30.0) }, modifier = Modifier.size(56.dp)) {
-                    Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds")
-                }
-                IconButton(
-                    onClick = viewModel::nextChapter,
-                    enabled = state.chapterCount > 1,
-                    modifier = Modifier.size(48.dp),
+
+                FilledTonalIconButton(
+                    onClick = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+                    modifier = Modifier.size(60.dp),
                 ) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next chapter")
+                    SeekIcon(
+                        seconds = settings.skipForwardSec,
+                        icon = Icons.Default.Forward30,
+                        description = "Forward ${settings.skipForwardSec} seconds",
+                    )
+                }
+
+                if (TransportButton.NEXT_CHAPTER in settings.playerButtons) {
+                    IconButton(
+                        onClick = viewModel::nextChapter,
+                        enabled = state.chapterCount > 1,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Next chapter",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                viewModel.speedPresets.forEach { speed ->
-                    FilterChip(
-                        selected = kotlin.math.abs(state.speed - speed) < 0.01f,
-                        onClick = { viewModel.setSpeed(speed) },
-                        label = { Text("${speed}x") },
-                    )
-                }
-            }
-            Text(
-                "Speed is remembered for this book",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(12.dp))
-            if (sleep.isArmed) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Bedtime,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.secondary,
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text(
-                        sleep.remainingSec?.let { "Sleeping in ${formatTime(it)}" } ?: "Sleep timer on",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                    TextButton(onClick = { viewModel.extendSleepTimer(5) }) { Text("+5 min") }
-                    TextButton(onClick = { viewModel.setSleepTimer(null) }) { Text("Cancel") }
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { showSleepSheet = true }) {
-                        Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text("Sleep timer")
-                    }
-                    if (history.isNotEmpty()) {
-                        TextButton(onClick = { showHistorySheet = true }) {
-                            Icon(
-                                Icons.Default.History,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.size(6.dp))
-                            Text("History")
-                        }
-                    }
-                }
-            }
-
             state.error?.let {
                 Spacer(Modifier.height(16.dp))
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -439,6 +442,71 @@ private fun PositionHistorySheet(
                     }
                     TextButton(onClick = { onRestore(jump.fromSec) }) { Text("Restore") }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A seek button labelled with its own duration.
+ *
+ * Media3's stock icons are baked with "10" and "30" on them, which would lie as soon as
+ * the durations became configurable. The number is drawn over a neutral icon instead.
+ */
+@Composable
+private fun SeekIcon(seconds: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, description: String) {
+    Box(contentAlignment = Alignment.Center) {
+        Icon(icon, contentDescription = description, modifier = Modifier.size(30.dp))
+        Text(
+            seconds.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 9.sp,
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
+}
+
+/** Drops a trailing ".0" so a chip reads "2x" rather than wrapping onto two lines. */
+internal fun trimSpeed(speed: Float): String =
+    if (kotlin.math.abs(speed - speed.toInt()) < 0.01f) speed.toInt().toString()
+    else ((speed * 100).toInt() / 100.0).toString()
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SpeedSheet(
+    current: Float,
+    presets: List<Float>,
+    onPick: (Float) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Text("Playback speed", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Remembered for this title",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                presets.forEach { speed ->
+                    FilterChip(
+                        selected = kotlin.math.abs(current - speed) < 0.01f,
+                        onClick = { onPick(speed) },
+                        label = { Text("${trimSpeed(speed)}x", maxLines = 1, softWrap = false) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { onPick(current - 0.05f) }) { Text("−") }
+                Text(
+                    "${trimSpeed(current)}x",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                IconButton(onClick = { onPick(current + 0.05f) }) { Text("+") }
             }
         }
     }
