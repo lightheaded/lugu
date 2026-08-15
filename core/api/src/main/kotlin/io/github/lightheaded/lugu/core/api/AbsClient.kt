@@ -243,6 +243,31 @@ class AbsClient(
     suspend fun allProgress(): List<MediaProgressDto> =
         authed<MediaProgressListResponse>("/api/me").mediaProgress
 
+    /** Bookmarks arrive with the user, not from an endpoint of their own. */
+    suspend fun allBookmarks(): List<BookmarkDto> =
+        authed<MediaProgressListResponse>("/api/me").bookmarks
+
+    suspend fun createBookmark(itemId: String, timeSec: Long, title: String): BookmarkDto =
+        authed("/api/me/item/$itemId/bookmark", HttpMethod.Post) {
+            contentType(ContentType.Application.Json)
+            setBody(BookmarkRequest(timeSec, title))
+        }
+
+    /** Renames the bookmark at this exact time; the time is the identity, so it cannot move. */
+    suspend fun updateBookmark(itemId: String, timeSec: Long, title: String): BookmarkDto =
+        authed("/api/me/item/$itemId/bookmark", HttpMethod.Patch) {
+            contentType(ContentType.Application.Json)
+            setBody(BookmarkRequest(timeSec, title))
+        }
+
+    suspend fun deleteBookmark(itemId: String, timeSec: Long) {
+        val response = send("/api/me/item/$itemId/bookmark/$timeSec", HttpMethod.Delete)
+        // A bookmark the server has already lost is the state the caller wanted anyway.
+        if (!response.status.isSuccess() && response.status.value != 404) {
+            throw AbsHttpException(response.status.value, response.bodyAsText().take(300))
+        }
+    }
+
     suspend fun progress(itemId: String, episodeId: String? = null): MediaProgressDto? {
         val path = "/api/me/progress/$itemId" + (episodeId?.let { "/$it" } ?: "")
         val response = send(path, HttpMethod.Get)

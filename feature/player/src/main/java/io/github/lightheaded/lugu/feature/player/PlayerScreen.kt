@@ -17,16 +17,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Forward30
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarDuration
@@ -50,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,8 +61,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.playback.PositionJump
@@ -89,7 +86,12 @@ fun PlayerScreen(
     val history by viewModel.positionHistory.collectAsStateWithLifecycle(initialValue = emptyList())
     val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = PlayerSettings())
     var showSpeedSheet by remember { mutableStateOf(false) }
+    var showChapterSheet by remember { mutableStateOf(false) }
+    var showBookmarkSheet by remember { mutableStateOf(false) }
+    val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
+    val canBookmark by viewModel.canBookmark.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     /*
      * Both notices are overlays and neither is inline content, so announcing a
@@ -190,11 +192,41 @@ fun PlayerScreen(
         SleepTimerSheet(
             hasChapters = state.chapterCount > 1,
             presets = viewModel.sleepPresets,
+            timer = sleep,
+            settings = settings.sleep,
+            speed = state.speed,
             onPick = {
                 viewModel.setSleepTimer(it)
                 showSleepSheet = false
             },
+            onExtend = viewModel::extendSleepTimer,
             onDismiss = { showSleepSheet = false },
+        )
+    }
+
+    if (showChapterSheet) {
+        ChapterSheet(
+            chapters = nowPlaying?.chapters.orEmpty(),
+            positionSec = state.positionSec,
+            onSeek = {
+                viewModel.seekTo(it)
+                showChapterSheet = false
+            },
+            onDismiss = { showChapterSheet = false },
+        )
+    }
+
+    if (showBookmarkSheet) {
+        BookmarkSheet(
+            bookmarks = bookmarks,
+            speed = state.speed,
+            onSeek = {
+                viewModel.seekTo(it)
+                showBookmarkSheet = false
+            },
+            onRename = viewModel::renameBookmark,
+            onDelete = viewModel::removeBookmark,
+            onDismiss = { showBookmarkSheet = false },
         )
     }
 
@@ -252,21 +284,37 @@ fun PlayerScreen(
             }
 
             state.chapter?.let { chapter ->
+                /*
+                 * The readout is the way into the chapter list, because it is already
+                 * what someone is looking at when they wonder where they are. An item
+                 * with no chapters to choose between keeps the readout and loses the
+                 * tap: an affordance that opens an empty sheet is worse than none.
+                 */
+                val hasChapterList = state.chapterCount > 1
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    chapter.title,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (state.chapterCount > 1) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = hasChapterList) { showChapterSheet = true }
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
                     Text(
-                        "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
-                            "${formatTime(state.chapterPositionSec)} / ${formatTime(state.chapterDurationSec)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        chapter.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (hasChapterList) {
+                        Text(
+                            "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
+                                "${formatTime(state.chapterPositionSec)} / " +
+                                formatTime(state.chapterDurationSec),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -365,7 +413,29 @@ fun PlayerScreen(
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
+            PlayerActionRow(
+                speed = state.speed,
+                sleepArmed = sleep.isArmed,
+                canBookmark = canBookmark,
+                onSpeed = { showSpeedSheet = true },
+                onSleep = { showSleepSheet = true },
+                onAddBookmark = {
+                    viewModel.addBookmark()
+                    // The write lands in Room before the server hears about it, so the
+                    // confirmation is honest even with no signal.
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            "Bookmarked at ${formatTime(state.positionSec)}",
+                            withDismissAction = true,
+                        )
+                    }
+                },
+                onBookmarks = { showBookmarkSheet = true },
+                onHistory = { showHistorySheet = true },
+            )
+
+            Spacer(Modifier.height(8.dp))
             state.error?.let {
                 Spacer(Modifier.height(16.dp))
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -554,50 +624,3 @@ private fun SpeedSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SleepTimerSheet(
-    hasChapters: Boolean,
-    presets: List<Int>,
-    onPick: (SleepMode) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Text("Sleep timer", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(12.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                presets.forEach { minutes ->
-                    AssistChip(
-                        onClick = { onPick(SleepMode.Duration(minutes)) },
-                        label = { Text("$minutes min") },
-                    )
-                }
-            }
-            if (hasChapters) {
-                Spacer(Modifier.height(12.dp))
-                AssistChip(
-                    onClick = { onPick(SleepMode.EndOfChapter) },
-                    label = { Text("End of chapter") },
-                )
-                Text(
-                    "Follows you if you skip a chapter",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-internal fun formatTime(seconds: Double): String {
-    val safe = seconds.coerceAtLeast(0.0).toLong()
-    val hours = safe / 3600
-    val minutes = (safe % 3600) / 60
-    val secs = safe % 60
-    return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, secs)
-    } else {
-        "%d:%02d".format(minutes, secs)
-    }
-}

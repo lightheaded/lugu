@@ -104,6 +104,11 @@ interface LibraryItemDao {
      * episode listened to. The UI keys this list by item id, and Compose throws on a
      * duplicate key — so a duplicate row here crashes the app rather than looking odd.
      * Ordering by MAX(lastUpdateMs) ranks a podcast by its most recent episode.
+     *
+     * [libraryId] scopes the shelf to one library, or spans every library when null.
+     * A shelf that ignored the library picker sitting directly above it was read — quite
+     * reasonably — as the picker being broken, so the caller now has to say which it
+     * means rather than getting whichever the query happened to do.
      */
     @Query(
         """
@@ -111,13 +116,19 @@ interface LibraryItemDao {
         INNER JOIN progress p
             ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
           AND p.isFinished = 0 AND p.currentTimeSec > 0
         GROUP BY i.serverId, i.userId, i.id
         ORDER BY MAX(p.lastUpdateMs) DESC
         LIMIT :limit
         """,
     )
-    fun observeContinueListening(serverId: String, userId: String, limit: Int = 20): Flow<List<LibraryItemEntity>>
+    fun observeContinueListening(
+        serverId: String,
+        userId: String,
+        libraryId: String? = null,
+        limit: Int = 20,
+    ): Flow<List<LibraryItemEntity>>
 
     /**
      * Full-text search across the mirror, scoped to one library.
@@ -196,6 +207,7 @@ interface LibraryItemDao {
         INNER JOIN progress p
             ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
           AND p.isFinished = 0 AND p.progress >= :minProgress AND p.progress < 1.0
         GROUP BY i.serverId, i.userId, i.id
         ORDER BY MAX(p.progress) DESC
@@ -205,6 +217,7 @@ interface LibraryItemDao {
     fun observeAlmostFinished(
         serverId: String,
         userId: String,
+        libraryId: String? = null,
         minProgress: Double = 0.9,
         limit: Int = 20,
     ): Flow<List<LibraryItemEntity>>
@@ -216,6 +229,7 @@ interface LibraryItemDao {
         INNER JOIN progress p
             ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
           AND p.isFinished = 0 AND p.currentTimeSec > 0 AND p.progress < :maxProgress
         GROUP BY i.serverId, i.userId, i.id
         HAVING MAX(p.lastUpdateMs) < :staleBeforeMs
@@ -227,6 +241,7 @@ interface LibraryItemDao {
         serverId: String,
         userId: String,
         staleBeforeMs: Long,
+        libraryId: String? = null,
         maxProgress: Double = 0.9,
         limit: Int = 20,
     ): Flow<List<LibraryItemEntity>>
@@ -236,6 +251,7 @@ interface LibraryItemDao {
         """
         SELECT i.* FROM library_item i
         WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
           AND i.mediaType = 'BOOK'
           AND i.durationSec > 0 AND i.durationSec <= :maxDurationSec
           AND NOT EXISTS (
@@ -250,6 +266,7 @@ interface LibraryItemDao {
     fun observeShortListens(
         serverId: String,
         userId: String,
+        libraryId: String? = null,
         maxDurationSec: Double = 3 * 3600.0,
         limit: Int = 20,
     ): Flow<List<LibraryItemEntity>>
@@ -267,6 +284,7 @@ interface LibraryItemDao {
         """
         SELECT i.* FROM library_item i
         WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
           AND i.seriesTitle IS NOT NULL AND i.seriesSequence IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM progress p
@@ -296,7 +314,12 @@ interface LibraryItemDao {
         LIMIT :limit
         """,
     )
-    fun observeNextInSeries(serverId: String, userId: String, limit: Int = 20): Flow<List<LibraryItemEntity>>
+    fun observeNextInSeries(
+        serverId: String,
+        userId: String,
+        libraryId: String? = null,
+        limit: Int = 20,
+    ): Flow<List<LibraryItemEntity>>
 
     /** Everything with bytes on the phone — the shelf that still works in airplane mode. */
     @Query(
@@ -305,12 +328,18 @@ interface LibraryItemDao {
         INNER JOIN download d
             ON d.serverId = i.serverId AND d.userId = i.userId AND d.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId AND d.state = 'completed'
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
         GROUP BY i.serverId, i.userId, i.id
         ORDER BY MAX(d.completedAtMs) DESC
         LIMIT :limit
         """,
     )
-    fun observeDownloaded(serverId: String, userId: String, limit: Int = 50): Flow<List<LibraryItemEntity>>
+    fun observeDownloaded(
+        serverId: String,
+        userId: String,
+        libraryId: String? = null,
+        limit: Int = 50,
+    ): Flow<List<LibraryItemEntity>>
 
     /**
      * Podcasts being listened to — the only ones worth refreshing or downloading ahead.

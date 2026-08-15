@@ -3,11 +3,14 @@ package io.github.lightheaded.lugu.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
+import io.github.lightheaded.lugu.core.sync.LibraryPrefs
+import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.QueuePrefs
@@ -28,7 +31,22 @@ data class SettingsUiState(
     val account: ActiveAccount? = null,
     val crashReporting: Boolean = false,
     val queue: QueueSettings = QueueSettings(),
+    val library: LibrarySettings = LibrarySettings(),
     val query: String = "",
+)
+
+/**
+ * The stored settings, gathered into one value.
+ *
+ * `combine` is typed only up to five flows and there are more than five stores now.
+ * Grouping them here rather than nesting combines keeps the assembly readable and means
+ * adding the next store is a field rather than another layer.
+ */
+private data class StoredSettings(
+    val player: PlayerSettings,
+    val downloads: DownloadSettings,
+    val queue: QueueSettings,
+    val library: LibrarySettings,
 )
 
 @HiltViewModel
@@ -38,24 +56,33 @@ class SettingsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val crashReportingPrefs: CrashReportingPrefs,
     private val queuePrefs: QueuePrefs,
+    private val libraryPrefs: LibraryPrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
 
-    /** Grouped only because `combine` is typed up to five flows and there are now six. */
     private val storedSettings = combine(
         prefs.settings,
         downloadPrefs.settings,
         queuePrefs.settings,
-    ) { player, downloads, queue -> Triple(player, downloads, queue) }
+        libraryPrefs.settings,
+    ) { player, downloads, queue, library -> StoredSettings(player, downloads, queue, library) }
 
     val state: StateFlow<SettingsUiState> = combine(
         storedSettings,
         authRepository.observeAccount(),
         crashReportingPrefs.enabled,
         query,
-    ) { (settings, downloads, queue), account, crashReporting, text ->
-        SettingsUiState(settings, downloads, account, crashReporting, queue, text)
+    ) { stored, account, crashReporting, text ->
+        SettingsUiState(
+            settings = stored.player,
+            downloads = stored.downloads,
+            account = account,
+            crashReporting = crashReporting,
+            queue = stored.queue,
+            library = stored.library,
+            query = text,
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     fun onQueryChange(value: String) = query.update { value }
@@ -132,6 +159,33 @@ class SettingsViewModel @Inject constructor(
 
     fun setAskBeforeSuggestion(enabled: Boolean) =
         viewModelScope.launch { queuePrefs.setAskBeforeSuggestion(enabled) }
+
+    fun setSkipSilence(enabled: Boolean) = viewModelScope.launch { prefs.setSkipSilence(enabled) }
+
+    fun setVolumeBoostDb(db: Int) = viewModelScope.launch { prefs.setVolumeBoostDb(db) }
+
+    fun setSleepFadeSeconds(seconds: Int) = viewModelScope.launch { prefs.setSleepFadeSeconds(seconds) }
+
+    fun setShakeToExtend(enabled: Boolean) = viewModelScope.launch { prefs.setShakeToExtend(enabled) }
+
+    fun setShakeSensitivity(level: Int) = viewModelScope.launch { prefs.setShakeSensitivity(level) }
+
+    fun setSleepExtendMinutes(minutes: Int) = viewModelScope.launch { prefs.setSleepExtendMinutes(minutes) }
+
+    fun setRewindOnWakeSec(seconds: Int) = viewModelScope.launch { prefs.setRewindOnWakeSec(seconds) }
+
+    fun setPauseOnDisconnect(enabled: Boolean) = viewModelScope.launch { prefs.setPauseOnDisconnect(enabled) }
+
+    fun setResumeOnHeadphones(enabled: Boolean) =
+        viewModelScope.launch { prefs.setResumeOnHeadphones(enabled) }
+
+    fun setResumeInCar(enabled: Boolean) = viewModelScope.launch { prefs.setResumeInCar(enabled) }
+
+    fun setMediaTypeHidden(mediaType: MediaType, hidden: Boolean) =
+        viewModelScope.launch { libraryPrefs.setMediaTypeHidden(mediaType, hidden) }
+
+    fun setShelvesFollowLibrary(enabled: Boolean) =
+        viewModelScope.launch { libraryPrefs.setShelvesFollowLibrary(enabled) }
 
     fun signOut() = viewModelScope.launch { authRepository.logout() }
 }

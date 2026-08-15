@@ -241,6 +241,58 @@ class MigrationTest {
     }
 
     @Test
+    fun `migration 3 to 4 matches the schema Room generates`() {
+        val migrated = databaseAtVersion(3)
+        LuguDatabase.MIGRATION_3_4.migrate(migrated)
+
+        val migratedColumns = columnsOf(migrated, "bookmark")
+        val migratedIndexes = indexesOf(migrated, "bookmark").sorted()
+        val migratedIndexColumns = migratedIndexes.associateWith { indexedColumnsOf(migrated, it) }
+        migrated.close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        room.openHelper.writableDatabase.let { db ->
+            assertThat(migratedColumns).isEqualTo(columnsOf(db, "bookmark"))
+            assertThat(migratedIndexes).isEqualTo(indexesOf(db, "bookmark").sorted())
+            migratedIndexes.forEach { index ->
+                assertThat(migratedIndexColumns[index]).isEqualTo(indexedColumnsOf(db, index))
+            }
+        }
+        room.close()
+    }
+
+    @Test
+    fun `migration 3 to 4 leaves the mirror alone`() {
+        val db = databaseAtVersion(3)
+        db.execSQL(
+            """
+            INSERT INTO library_item (serverId, userId, id, libraryId, mediaType, title, subtitle,
+                authorName, narratorName, seriesName, seriesTitle, seriesSequence, description,
+                durationSec, sizeBytes, numEpisodes, addedAtMs, updatedAtMs, coverPath, rawJson,
+                syncedAtMs)
+            VALUES ('s', 'u', 'li_1', 'lib_1', 'BOOK', 'Lighthouse Wakes', NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, 100.0, 0, 0, 0, 0, NULL, NULL, 0)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_3_4.migrate(db)
+        // Re-running must converge rather than throw: one bad upgrade should not turn
+        // into a database that can never be opened again.
+        LuguDatabase.MIGRATION_3_4.migrate(db)
+
+        val items = db.query("SELECT COUNT(*) FROM library_item").use {
+            it.moveToFirst()
+            it.getInt(0)
+        }
+        assertThat(items).isEqualTo(1)
+        assertThat(schemaOf(db, "bookmark")).isNotNull()
+        db.close()
+    }
+
+    @Test
     fun `history rows round-trip and come back newest first`() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)

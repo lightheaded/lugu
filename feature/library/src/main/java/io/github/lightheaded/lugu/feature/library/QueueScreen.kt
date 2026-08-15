@@ -1,5 +1,6 @@
 package io.github.lightheaded.lugu.feature.library
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
@@ -16,9 +17,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,22 +66,43 @@ fun QueueScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    BackHandler(enabled = state.selectionActive) { viewModel.clearSelection() }
+
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = { Text("Up next") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    if (state.items.isNotEmpty()) {
-                        TextButton(onClick = viewModel::clear) { Text("Clear") }
-                    }
-                },
-            )
+            if (state.selectionActive) {
+                SelectionBar(
+                    selectedCount = state.selectedIds.size,
+                    onClear = viewModel::clearSelection,
+                    onSelectAll = viewModel::selectAll,
+                    actions = listOf(
+                        SelectionAction(
+                            "Remove from queue",
+                            Icons.Default.Delete,
+                            viewModel::removeSelected,
+                            state.selectedIds.isNotEmpty(),
+                        ),
+                    ),
+                )
+            } else {
+                TopAppBar(
+                    title = { Text("Up next") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        if (state.items.isNotEmpty()) {
+                            IconButton(onClick = viewModel::enterSelection) {
+                                Icon(Icons.Default.Checklist, contentDescription = "Select entries")
+                            }
+                            TextButton(onClick = viewModel::clear) { Text("Clear") }
+                        }
+                    },
+                )
+            }
         },
     ) { padding ->
         if (state.items.isEmpty()) {
@@ -103,6 +128,9 @@ fun QueueScreen(
             onPlay = onPlay,
             onRemove = viewModel::remove,
             onMove = viewModel::move,
+            selectionActive = state.selectionActive,
+            selectedIds = state.selectedIds,
+            onToggleSelection = viewModel::toggleSelection,
         )
     }
 }
@@ -113,14 +141,21 @@ fun QueueScreen(
  * The reordering is done locally while the finger is down and committed once on release,
  * so a drag across five rows is one database write rather than five, and the list cannot
  * fight the drag by re-emitting underneath it.
+ *
+ * In selection mode the drag detector is not installed at all, rather than installed and
+ * ignoring its callbacks: two long-press handlers competing for the same press is how a
+ * list ends up doing neither thing reliably.
  */
 @Composable
 private fun ReorderableQueue(
     items: List<QueueItem>,
-    modifier: Modifier,
+    selectionActive: Boolean,
+    selectedIds: Set<String>,
     onPlay: (String, String?) -> Unit,
     onRemove: (QueueItem) -> Unit,
     onMove: (Int, Int) -> Unit,
+    onToggleSelection: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
 
@@ -137,10 +172,10 @@ private fun ReorderableQueue(
         dragOffset = 0f
     }
 
-    LazyColumn(
-        state = listState,
-        contentPadding = PaddingValues(bottom = 32.dp),
-        modifier = modifier.pointerInput(items) {
+    val dragging = if (selectionActive) {
+        Modifier
+    } else {
+        Modifier.pointerInput(items) {
             detectDragGesturesAfterLongPress(
                 onDragStart = { offset ->
                     val hit = listState.layoutInfo.visibleItemsInfo.firstOrNull {
@@ -178,19 +213,29 @@ private fun ReorderableQueue(
                     reset()
                 },
             )
-        },
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        contentPadding = PaddingValues(bottom = 32.dp),
+        modifier = modifier.then(dragging),
     ) {
-        itemsIndexed(order, key = { _, it -> "${it.libraryItemId}#${it.episodeId.orEmpty()}" }) { index, item ->
+        itemsIndexed(order, key = { _, it -> it.rowKey }) { index, item ->
             val isDragging = index == dragTo
             QueueRowView(
                 item = item,
                 position = index + 1,
-                onPlay = { onPlay(item.libraryItemId, item.episodeId) },
+                onPlay = {
+                    if (selectionActive) onToggleSelection(item.rowKey) else onPlay(item.libraryItemId, item.episodeId)
+                },
                 onRemove = { onRemove(item) },
                 modifier = Modifier
                     .zIndex(if (isDragging) 1f else 0f)
                     .graphicsLayer { translationY = if (isDragging) dragOffset else 0f },
                 isDragging = isDragging,
+                selectionActive = selectionActive,
+                isSelected = item.rowKey in selectedIds,
             )
         }
     }
@@ -204,11 +249,17 @@ private fun QueueRowView(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
     isDragging: Boolean = false,
+    selectionActive: Boolean = false,
+    isSelected: Boolean = false,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         tonalElevation = if (isDragging) 6.dp else 0.dp,
-        color = if (isDragging) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
+        color = when {
+            isDragging -> MaterialTheme.colorScheme.surfaceVariant
+            isSelected -> MaterialTheme.colorScheme.secondaryContainer
+            else -> MaterialTheme.colorScheme.surface
+        },
     ) {
         Row(
             modifier = Modifier
@@ -218,12 +269,18 @@ private fun QueueRowView(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                "$position",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+            // The position gives way to the tick: both are the row's left-hand marker, and
+            // while several rows are being picked out the ordinal is not what is being read.
+            if (selectionActive) {
+                Checkbox(checked = isSelected, onCheckedChange = null)
+            } else {
+                Text(
+                    "$position",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     item.title.ifBlank { "Not in this library any more" },
@@ -255,15 +312,19 @@ private fun QueueRowView(
                     }
                 }
             }
-            IconButton(onClick = onRemove) {
-                Icon(Icons.Default.Close, contentDescription = "Remove from queue")
+            // Both trailing controls are about one row, and neither means anything while
+            // the bar above is acting on several.
+            if (!selectionActive) {
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove from queue")
+                }
+                Icon(
+                    Icons.Default.DragHandle,
+                    contentDescription = "Long-press and drag to reorder",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
             }
-            Icon(
-                Icons.Default.DragHandle,
-                contentDescription = "Long-press and drag to reorder",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 8.dp),
-            )
         }
     }
 }

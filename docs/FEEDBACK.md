@@ -94,64 +94,82 @@ one row at a time.
 
 | Item | Status |
 |---|---|
-| **Multi-select everywhere** — pick several episodes and download them in one go | todo |
-| **Sort and filter everywhere** — find an episode in a podcast with a thousand of them | todo |
-| **A "Home" or "Dashboard" separate from the library itself** | todo |
-| **Library selection does not scope what is shown** — podcasts appear when only audiobooks is selected | todo — cause found, see below |
-| **Let a media type be switched off entirely**, so someone who never listens to podcasts never sees them | todo |
-| **An episode row shows only its title and length** — no date, no season or episode number | todo — the data is already there |
+| **Multi-select everywhere** — pick several episodes and download them in one go | done 15 Aug |
+| **Sort and filter everywhere** — find an episode in a podcast with a thousand of them | done 15 Aug |
+| **A "Home" or "Dashboard" separate from the library itself** | done 15 Aug |
+| **Library selection does not scope what is shown** — podcasts appear when only audiobooks is selected | fixed 15 Aug |
+| **Let a media type be switched off entirely**, so someone who never listens to podcasts never sees them | done 15 Aug |
+| **An episode row shows only its title and length** — no date, no season or episode number | done 15 Aug |
 
-**Multi-select.** Every action in the app is currently one row at a time, which is fine
-for a book and wrong for a podcast: downloading eight episodes means eight round trips
-through the same menu. The obvious answer is a selection mode — long-press to enter it,
-then Download, Add to queue and Remove acting on the set — and the same mode should serve
-the queue screen, so clearing five entries is not five swipes. Worth deciding early that
-selection is a property of a *list*, not of the episode list, or it will be built three
-times.
+**Multi-select.** Every action in the app was one row at a time, which is fine for a book
+and wrong for a podcast: downloading eight episodes meant eight round trips through the
+same menu. There is now a selection mode — long-press to enter it, then Download, Add to
+queue, Play next and Remove download acting on the set — and it is one reducer and one bar
+shared by the episode list, the queue and the downloads screen, rather than three
+implementations that would drift. Selection is a property of a *list*, which is why the
+queue enters it from a menu instead of a long-press: on that screen the long-press already
+means drag, and the two gestures cannot both win.
 
-**What an episode row says.** It shows a title and a duration, and that is all. It should
-carry the **publication date**, and the **season and episode number** where the feed has
-them — episode number alone if season is absent. Two of those are how anyone decides
-which episode to play: a date says whether this is the one from this week, and a number
-says where it sits in a run. Without them, a screen of similar-looking titles is
-guesswork.
+**What an episode row says.** It showed a title and a duration, and that was all. It now
+carries the **publication date** and the **season and episode number** where the feed has
+them — `S2 E14 · 12 Mar · 48m`, with the number dropped when the feed does not number its
+episodes. Those are how anyone decides which episode to play: a date says whether this is
+the one from this week, and a number says where it sits in a run. Without them a screen of
+similar-looking titles is guesswork.
 
-Nothing needs fetching or migrating for this. `season`, `episodeNumber` and
-`publishedAtMs` are already mirrored into Room by the item sync and carried through
-`PodcastEpisode` to the screen; the row simply does not draw them. Worth doing at the
-same time as the sort and filter work below, since both are about making a long episode
-list navigable, and worth carrying to the car's episode list too — where a date is even
-more of the answer.
+Nothing needed fetching or migrating. `season`, `episodeNumber` and `publishedAtMs` were
+already mirrored into Room by the item sync and already reached the screen; the row simply
+did not draw them. Recent dates read as "Today", "Yesterday" and "3 days ago", because for
+a podcast the useful question is almost always *how new is this*.
 
-**Sort and filter.** The episode list has no search, no filter and no sort control, and
-it renders every episode the server has. On a podcast with a thousand episodes that is
-both unusable and slow. The pieces already exist elsewhere: FTS covers episode titles,
-and the plan's filter/sort UI (duration, narrator, year, progress, downloaded) was
-written for the library grid. It should be one control used in both places, plus paging
-on the episode list, because a screen that renders a thousand rows is a scroll nobody
-finishes.
+**Sort and filter.** The episode list had no search, no filter and no sort control. On a
+podcast with a thousand episodes that is unusable. There is now one control — search, an
+ordering, and a five-way filter — shared by the episode list, the library grid and the
+downloads screen, with the ordering and filter remembered between visits because a list
+someone has ordered is a decision, not a mode.
 
-**Home versus library.** The single screen does two jobs. The computed shelves — Continue,
+The sorting and filtering *policy* lives in `:core:model` rather than in each screen. The
+alternative is three implementations that quietly disagree about what "in progress" means,
+which is the sort of inconsistency nobody reports as a bug and everybody notices.
+
+Paging was deliberately not added. A `LazyColumn` already composes only what is on screen,
+so a thousand rows costs a thousand small objects and nothing else; the problem was never
+the rendering, it was that there was no way to narrow the list.
+
+**Home versus library.** The single screen did two jobs. The computed shelves — Continue,
 Next in series, Almost finished — answer "what should I play now"; the grid answers "show
-me everything". Those want to be separate destinations: a Home that is only the shelves,
-and a library that is only the browse, with the media types as their own tabs or as a
-picker rather than as chips sharing a screen with shelves that ignore them.
+me everything". They are now two tabs of one destination: Home is the shelves plus a
+one-tap resume for the most recent thing, and Library is the browse with the picker, the
+search and the sort. Tab state deliberately does not enter the back stack — switching tabs
+is not something anyone wants to press Back through.
 
-**Which is also the bug.** The confusion is not a matter of taste — the screen genuinely
-mixes libraries. The grid is scoped by the selected library (`observeItems(account,
-libraryId)`), but every shelf above it is scoped to the account only
-(`observeShelves(account)`, and each shelf query filters on `serverId`/`userId` and
-nothing else). So selecting the audiobook library filters the grid and leaves podcasts on
-the shelves directly above it, which reads as the filter being broken. Whether shelves
-*should* be per-library is a real question — "continue listening" arguably spans
-everything — but it has to be decided and shown, not left as an accident of two different
-queries.
+The resume affordance is the answer to the most common complaint about every client of
+this server: getting back to what you were listening to took five taps. It now takes one.
 
-**Switching a type off.** If someone has no podcasts, or has them and does not want them
-here, the podcast tab should not exist. A setting, and it should reach everywhere: the
-tabs, the shelves, search results, and the car's browse tree, which currently offers a
-Podcasts node to anyone with a podcast library. The same switch is the honest answer to
-"why am I seeing this" — better to remove it than to explain it.
+**Which was also the bug.** The confusion was not a matter of taste — the screen genuinely
+mixed libraries. The grid was scoped by the selected library (`observeItems(account,
+libraryId)`), but every shelf above it was scoped to the account only, since each shelf
+query filtered on `serverId`/`userId` and nothing else. Selecting the audiobook library
+filtered the grid and left podcasts on the shelves directly above it.
+
+Every shelf query now takes a library id, and the caller has to pass one or explicitly
+pass none. Whether shelves *should* be per-library is a real question — "continue
+listening" arguably spans everything — so it is a setting rather than a decision imposed
+on everyone, and when the shelves are spanning everything the screen says so. The
+selection itself moved into `LibraryPrefs`, because two screens depending on a value one
+of them owns is how they end up disagreeing for a frame.
+
+**Switching a type off.** A media type can now be switched off in Settings → Library. It is
+filtered at `observeLibraries`, which is the single place every surface reads from, so it
+reaches the tabs, the shelves, search and the car's browse tree by construction rather than
+by remembering to do it four times. Nothing is deleted and syncing carries on, so switching
+it back on is instant rather than a resync.
+
+**Podcasts on the continue shelf.** Not reported, but found while fixing the above: a
+podcast never showed progress on Home, because progress is stored per episode and the shelf
+read the item-level row that a podcast does not have. The shelf now falls back to the most
+recently updated episode of that podcast — which is also the episode the resume affordance
+plays, since for a podcast "continue listening" means the episode you were on.
 
 ## Notices (rewound, jumped)
 
@@ -180,25 +198,63 @@ timestamp and decide. Letting it time out keeps the new position, which is what 
 
 | Item | Status |
 |---|---|
-| Tapping a podcast episode opens the player but the button still reads **Play** | todo — reported 15 Aug |
+| Tapping a podcast episode opens the player but the button still reads **Play** | fixed 15 Aug |
 
-Tapping an episode in the list is unambiguous: it means *play this*. The player opens, but
-the transport still shows Play, so the natural next move is to press it — and pressing it
-during the gap either does nothing or pauses the playback that just started. A control that
-invites a press it cannot honour is worse than a slow one.
+Tapping an episode in the list is unambiguous: it means *play this*. The player opened, but
+the transport still showed Play, so the natural next move was to press it — and pressing it
+during the gap either did nothing or paused the playback that had just started. A control
+that invites a press it cannot honour is worse than a slow one.
 
-The fix Tom asked for, in his order of preference:
+Playback was in fact already being started on the tap; the button was the thing that was
+wrong. `PlaybackConnection` now holds a "starting" flag from the moment `play()` is called
+until the player genuinely reports playing, and reports `isPlaying` as true throughout, so
+the transport shows Pause for the whole load.
 
-1. **Actually start playing on the tap.** Preferred, and the honest fix: the button reads
-   Play because nothing is playing yet.
-2. **Failing that, show Pause optimistically** from the moment the tap is handled, and only
-   fall back to Play if the load genuinely fails.
+This is a promise the UI makes on the player's behalf, which means it has to be surrendered
+honestly: the flag is cleared on failure and on any explicit pause, or it becomes a lie
+that leaves a Pause button on a player that is not playing.
 
-The second is a smaller change but it is a promise the UI cannot always keep, so it should
-be the fallback for the part of the delay that cannot be removed, not the whole answer. The
-delay itself is worth measuring before either: resolving an episode goes out to the server
+The remaining delay is still worth measuring. Resolving an episode goes out to the server
 for a play session before the player has anything to hold, and if the episode is already
 downloaded that round trip should not be on the critical path at all.
+
+## Playback stops on its own
+
+Reported 15 Aug: playback stops occasionally, and there is no way to tell whether the app
+crashed or simply stopped.
+
+| Item | Status |
+|---|---|
+| **Playback stops without being asked to** | instrumented 15 Aug — cause not yet known |
+| No way to find out why after the fact | fixed 15 Aug |
+
+The honest position is that we did not know why, and could not have found out. Every cause
+looks identical from the outside: the process being reclaimed by the system, audio focus
+lost to another app, an unsuitable output after a Bluetooth switch, a network stall leaving
+the player idle with nothing retrying, a crash, or the sleep timer doing exactly what it was
+told. Guessing between those and shipping a fix for the wrong one is worse than waiting.
+
+So the first thing built was the record rather than a fix. **Settings → Diagnostics → Why
+playback stopped** is a local, always-on log of starts, stops, errors, suppression reasons,
+the service being created and destroyed, and the app being swiped away. It is written to a
+file, which matters more than it sounds: the case with the least evidence is the process
+being killed, and a file is what survives that. An unexplained gap followed by a fresh
+"process started" line *is* the diagnosis.
+
+Two deliberate choices:
+
+- **It is local and it is not telemetry.** Crash reporting is opt-in and off by default and
+  that is not going to change, so a diagnosis that only worked for people who switched on
+  telemetry would be no diagnosis at all. Nothing leaves the phone unless it is deliberately
+  attached to a report.
+- **It rides along, never alone.** When crash reporting *is* on, the recent entries are
+  attached to an outgoing crash as breadcrumbs, so a report arrives with the history that
+  led to it instead of a stack trace with no context.
+
+Upstream has the same complaint open twice, and both are informative. app#1530 ("randomly
+stops playing") is unresolved, and app#204 ("playback closes when connecting to car
+Bluetooth") has been open since 2022 marked *unable to reproduce* — which is what happens
+when nobody can see what the app was doing at the time.
 
 ## Downloads
 
@@ -206,7 +262,7 @@ downloaded that round trip should not be on the critical path at all.
 |---|---|
 | **Storage cap said "exceeded" immediately, on an 8 GB cap** | fixed 15 Aug — cause confirmed against the live server |
 | **A download showed no progress in the app, only in the notification** | fixed 15 Aug |
-| "Remove finished downloads" reads as *finished downloading*, not *finished listening* | todo — reword |
+| "Remove finished downloads" reads as *finished downloading*, not *finished listening* | fixed 15 Aug |
 
 **The cap refusal is the serious one.** A refusal on a nearly empty 8 GB allowance means
 the arithmetic is wrong, and the wrongness is in the worst possible place: the check that
@@ -245,10 +301,11 @@ polls on its own timer. The engine now polls too, but only while a file is actua
 downloading — a download parked waiting for Wi-Fi costs nothing, and the state change that
 resumes it starts the polling again.
 
-**The auto-delete wording**: "Remove finished downloads" is ambiguous in the one way that
-matters, since *finished* can mean finished downloading — which would read as "delete
-things the moment they arrive". It should say plainly that it means books you have listened
-to the end of, and the choices should say "After a week" rather than "After 7d".
+**The auto-delete wording** was ambiguous in the one way that matters, since *finished* can
+mean finished downloading — which reads as "delete things the moment they arrive". It now
+says "Delete books you have listened to", explains that it applies once you reach the end,
+and offers "After a week" rather than "After 7d". A setting whose worst reading is
+destructive has to be worded for that reading.
 
 ## Earlier findings
 
