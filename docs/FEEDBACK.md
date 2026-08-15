@@ -99,6 +99,7 @@ one row at a time.
 | **A "Home" or "Dashboard" separate from the library itself** | todo |
 | **Library selection does not scope what is shown** — podcasts appear when only audiobooks is selected | todo — cause found, see below |
 | **Let a media type be switched off entirely**, so someone who never listens to podcasts never sees them | todo |
+| **An episode row shows only its title and length** — no date, no season or episode number | todo — the data is already there |
 
 **Multi-select.** Every action in the app is currently one row at a time, which is fine
 for a book and wrong for a podcast: downloading eight episodes means eight round trips
@@ -107,6 +108,20 @@ then Download, Add to queue and Remove acting on the set — and the same mode s
 the queue screen, so clearing five entries is not five swipes. Worth deciding early that
 selection is a property of a *list*, not of the episode list, or it will be built three
 times.
+
+**What an episode row says.** It shows a title and a duration, and that is all. It should
+carry the **publication date**, and the **season and episode number** where the feed has
+them — episode number alone if season is absent. Two of those are how anyone decides
+which episode to play: a date says whether this is the one from this week, and a number
+says where it sits in a run. Without them, a screen of similar-looking titles is
+guesswork.
+
+Nothing needs fetching or migrating for this. `season`, `episodeNumber` and
+`publishedAtMs` are already mirrored into Room by the item sync and carried through
+`PodcastEpisode` to the screen; the row simply does not draw them. Worth doing at the
+same time as the sort and filter work below, since both are about making a long episode
+list navigable, and worth carrying to the car's episode list too — where a date is even
+more of the answer.
 
 **Sort and filter.** The episode list has no search, no filter and no sort control, and
 it renders every episode the server has. On a podcast with a thousand episodes that is
