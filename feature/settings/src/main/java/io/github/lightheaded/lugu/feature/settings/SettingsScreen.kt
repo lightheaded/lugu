@@ -378,6 +378,71 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "auto-download-queue",
+                category = "Downloading ahead",
+                title = "Download what is queued",
+                keywords = "auto download queue ahead offline automatic prefetch",
+            ) {
+                SwitchRow(
+                    title = "Download what is queued",
+                    subtitle = "Anything in Up next is fetched on Wi-Fi, so it is ready when it plays",
+                    checked = downloads.autoDownloadQueue,
+                    onChange = viewModel::setAutoDownloadQueue,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "auto-download-series",
+                category = "Downloading ahead",
+                title = "Keep the next in a series ready",
+                keywords = "auto download series next book ahead offline automatic",
+            ) {
+                ChoiceRow(
+                    title = "Keep the next in a series ready",
+                    subtitle = "Only for series you have already started",
+                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
+                    selected = downloads.autoDownloadNextInSeries,
+                    format = { if (it == 0) "Off" else "$it" },
+                    onSelect = viewModel::setAutoDownloadNextInSeries,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "auto-download-episodes",
+                category = "Downloading ahead",
+                title = "Keep recent episodes ready",
+                keywords = "auto download podcast episodes latest ahead offline automatic",
+            ) {
+                ChoiceRow(
+                    title = "Keep recent episodes ready",
+                    subtitle = "Only for podcasts you are listening to",
+                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
+                    selected = downloads.autoDownloadLatestEpisodes,
+                    format = { if (it == 0) "Off" else "$it" },
+                    onSelect = viewModel::setAutoDownloadLatestEpisodes,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "notify-new-episodes",
+                category = "Downloading ahead",
+                title = "Tell me about new episodes",
+                keywords = "notification podcast new episode alert notify",
+            ) {
+                SwitchRow(
+                    title = "Tell me about new episodes",
+                    subtitle = "One quiet notification for the batch, for podcasts you are listening to",
+                    checked = downloads.notifyNewEpisodes,
+                    onChange = viewModel::setNotifyNewEpisodes,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "queue-continue-series",
                 category = "Up next",
                 title = "Carry on with a series",

@@ -31,7 +31,18 @@ data class DownloadSettings(
     val storageCapBytes: Long = DEFAULT_CAP_BYTES,
     /** Days after finishing a book before its download is reclaimed; 0 means never. */
     val autoDeleteFinishedAfterDays: Int = 0,
+    /** Download whatever is in the queue, so what plays next is already on the phone. */
+    val autoDownloadQueue: Boolean = false,
+    /** How many unstarted volumes of an in-progress series to keep ready; 0 means none. */
+    val autoDownloadNextInSeries: Int = 0,
+    /** How many recent episodes of a podcast being listened to to keep ready; 0 means none. */
+    val autoDownloadLatestEpisodes: Int = 0,
+    /** Say when a podcast being listened to has published something. */
+    val notifyNewEpisodes: Boolean = false,
 ) {
+    val hasAutoDownloadRule: Boolean
+        get() = autoDownloadQueue || autoDownloadNextInSeries > 0 || autoDownloadLatestEpisodes > 0
+
     companion object {
         const val DEFAULT_CAP_BYTES = 8L * 1024 * 1024 * 1024
 
@@ -45,6 +56,9 @@ data class DownloadSettings(
         )
 
         val AUTO_DELETE_CHOICES_DAYS = listOf(0, 1, 7, 30)
+
+        /** Small numbers on purpose: a rule that fills the cap is a rule that stops working. */
+        val AUTO_DOWNLOAD_COUNT_CHOICES = listOf(0, 1, 2, 3, 5)
     }
 }
 
@@ -74,20 +88,45 @@ class DownloadPrefs @Inject constructor(
         store.edit { it[AUTO_DELETE_DAYS] = days.coerceIn(0, 365) }
     }
 
+    suspend fun setAutoDownloadQueue(enabled: Boolean) {
+        store.edit { it[AUTO_DOWNLOAD_QUEUE] = enabled }
+    }
+
+    suspend fun setAutoDownloadNextInSeries(count: Int) {
+        store.edit { it[AUTO_DOWNLOAD_SERIES] = count.coerceIn(0, MAX_AUTO_DOWNLOAD) }
+    }
+
+    suspend fun setAutoDownloadLatestEpisodes(count: Int) {
+        store.edit { it[AUTO_DOWNLOAD_EPISODES] = count.coerceIn(0, MAX_AUTO_DOWNLOAD) }
+    }
+
+    suspend fun setNotifyNewEpisodes(enabled: Boolean) {
+        store.edit { it[NOTIFY_NEW_EPISODES] = enabled }
+    }
+
     private fun Preferences.toSettings() = DownloadSettings(
         wifiOnly = this[WIFI_ONLY] ?: DEFAULTS.wifiOnly,
         requiresCharging = this[REQUIRES_CHARGING] ?: DEFAULTS.requiresCharging,
         storageCapBytes = this[STORAGE_CAP] ?: DEFAULTS.storageCapBytes,
         autoDeleteFinishedAfterDays = this[AUTO_DELETE_DAYS] ?: DEFAULTS.autoDeleteFinishedAfterDays,
+        autoDownloadQueue = this[AUTO_DOWNLOAD_QUEUE] ?: DEFAULTS.autoDownloadQueue,
+        autoDownloadNextInSeries = this[AUTO_DOWNLOAD_SERIES] ?: DEFAULTS.autoDownloadNextInSeries,
+        autoDownloadLatestEpisodes = this[AUTO_DOWNLOAD_EPISODES] ?: DEFAULTS.autoDownloadLatestEpisodes,
+        notifyNewEpisodes = this[NOTIFY_NEW_EPISODES] ?: DEFAULTS.notifyNewEpisodes,
     )
 
     private companion object {
         val DEFAULTS = DownloadSettings()
         const val MIN_CAP_BYTES = 512L * 1024 * 1024
+        const val MAX_AUTO_DOWNLOAD = 10
 
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val REQUIRES_CHARGING = booleanPreferencesKey("requires_charging")
         val STORAGE_CAP = longPreferencesKey("storage_cap_bytes")
         val AUTO_DELETE_DAYS = intPreferencesKey("auto_delete_finished_days")
+        val AUTO_DOWNLOAD_QUEUE = booleanPreferencesKey("auto_download_queue")
+        val AUTO_DOWNLOAD_SERIES = intPreferencesKey("auto_download_next_in_series")
+        val AUTO_DOWNLOAD_EPISODES = intPreferencesKey("auto_download_latest_episodes")
+        val NOTIFY_NEW_EPISODES = booleanPreferencesKey("notify_new_episodes")
     }
 }

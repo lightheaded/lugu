@@ -15,6 +15,7 @@ import io.github.lightheaded.lugu.core.download.DownloadEngine
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
+import io.github.lightheaded.lugu.core.download.DownloadScheduler
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,11 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
         crashReporting.applyConsent(crashReportingPrefs.isEnabled())
 
         SyncScheduler.schedulePeriodic(this)
+
+        // Podcast refreshes and the auto-download rules. Scheduled unconditionally: the
+        // worker returns immediately when nothing is switched on, which is cheaper than
+        // watching the settings to decide whether it should exist.
+        DownloadScheduler.schedulePeriodic(this)
 
         // Downloads outlive the app: a book can finish, fail or be cancelled by the
         // system while this process is dead. Without reconciling on start, the UI would
