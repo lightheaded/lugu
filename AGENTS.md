@@ -36,6 +36,36 @@ to code, docs, tests, comments, commit messages and issue text alike.
   something sensitive does get committed, it must be scrubbed from history — not
   just from HEAD — before the next push.
 
+## Sentry — how to look at crashes
+
+Crash reports go to Sentry. **`scripts/sentry.sh` is the way to read them**, in any
+harness and in an unattended run:
+
+```
+scripts/sentry.sh issues            # unresolved, last 14 days
+scripts/sentry.sh latest <issueId>  # newest event: exception and stack frames
+scripts/sentry.sh resolve <issueId>
+```
+
+It decrypts its token from `secrets.enc.yaml`, so it needs the age key present and
+nothing else — no interactive login, no keychain prompt. `.mcp.json` also registers
+Sentry's hosted MCP server for harnesses that speak MCP; that path is a convenience
+and needs a one-time browser OAuth, so it is not available to an unattended agent.
+Prefer the script when in doubt.
+
+Two things to keep true:
+
+- **The Sentry organization holds this project and nothing else.** No token can be
+  restricted to a single project — organization tokens reach every project in the
+  org — so the org boundary *is* the access boundary. Adding an unrelated project
+  there silently widens what every agent token can read.
+- `sentry_agent_token` is a real credential, unlike the DSN beside it, and it is
+  **broadly scoped** — treat it as full access to the Sentry account, not read-only.
+  An encrypted copy sits in a public repository, so its safety rests entirely on the
+  age key: if that key is ever exposed, **rotate the token in Sentry**, do not merely
+  re-encrypt. Prefer the read-only commands; nothing here should delete a project or
+  change account settings just because the token permits it.
+
 ## Legal and licensing — keep it compliant
 
 - The project is **GPL-3.0-or-later**, copyright **lightheaded**. Keep the
