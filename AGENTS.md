@@ -24,6 +24,14 @@ to code, docs, tests, comments, commit messages and issue text alike.
   Describe network faults generically: "a misconfiguration on the network path".
 - **Identity**: the first name "Tom" is fine in docs. Full name, employer, personal
   email addresses, home directory paths and device identifiers are not.
+- **Build secrets go in `secrets.enc.yaml`, encrypted with SOPS** (`.sops.yaml` holds
+  the rule). Edit with `sops secrets.enc.yaml`; never write a decrypted copy into the
+  working tree. The age key is dedicated to this repo and used for nothing else — a
+  shared key would tie this repo to whatever else it encrypts. CI reads the decrypted
+  values from repository secrets, so a rotation has to be applied in both places.
+  A value that reaches the APK (the Sentry DSN does) is recoverable by anyone with a
+  build: encrypting it keeps the account id out of the source, and is not a substitute
+  for a rate limit on the service side.
 - The pre-commit hooks (gitleaks, pii-guard) are a backstop, not the defence. If
   something sensitive does get committed, it must be scrubbed from history — not
   just from HEAD — before the next push.

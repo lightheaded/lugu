@@ -8,3 +8,8 @@ sdk.dir=/path/to/Android/sdk
 lugu.dev.serverUrl=https://your-server.example
 lugu.dev.user=you
 lugu.dev.pass=
+
+# Optional: Sentry ingest key for a local release build. CI injects this instead.
+# Maintainer copy: `sops -d secrets.enc.yaml`. Leave empty and crash reporting
+# simply cannot start — which is the right default for a fork or a contributor.
+lugu.sentry.dsn=

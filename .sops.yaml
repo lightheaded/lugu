@@ -1,0 +1,19 @@
+# SOPS rules for this repo.
+#
+# One dedicated age key, used for nothing else. Deliberately NOT a key shared with
+# any other project: this file is public, so its recipient list is public too, and a
+# key reused elsewhere would tie this repo to whatever else it encrypts.
+#
+# Private key: only in the maintainer's ~/.config/sops/age/keys.txt. Back it up —
+# losing it means regenerating the key, re-encrypting every value here, and rotating
+# whatever could not be recovered.
+#
+# CI does not decrypt this file. It reads the same values from repository secrets, so
+# the release job needs no sops binary and no decryption key. The cost is two copies:
+# rotate a value here AND in the repository secret, or builds will disagree with git.
+#
+# Edit with:  sops secrets.enc.yaml
+# Read with:  sops -d secrets.enc.yaml
+creation_rules:
+  - path_regex: secrets\.enc\.yaml$
+    age: age16qmepte7rxzwlw9xjzs4zqtcrlm4f33luf5392u0lgu03rg4ycqs0jtxav
