@@ -1,5 +1,6 @@
 package io.github.lightheaded.lugu.feature.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,11 +57,12 @@ import io.github.lightheaded.lugu.core.sync.TransportButton
 fun SettingsScreen(
     onBack: () -> Unit,
     onSignedOut: () -> Unit,
+    onOpenLicenses: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val entries = settingEntries(state, viewModel, onSignedOut)
+    val entries = settingEntries(state, viewModel, onSignedOut, onOpenLicenses)
     val visible = SettingsIndex.filter(entries, state.query)
 
     Scaffold(
@@ -128,6 +130,7 @@ private fun settingEntries(
     state: SettingsUiState,
     viewModel: SettingsViewModel,
     onSignedOut: () -> Unit,
+    onOpenLicenses: () -> Unit,
 ): List<SettingEntry> {
     val settings = state.settings
     val downloads = state.downloads
@@ -397,6 +400,29 @@ private fun settingEntries(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 ) {
                     Text("Sign out", color = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "licenses",
+                category = "About",
+                title = "Open source licenses",
+                keywords = "about legal attribution credits notices libraries oss apache gpl",
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenLicenses)
+                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                ) {
+                    Text("Open source licenses", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "The libraries lugu is built on, and their licenses",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             },
         )
