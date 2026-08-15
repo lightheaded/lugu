@@ -234,6 +234,33 @@ about a third of the series entries here, and the alternative is a spoiler.
   were built and unit-tested but not driven on a real device against a real book; that
   and the M0 QA checklist remain the largest untested surface. See [BACKLOG.md](BACKLOG.md).
 
+### The notification jumped ten minutes — found in user testing, fixed
+
+Reported while M2 was being committed. The notification's side buttons were remapped to
+chapter navigation *unconditionally*, and a book with no real chapters is given synthetic
+ten-minute chapters — so one tap moved ten minutes. On a multi-file book the step was a
+whole file instead. Either way the control someone reaches for to catch a missed sentence
+was throwing them minutes out of place.
+
+They now skip by the configured seconds unless chapter buttons were explicitly asked for.
+The in-app chapter buttons are unaffected: they go through `PlaybackConnection`, not
+through the system transport, so an explicit chapter button still navigates chapters.
+
+The earlier design tried to control this by *withdrawing* the previous/next commands when
+chapter buttons were not wanted, expecting the system to offer seek buttons instead. It
+does not — Media3's default notification builds its layout from previous / play-pause /
+next and has no seek button to fall back to, so withdrawing those commands removes the
+buttons rather than changing them. And available commands are read when a controller
+connects, with nothing here firing a change when a setting moves, so the withdrawal was
+not reliably seen at all. Keeping the commands advertised and switching what they *do* is
+deterministic and needs no cooperation from the notification provider.
+
+`ChapterAwarePlayer` now has the tests it should have had. It is the class that stands
+between the notification and someone's place in a book, and it has now caused two
+separate user-visible faults — a rewind that reset a forty-hour book to zero, and this.
+Both were behaviours no type checker could object to. Eight tests, including one that
+reproduces this bug exactly and one that pins the original data loss.
+
 ### Next
 
 1. Daily-drive M2: download a long book, go offline, confirm it plays and that the
