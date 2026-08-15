@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -51,6 +52,7 @@ import coil3.compose.AsyncImage
 fun LibraryScreen(
     onOpenItem: (String) -> Unit,
     onOpenSettings: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier,
     bottomContent: @Composable () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
@@ -63,6 +65,9 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("lugu") },
                 actions = {
+                    IconButton(onClick = onOpenDownloads) {
+                        Icon(Icons.Default.Download, contentDescription = "Downloads")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -99,7 +104,7 @@ fun LibraryScreen(
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChange,
-                label = { Text("Search this library") },
+                label = { Text("Search title, author, narrator, series") },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -137,10 +142,18 @@ fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (state.query.isBlank() && state.continueListening.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        ContinueListeningRow(
-                            rows = state.continueListening,
+                // Shelves are computed from the local database, so they are here on a
+                // cold start with no network — including "Downloaded", which is the one
+                // that has to be right when there is no network at all.
+                if (state.query.isBlank()) {
+                    items(
+                        items = state.shelves,
+                        key = { "shelf-${it.kind.name}" },
+                        span = { GridItemSpan(maxLineSpan) },
+                    ) { shelf ->
+                        ShelfRowView(
+                            title = shelf.kind.label,
+                            rows = shelf.rows,
                             coverUrlFor = { viewModel.coverUrl(it) },
                             onOpenItem = onOpenItem,
                         )
@@ -211,7 +224,8 @@ internal fun ItemCard(
 }
 
 @Composable
-internal fun ContinueListeningRow(
+internal fun ShelfRowView(
+    title: String,
     rows: List<LibraryRow>,
     coverUrlFor: (String) -> String?,
     onOpenItem: (String) -> Unit,
@@ -220,7 +234,7 @@ internal fun ContinueListeningRow(
     if (rows.isEmpty()) return
     Column(modifier = modifier) {
         Text(
-            "Continue listening",
+            title,
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )

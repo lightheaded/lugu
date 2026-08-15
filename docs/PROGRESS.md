@@ -68,7 +68,7 @@ bug**, because the UI keys lists by id. The repository now dedupes on the way ou
 Tom installed 0.1.0 and could not sign in. The server turned out to be fine; the
 diagnosis and the two defects it exposed are worth recording.
 
-- **Not our bug, but our fault how it read.** `the internal host` had a DNS misconfiguration
+- **Not our bug, but our fault how it read.** The dev server had a DNS misconfiguration
   while the proxy configuration only listed the internal entrypoints, so the public
   proxy answered every path with a plain `404 page not found`. lugu printed that body
   on the sign-in screen. Two fixes: sign-in now probes `/status` first so a wrong
@@ -141,10 +141,103 @@ whitespace and a textual comparison fails on formatting while passing real fault
 Still outstanding for M1 and everywhere else: see [BACKLOG.md](BACKLOG.md), which
 collects every deliberately-unfinished item with the reason it was left.
 
+## 2026-08-15 — M2: offline-first
+
+Phase 4 of [EXECUTION-PLAN.md](EXECUTION-PLAN.md). Downloads, offline playback,
+full-text search and computed shelves.
+
+### The live API capture, run at last
+
+Credentials arrived mid-session, so the authenticated capture — open since M0, and the
+last **UNVERIFIED** marker on the payload shapes — finally ran against the real 2.36.0
+server. It immediately contradicted two assumptions the download code had already been
+written on:
+
+1. **`media.tracks`, not `media.audioFiles`, is the playable timeline.** The server has
+   already computed `startOffset` on `tracks` and has already dropped files flagged
+   `exclude`. Building a manifest from `audioFiles` meant re-deriving offsets by hand
+   *and* risking a file the server refuses to play spliced into the middle of a book —
+   which would have surfaced as a stretch of wrong audio partway through, with every
+   later offset shifted. Fixed before it shipped.
+2. **`metadata.series` is empty; the only series information is a string.** Series
+   membership arrives as `"Example Series #10"` and nothing else. Measured
+   over the real library: about a third have a series name and about two-thirds of those carry a parseable number.
+
+Both are written up in [research/05-api-live-notes.md](research/05-api-live-notes.md).
+The capture script also had to be fixed first — it was redacting `contentUrl`, the single
+shape it most needed to confirm — and now closes the session it opens, because it runs
+against a real account and an abandoned session shows up as a book someone never played.
+
+### Downloads
+
+- **`:core:download`**, built on Media3's `DownloadService` and a `SimpleCache`. The hard
+  parts — resuming a part-finished file after process death, honouring network and
+  charging requirements, restarting after reboot — are already solved there, and a
+  two-gigabyte book that restarts because the phone slept is the failure that matters.
+- **The evictor is a no-op, deliberately.** An LRU evictor would silently delete a book
+  someone downloaded on purpose to make room for one they merely streamed. Space is
+  bounded by refusing new downloads over the cap instead, which is visible and
+  actionable. Playback reads the cache **read-only**, so streaming never half-fills it
+  with fragments that count against the cap and look like a download.
+- **A downloaded item never opens a play session at all.** The manifest written at
+  download time carries the URLs, offsets and cache keys, so playback resolves entirely
+  from Room. That is what makes airplane mode work, and it also makes pressing play on a
+  downloaded book instant rather than a round trip that could only return URLs already
+  held. Offline listening lands in the ledger as a local session and replays through
+  `/api/session/local-all` on reconnect.
+- **Cached bytes are keyed by item and track, not by URL**, so moving a server to a new
+  address does not orphan every download on the phone.
+
+### Search and shelves
+
+- **FTS4 index** over title, subtitle, author, narrator, series and description, written
+  wherever items are written. Not an external-content table: Room does not generate the
+  triggers that would keep one in sync, and a stale index returns yesterday's library.
+- The query sanitiser is the load-bearing part. `MATCH` is a query *language*, and the
+  search box runs on every keystroke — so half-typed input is the normal case, not the
+  edge case. Anything unexpressible falls back to a substring scan rather than throwing.
+- **Six computed shelves**, all local SQL, all working with no network: Continue,
+  Next in series, Almost finished, Downloaded, Pick it back up, Short listens.
+
+### A design error the tests caught
+
+"Next in series" grouped items by `seriesName` — which is `"Riverton #2"`, *including the
+number*, so two books in one series never compared equal and the shelf was always empty.
+The fix is a separate `seriesTitle` column alongside `seriesSequence`: one identifies
+the series, the other orders it. Ordering by the name string would have been worse than
+empty — this library contains "Example Series #19", "#21" and "#29", and text ordering puts
+"#10" before "#2", so the shelf would have confidently recommended the wrong volume.
+
+Items whose sequence will not parse are **left out rather than guessed at**. That is
+about a third of the series entries here, and the alternative is a spoiler.
+
+### Also
+
+- **Searchable settings** (Tom's feedback). Each setting is declared as an entry with its
+  own synonyms, so adding one makes it findable automatically — an index maintained
+  separately from the UI goes stale the first time someone forgets, and a search that
+  silently omits a setting is worse than no search. Searching "data" or "mobile" finds
+  Wi-Fi-only; "rewind" finds skip-back; "2x" finds speed.
+- Downloads settings: Wi-Fi only, only while charging, storage cap, and an opt-in
+  reclaim of finished downloads that is off by default and deletes files only, never
+  progress or history.
+- Schema v3, additive, with the FTS index backfilled in the migration so search works on
+  the train rather than after the next sync. Both non-idempotent statements (ALTER TABLE,
+  and an FTS insert with no unique constraint to conflict on) are guarded by hand and
+  tested by running the migration twice.
+
+### Not done in this phase
+
+- **Auto-download rules** (next N in a series, latest N podcast episodes) — the manual
+  path and its storage accounting needed to be right first.
+- **Nothing here has run on hardware yet.** Downloads, offline playback and the cache
+  were built and unit-tested but not driven on a real device against a real book; that
+  and the M0 QA checklist remain the largest untested surface. See [BACKLOG.md](BACKLOG.md).
+
 ### Next
 
-1. Run the M0 QA checklist ([qa/m0.md](qa/m0.md)) against the live server — especially
-   process death, reboot resumption, and the two-device conflict case.
-2. Record real API captures in `docs/research/05-api-live-notes.md`.
-3. Socket.IO delta updates (M0 task 4 is currently poll-and-sweep only).
-4. Then M1: chapters UI, smart rewind, AVRCP debounce, sleep timer, per-book speed.
+1. Daily-drive M2: download a long book, go offline, confirm it plays and that the
+   session replays on reconnect.
+2. Run the M0 QA checklist ([qa/m0.md](qa/m0.md)) — process death and reboot resumption
+   are still the promises never exercised on hardware.
+3. Auto-download rules, then Socket.IO delta updates.

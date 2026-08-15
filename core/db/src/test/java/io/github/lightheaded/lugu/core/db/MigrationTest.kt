@@ -7,8 +7,10 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
+import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -71,6 +73,32 @@ class MigrationTest {
     private fun normalise(sql: String?): String =
         sql.orEmpty().replace(Regex("\\s+"), " ").replace("IF NOT EXISTS ", "").trim()
 
+    /**
+     * Rebuilds a database at an older version from the schema Room exported at the time.
+     *
+     * The exported JSON is the only honest record of what is actually on a user's phone;
+     * hand-writing the old DDL in the test would just be a second guess that can drift
+     * from the first.
+     */
+    private fun databaseAtVersion(version: Int): SupportSQLiteDatabase {
+        val file = File("schemas/io.github.lightheaded.lugu.core.db.LuguDatabase/$version.json")
+        check(file.exists()) { "No exported schema for version $version at ${file.absolutePath}" }
+
+        val entities = JSONObject(file.readText()).getJSONObject("database").getJSONArray("entities")
+        val db = blankDatabase()
+        for (i in 0 until entities.length()) {
+            val entity = entities.getJSONObject(i)
+            val table = entity.getString("tableName")
+            db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+
+            val indices = entity.optJSONArray("indices") ?: continue
+            for (j in 0 until indices.length()) {
+                db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+            }
+        }
+        return db
+    }
+
     private fun blankDatabase(): SupportSQLiteDatabase {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val callback = object : SupportSQLiteOpenHelper.Callback(1) {
@@ -119,6 +147,96 @@ class MigrationTest {
         // Re-running must not throw; a half-applied upgrade retried should converge.
         LuguDatabase.MIGRATION_1_2.migrate(db)
         assertThat(schemaOf(db, "position_history")).isNotNull()
+        db.close()
+    }
+
+    @Test
+    fun `migration 2 to 3 matches the schema Room generates`() {
+        val migrated = databaseAtVersion(2)
+        LuguDatabase.MIGRATION_2_3.migrate(migrated)
+
+        val tables = listOf("download", "library_item_fts", "library_item")
+        val migratedColumns = tables.associateWith { columnsOf(migrated, it) }
+        val migratedIndexes = indexesOf(migrated, "download").sorted()
+        val migratedIndexColumns = migratedIndexes.associateWith { indexedColumnsOf(migrated, it) }
+        // FTS4 declares itself; the virtual-table statement has to agree exactly or Room
+        // rejects the database on open, and PRAGMA table_info cannot show that.
+        val migratedFtsSql = normalise(schemaOf(migrated, "library_item_fts"))
+        migrated.close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        room.openHelper.writableDatabase.let { db ->
+            tables.forEach { table ->
+                assertThat(migratedColumns[table]).isEqualTo(columnsOf(db, table))
+            }
+            assertThat(migratedIndexes).isEqualTo(indexesOf(db, "download").sorted())
+            migratedIndexes.forEach { index ->
+                assertThat(migratedIndexColumns[index]).isEqualTo(indexedColumnsOf(db, index))
+            }
+            assertThat(migratedFtsSql).isEqualTo(normalise(schemaOf(db, "library_item_fts")))
+        }
+        room.close()
+    }
+
+    /**
+     * The point of backfilling in the migration rather than waiting for a resync: someone
+     * who upgrades on a train can still search their library.
+     */
+    @Test
+    fun `migration 2 to 3 indexes the library that is already mirrored`() {
+        val db = databaseAtVersion(2)
+        db.execSQL(
+            """
+            INSERT INTO library_item (serverId, userId, id, libraryId, mediaType, title, subtitle,
+                authorName, narratorName, seriesName, description, durationSec, sizeBytes,
+                numEpisodes, addedAtMs, updatedAtMs, coverPath, rawJson, syncedAtMs)
+            VALUES ('s', 'u', 'li_1', 'lib_1', 'BOOK', 'Lighthouse Wakes', NULL,
+                'James T. R. Corven', 'Jefferson Vale', 'The Breakwater #1', NULL, 100.0, 0,
+                0, 0, 0, NULL, NULL, 0)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_2_3.migrate(db)
+
+        val hits = db.query(
+            "SELECT itemId FROM library_item_fts WHERE library_item_fts MATCH 'corven'",
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        assertThat(hits).containsExactly("li_1")
+        db.close()
+    }
+
+    @Test
+    fun `migration 2 to 3 is safe to run twice`() {
+        val db = databaseAtVersion(2)
+        db.execSQL(
+            """
+            INSERT INTO library_item (serverId, userId, id, libraryId, mediaType, title, subtitle,
+                authorName, narratorName, seriesName, description, durationSec, sizeBytes,
+                numEpisodes, addedAtMs, updatedAtMs, coverPath, rawJson, syncedAtMs)
+            VALUES ('s', 'u', 'li_1', 'lib_1', 'BOOK', 'Lighthouse Wakes', NULL, 'Corven', NULL,
+                NULL, NULL, 100.0, 0, 0, 0, 0, NULL, NULL, 0)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_2_3.migrate(db)
+        // ALTER TABLE ADD COLUMN has no IF NOT EXISTS form and an FTS4 table has no
+        // unique constraint, so both are guarded by hand. Re-running has to converge,
+        // not throw and not silently double the search index.
+        LuguDatabase.MIGRATION_2_3.migrate(db)
+
+        assertThat(columnsOf(db, "library_item").filter { it.startsWith("seriesSequence:") }).hasSize(1)
+        assertThat(schemaOf(db, "download")).isNotNull()
+
+        val indexed = db.query("SELECT COUNT(*) FROM library_item_fts").use {
+            it.moveToFirst()
+            it.getInt(0)
+        }
+        assertThat(indexed).isEqualTo(1)
         db.close()
     }
 

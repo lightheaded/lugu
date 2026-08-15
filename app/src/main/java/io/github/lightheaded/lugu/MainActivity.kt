@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.lightheaded.lugu.feature.library.DownloadsScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
 import io.github.lightheaded.lugu.feature.library.LibraryScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
@@ -44,6 +45,7 @@ private object Routes {
     const val ITEM = "item/{itemId}"
     const val PLAYER = "player"
     const val SETTINGS = "settings"
+    const val DOWNLOADS = "downloads"
 
     fun item(itemId: String) = "item/$itemId"
 }
@@ -79,7 +81,15 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
             LibraryScreen(
                 onOpenItem = { navController.navigate(Routes.item(it)) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                 bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
+            )
+        }
+
+        composable(Routes.DOWNLOADS) {
+            DownloadsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenItem = { navController.navigate(Routes.item(it)) },
             )
         }
 

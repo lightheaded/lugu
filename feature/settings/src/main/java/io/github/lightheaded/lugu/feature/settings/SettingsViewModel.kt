@@ -5,31 +5,56 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.DownloadPrefs
+import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class SettingsUiState(
     val settings: PlayerSettings = PlayerSettings(),
+    val downloads: DownloadSettings = DownloadSettings(),
     val account: ActiveAccount? = null,
+    val query: String = "",
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val prefs: PlaybackPrefs,
+    private val downloadPrefs: DownloadPrefs,
     private val authRepository: AuthRepository,
 ) : ViewModel() {
 
-    val state: StateFlow<SettingsUiState> =
-        combine(prefs.settings, authRepository.observeAccount()) { settings, account ->
-            SettingsUiState(settings, account)
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+    private val query = MutableStateFlow("")
+
+    val state: StateFlow<SettingsUiState> = combine(
+        prefs.settings,
+        downloadPrefs.settings,
+        authRepository.observeAccount(),
+        query,
+    ) { settings, downloads, account, text ->
+        SettingsUiState(settings, downloads, account, text)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+
+    fun onQueryChange(value: String) = query.update { value }
+
+    fun setWifiOnly(enabled: Boolean) = viewModelScope.launch { downloadPrefs.setWifiOnly(enabled) }
+
+    fun setRequiresCharging(enabled: Boolean) =
+        viewModelScope.launch { downloadPrefs.setRequiresCharging(enabled) }
+
+    fun setStorageCap(bytes: Long) = viewModelScope.launch { downloadPrefs.setStorageCapBytes(bytes) }
+
+    fun setAutoDeleteFinishedAfterDays(days: Int) =
+        viewModelScope.launch { downloadPrefs.setAutoDeleteFinishedAfterDays(days) }
 
     fun setSkipBack(seconds: Int) = viewModelScope.launch { prefs.setSkipBack(seconds) }
 

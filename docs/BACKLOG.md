@@ -15,10 +15,9 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 
 | Item | Why not yet |
 |---|---|
-| **Searchable settings** | Categories exist and are the ordering search will index; search needs a flattened index of setting titles, subtitles and synonyms, plus a query UI |
 | **Configurable headphone/headset buttons** | The classification logic exists (`MediaButtonClassifier`) but is not surfaced as choices. Needs a mapping of button gesture → action, and the classifier reading it |
 | **Notification button *ordering*** | Only *visibility* is configurable today. Explicit ordering needs Media3 custom layouts (`CommandButton` + `setCustomLayout` + `onCustomCommand`), which is a chunkier change than advertising commands |
-| **Author / series / narrator links** | Those pages do not exist. Linking to a dead end would be worse than not linking. Belongs with M2 discoverability |
+| **Author / series / narrator links** | Those pages still do not exist, and linking to a dead end is worse than not linking. M2 got halfway: `seriesTitle` and `seriesSequence` are parsed and stored, so a series page now has something to render. Author and narrator have no equivalent yet |
 
 ## Player and playback — M1 remainder
 
@@ -38,16 +37,27 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | Item | Note |
 |---|---|
 | **Socket.IO delta updates** | The mirror is poll-and-sweep only. Edits and deletions made elsewhere take until the next sync to appear. Was M0 task 4 |
-| **Authenticated live API capture** | `scripts/capture-api.sh` exists and redacts properly, but has never been run — it needs credentials in `local.properties`. Payload shapes remain source-verified rather than capture-verified (see `research/05-api-live-notes.md`) |
 | **Process-death and reboot resumption never verified on hardware** | This is M0's central promise and the one path never exercised on a real device: kill the app mid-book, then press play on a headset |
 | **M0 QA checklist never run** | [qa/m0.md](qa/m0.md) is written but unexecuted |
+
+## M2 gaps
+
+| Item | Note |
+|---|---|
+| **Nothing in M2 has run on hardware** | Downloads, the cache and offline playback are unit-tested but have never moved a real byte of a real book. Until that happens, "a week in airplane mode loses nothing" is a claim, not a result. This is the single largest untested surface in the project |
+| **Auto-download rules** | Queue contents, next N in a series, latest N podcast episodes. The manual path and its storage accounting had to be right first, and the series data M2 added is what these rules will read |
+| **Transcoded (HLS) downloads** | A download assumes direct play — one file per track. An item the server will only transcode has no stable file URL to cache, so it cannot be downloaded at all yet, and nothing says so in the UI |
+| **Storage cap is checked, not enforced mid-download** | The estimate is charged against the cap before a download starts. A book much larger than its reported size can still overshoot; nothing aborts a download in flight |
+| **Cache and Room can drift** | The cache is the truth about bytes and Room is the truth about state. `reconcile()` on start repairs the common case, but bytes evicted by the system outside the app would leave a row claiming "completed" |
+| **No download progress in a notification per item** | One foreground notification covers all downloads. Fine for a few, vague for a queue of ten |
 
 ## Known behaviour gaps
 
 | Item | Note |
 |---|---|
 | Podcasts show no progress bar on the continue-listening shelf | Progress is per-episode; the shelf reads item-level progress and finds none. Cosmetic, but it makes the shelf look broken for podcasts |
-| Losing connectivity mid-book stalls playback | No offline fallback until M2 downloads land |
+| Losing connectivity mid-book stalls playback unless the book is downloaded | A downloaded book plays offline; a streamed one still stops when the connection does. Resuming a stream gracefully after a dropout is its own piece of work |
+| Series shelves ignore a third of the library's series | Roughly a third of series entries have no parseable `#N`, so they are excluded from "Next in series" by design. Reading `GET /api/libraries/:id/series` would recover the real ordering for them |
 
 ## Architecture and tech debt
 
@@ -69,3 +79,5 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | No screenshot tests | Roborazzi was planned from M1 |
 | `ChapterAwarePlayer` untested | The class that stops the notification destroying a position has no test. It needs a fake `Player` to drive `seekToPrevious()` and assert it never lands at zero — worth doing given what it prevents |
 | Sleep timer service integration untested | The arithmetic is well covered; the wiring that pauses and restores volume is not |
+| `DownloadEngine` aggregation untested | The fold from per-file Media3 events to one item row — including the duration-weighted percentage used before file sizes are known — has no test. It needs a fake `DownloadIndex` |
+| The offline resolution path is untested end to end | `ManifestBuilder` and the shelf and search queries are covered; `MediaResolver.resolveFromDownload` is not, because it needs the repository, the ledger and Room together |

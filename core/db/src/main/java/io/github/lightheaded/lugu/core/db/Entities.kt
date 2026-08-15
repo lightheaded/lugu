@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.core.db
 
 import androidx.room.Entity
+import androidx.room.Fts4
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -60,7 +61,24 @@ data class LibraryItemEntity(
     val subtitle: String?,
     val authorName: String?,
     val narratorName: String?,
+    /** As the server sends it, sequence and all: "The Breakwater #2". */
     val seriesName: String?,
+    /**
+     * The series name with its number removed ("The Breakwater #2" → "The Breakwater").
+     *
+     * Two books in one series have *different* `seriesName` values, because the number is
+     * part of the string — so grouping a series by `seriesName` groups nothing. This is
+     * the column that identifies a series.
+     */
+    val seriesTitle: String?,
+    /**
+     * The number parsed out of `seriesName` ("The Breakwater #2" → 2.0).
+     *
+     * Kept as its own column because the only alternative is ordering a series by its
+     * name, and lexicographic ordering puts "#10" before "#2" — which would make
+     * "next in series" confidently recommend the wrong book.
+     */
+    val seriesSequence: Double?,
     val description: String?,
     val durationSec: Double,
     val sizeBytes: Long,
@@ -209,6 +227,73 @@ data class QueueEntity(
     val addedAtMs: Long,
     /** Distinguishes a user-added entry from one an auto-continuation rule appended. */
     val source: String,
+)
+
+/**
+ * One downloaded item (or podcast episode), and everything needed to play it with the
+ * network switched off.
+ *
+ * [tracksJson] is the load-bearing field: it is the manifest of audio files, their
+ * offsets into the book and their cache keys. Without it a downloaded book is
+ * unplayable offline, because the URLs and track offsets normally arrive from
+ * `POST /api/items/:id/play` — a call that needs the server. Storing the manifest at
+ * download time is what turns "the bytes are on the phone" into "the book plays".
+ */
+@Entity(
+    tableName = "download",
+    primaryKeys = ["serverId", "userId", "libraryItemId", "episodeKey"],
+    indices = [Index(value = ["serverId", "userId", "state"])],
+)
+data class DownloadEntity(
+    val serverId: String,
+    val userId: String,
+    val libraryItemId: String,
+    /** Empty string for books, mirroring the progress table. */
+    val episodeKey: String,
+    val title: String,
+    val author: String?,
+    val mediaType: String,
+    /** One of [DownloadState]. */
+    val state: String,
+    val tracksJson: String,
+    val durationSec: Double,
+    val bytesTotal: Long,
+    val bytesDownloaded: Long,
+    val percent: Float,
+    val requestedAtMs: Long,
+    val completedAtMs: Long,
+    val error: String?,
+)
+
+object DownloadState {
+    const val QUEUED = "queued"
+    const val DOWNLOADING = "downloading"
+    const val COMPLETED = "completed"
+    const val FAILED = "failed"
+
+    /** Only a completed download can be played with no network. */
+    fun isPlayableOffline(state: String) = state == COMPLETED
+}
+
+/**
+ * Full-text index over the library mirror.
+ *
+ * Not an external-content table: Room does not generate the triggers that would keep
+ * one in sync, so a stale index would silently return yesterday's library. This one is
+ * written explicitly wherever items are written, which is a single place.
+ *
+ * The id columns are `notIndexed` so they scope a query without polluting the terms —
+ * searching for a library id is not a thing anyone wants to do.
+ */
+@Fts4(notIndexed = ["serverId", "userId", "itemId", "libraryId"])
+@Entity(tableName = "library_item_fts")
+data class LibraryItemFtsEntity(
+    val serverId: String,
+    val userId: String,
+    val itemId: String,
+    val libraryId: String,
+    /** Title, subtitle, author, narrator, series, description, genres and tags, joined. */
+    val text: String,
 )
 
 /**

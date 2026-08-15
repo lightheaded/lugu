@@ -14,9 +14,11 @@ import io.github.lightheaded.lugu.core.api.DeviceInfoDto
 import io.github.lightheaded.lugu.core.api.ServerUrlProvider
 import io.github.lightheaded.lugu.core.api.TokenStore
 import io.github.lightheaded.lugu.core.db.ChapterDao
+import io.github.lightheaded.lugu.core.db.DownloadDao
 import io.github.lightheaded.lugu.core.db.EpisodeDao
 import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
+import io.github.lightheaded.lugu.core.db.LibraryItemFtsDao
 import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.db.OutboxDao
 import io.github.lightheaded.lugu.core.db.PositionHistoryDao
@@ -57,6 +59,10 @@ object DatabaseModule {
     @Provides fun queueDao(db: LuguDatabase): QueueDao = db.queueDao()
 
     @Provides fun positionHistoryDao(db: LuguDatabase): PositionHistoryDao = db.positionHistoryDao()
+
+    @Provides fun downloadDao(db: LuguDatabase): DownloadDao = db.downloadDao()
+
+    @Provides fun libraryItemFtsDao(db: LuguDatabase): LibraryItemFtsDao = db.libraryItemFtsDao()
 }
 
 @Module

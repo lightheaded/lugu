@@ -8,8 +8,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
@@ -21,6 +19,7 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.lightheaded.lugu.core.download.DownloadCache
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
 import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
@@ -40,7 +39,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 
 /**
  * The one playback brain.
@@ -54,7 +52,7 @@ import okhttp3.OkHttpClient
 @AndroidEntryPoint
 class LuguPlaybackService : MediaLibraryService() {
 
-    @Inject lateinit var okHttpClient: OkHttpClient
+    @Inject lateinit var downloadCache: DownloadCache
 
     @Inject lateinit var progressRepository: ProgressRepository
 
@@ -89,12 +87,11 @@ class LuguPlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
 
-        val dataSourceFactory = DefaultDataSource.Factory(
-            this,
-            // Auth headers rather than `?token=` URLs: a signed URL expires mid-book,
-            // a header is re-resolved per request by the shared interceptor.
-            OkHttpDataSource.Factory(okHttpClient),
-        )
+        // Reads through the download cache first and the network second, so a downloaded
+        // book plays from disk on every surface without any of them having to know that
+        // downloads exist. Auth headers rather than `?token=` URLs on the way out: a
+        // signed URL expires mid-book, a header is re-resolved per request.
+        val dataSourceFactory = downloadCache.playbackDataSourceFactory()
 
         player = ExoPlayer.Builder(this)
             .setRenderersFactory(DefaultRenderersFactory(this))

@@ -118,6 +118,285 @@ interface LibraryItemDao {
         """,
     )
     fun observeContinueListening(serverId: String, userId: String, limit: Int = 20): Flow<List<LibraryItemEntity>>
+
+    /**
+     * Full-text search across the mirror, scoped to one library.
+     *
+     * The FTS table is joined back to `library_item` rather than being read directly,
+     * so results carry every column the grid renders and the caller never has to know
+     * an index exists.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item_fts f
+        INNER JOIN library_item i
+            ON i.serverId = f.serverId AND i.userId = f.userId AND i.id = f.itemId
+        WHERE f.serverId = :serverId AND f.userId = :userId AND f.libraryId = :libraryId
+          AND library_item_fts MATCH :match
+        ORDER BY i.title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    fun searchFts(
+        serverId: String,
+        userId: String,
+        libraryId: String,
+        match: String,
+        limit: Int = 200,
+    ): Flow<List<LibraryItemEntity>>
+
+    /**
+     * Almost finished: past the threshold but not marked done. These are the ones worth
+     * an hour on a commute to clear, and the ones easiest to forget about.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        INNER JOIN progress p
+            ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId
+          AND p.isFinished = 0 AND p.progress >= :minProgress AND p.progress < 1.0
+        GROUP BY i.serverId, i.userId, i.id
+        ORDER BY MAX(p.progress) DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeAlmostFinished(
+        serverId: String,
+        userId: String,
+        minProgress: Double = 0.9,
+        limit: Int = 20,
+    ): Flow<List<LibraryItemEntity>>
+
+    /** Started, not nearly done, and untouched for a while — the ones that get abandoned. */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        INNER JOIN progress p
+            ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId
+          AND p.isFinished = 0 AND p.currentTimeSec > 0 AND p.progress < :maxProgress
+        GROUP BY i.serverId, i.userId, i.id
+        HAVING MAX(p.lastUpdateMs) < :staleBeforeMs
+        ORDER BY MAX(p.lastUpdateMs) DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeStale(
+        serverId: String,
+        userId: String,
+        staleBeforeMs: Long,
+        maxProgress: Double = 0.9,
+        limit: Int = 20,
+    ): Flow<List<LibraryItemEntity>>
+
+    /** Unstarted and short enough to finish in a sitting. */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        WHERE i.serverId = :serverId AND i.userId = :userId
+          AND i.mediaType = 'BOOK'
+          AND i.durationSec > 0 AND i.durationSec <= :maxDurationSec
+          AND NOT EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+              AND (p.currentTimeSec > 0 OR p.isFinished = 1)
+          )
+        ORDER BY i.addedAtMs DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeShortListens(
+        serverId: String,
+        userId: String,
+        maxDurationSec: Double = 3 * 3600.0,
+        limit: Int = 20,
+    ): Flow<List<LibraryItemEntity>>
+
+    /**
+     * Next in series: for every series with something finished in it, the lowest-numbered
+     * volume not yet started.
+     *
+     * Ordering is by [LibraryItemEntity.seriesSequence] and never by name — "#10" sorts
+     * before "#2" as text, which is precisely how a shelf like this recommends book ten
+     * to someone who just finished book one. Items whose sequence could not be parsed
+     * are left out rather than guessed at.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        WHERE i.serverId = :serverId AND i.userId = :userId
+          AND i.seriesTitle IS NOT NULL AND i.seriesSequence IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+              AND (p.currentTimeSec > 0 OR p.isFinished = 1)
+          )
+          AND EXISTS (
+            SELECT 1 FROM library_item d
+            INNER JOIN progress q
+                ON q.serverId = d.serverId AND q.userId = d.userId AND q.libraryItemId = d.id
+            WHERE d.serverId = i.serverId AND d.userId = i.userId
+              AND d.seriesTitle = i.seriesTitle AND q.isFinished = 1
+              AND d.seriesSequence IS NOT NULL AND d.seriesSequence < i.seriesSequence
+          )
+          AND i.seriesSequence = (
+            SELECT MIN(n.seriesSequence) FROM library_item n
+            WHERE n.serverId = i.serverId AND n.userId = i.userId
+              AND n.seriesTitle = i.seriesTitle AND n.seriesSequence IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM progress r
+                WHERE r.serverId = n.serverId AND r.userId = n.userId AND r.libraryItemId = n.id
+                  AND (r.currentTimeSec > 0 OR r.isFinished = 1)
+              )
+          )
+        GROUP BY i.serverId, i.userId, i.seriesTitle
+        ORDER BY i.title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    fun observeNextInSeries(serverId: String, userId: String, limit: Int = 20): Flow<List<LibraryItemEntity>>
+
+    /** Everything with bytes on the phone — the shelf that still works in airplane mode. */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        INNER JOIN download d
+            ON d.serverId = i.serverId AND d.userId = i.userId AND d.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId AND d.state = 'completed'
+        GROUP BY i.serverId, i.userId, i.id
+        ORDER BY MAX(d.completedAtMs) DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeDownloaded(serverId: String, userId: String, limit: Int = 50): Flow<List<LibraryItemEntity>>
+}
+
+@Dao
+interface LibraryItemFtsDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(rows: List<LibraryItemFtsEntity>)
+
+    @Query("DELETE FROM library_item_fts WHERE serverId = :serverId AND userId = :userId AND itemId IN (:itemIds)")
+    suspend fun deleteByItemIds(serverId: String, userId: String, itemIds: List<String>)
+
+    @Query("DELETE FROM library_item_fts WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId")
+    suspend fun deleteForLibrary(serverId: String, userId: String, libraryId: String)
+
+    /**
+     * Re-indexes a batch. Delete-then-insert rather than upsert because an FTS4 table
+     * has no unique constraint to conflict on, so an insert alone would duplicate every
+     * row on the second sync — and duplicate rows mean duplicate search results.
+     */
+    @Transaction
+    suspend fun replaceAll(serverId: String, userId: String, rows: List<LibraryItemFtsEntity>) {
+        if (rows.isEmpty()) return
+        deleteByItemIds(serverId, userId, rows.map { it.itemId })
+        insertAll(rows)
+    }
+
+    /** Drops index rows whose item no longer exists, after a sweep removed stale items. */
+    @Query(
+        """
+        DELETE FROM library_item_fts
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+          AND itemId NOT IN (
+            SELECT id FROM library_item
+            WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+          )
+        """,
+    )
+    suspend fun deleteOrphans(serverId: String, userId: String, libraryId: String)
+}
+
+@Dao
+interface DownloadDao {
+    @Query("SELECT * FROM download WHERE serverId = :serverId AND userId = :userId ORDER BY requestedAtMs DESC")
+    fun observeAll(serverId: String, userId: String): Flow<List<DownloadEntity>>
+
+    @Query(
+        """
+        SELECT * FROM download
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        """,
+    )
+    fun observeForItem(serverId: String, userId: String, itemId: String): Flow<List<DownloadEntity>>
+
+    @Query(
+        """
+        SELECT * FROM download
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :itemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun get(serverId: String, userId: String, itemId: String, episodeKey: String): DownloadEntity?
+
+    /**
+     * Looks a row up without knowing the account.
+     *
+     * The download engine only ever learns which *file* changed, and a file id carries
+     * the item and episode but not the server or user. Scoping is recovered from the row
+     * itself rather than by asking who is signed in, which would be wrong the moment a
+     * download outlives a session.
+     */
+    @Query(
+        """
+        SELECT * FROM download
+        WHERE libraryItemId = :itemId AND episodeKey = :episodeKey
+        LIMIT 1
+        """,
+    )
+    suspend fun findAny(itemId: String, episodeKey: String): DownloadEntity?
+
+    @Query("SELECT * FROM download WHERE state != 'completed'")
+    suspend fun unfinished(): List<DownloadEntity>
+
+    @Query(
+        """
+        SELECT * FROM download
+        WHERE serverId = :serverId AND userId = :userId AND state = 'completed'
+        """,
+    )
+    suspend fun completed(serverId: String, userId: String): List<DownloadEntity>
+
+    @Query("SELECT COALESCE(SUM(bytesDownloaded), 0) FROM download WHERE serverId = :serverId AND userId = :userId")
+    fun observeBytesUsed(serverId: String, userId: String): Flow<Long>
+
+    @Query("SELECT COALESCE(SUM(bytesDownloaded), 0) FROM download")
+    suspend fun bytesUsed(): Long
+
+    @Upsert
+    suspend fun upsert(download: DownloadEntity)
+
+    @Query(
+        """
+        UPDATE download SET state = :state, bytesDownloaded = :bytesDownloaded, percent = :percent,
+                            bytesTotal = :bytesTotal, completedAtMs = :completedAtMs, error = :error
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :itemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun updateState(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        episodeKey: String,
+        state: String,
+        bytesDownloaded: Long,
+        bytesTotal: Long,
+        percent: Float,
+        completedAtMs: Long,
+        error: String?,
+    )
+
+    @Query(
+        """
+        DELETE FROM download
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :itemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun delete(serverId: String, userId: String, itemId: String, episodeKey: String)
 }
 
 @Dao

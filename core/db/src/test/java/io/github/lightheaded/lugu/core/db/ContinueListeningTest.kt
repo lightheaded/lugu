@@ -40,7 +40,13 @@ class ContinueListeningTest {
     @After
     fun tearDown() = db.close()
 
-    private fun item(id: String, mediaType: String) = LibraryItemEntity(
+    private fun item(
+        id: String,
+        mediaType: String,
+        seriesName: String? = null,
+        seriesSequence: Double? = null,
+        durationSec: Double = 3_600.0,
+    ) = LibraryItemEntity(
         serverId = serverId,
         userId = userId,
         id = id,
@@ -50,9 +56,11 @@ class ContinueListeningTest {
         subtitle = null,
         authorName = null,
         narratorName = null,
-        seriesName = null,
+        seriesName = seriesName,
+        seriesTitle = seriesName,
+        seriesSequence = seriesSequence,
         description = null,
-        durationSec = 3_600.0,
+        durationSec = durationSec,
         sizeBytes = 0,
         numEpisodes = 0,
         addedAtMs = 0,
