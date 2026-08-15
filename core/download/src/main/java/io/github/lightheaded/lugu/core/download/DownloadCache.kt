@@ -38,8 +38,22 @@ class DownloadCache @Inject constructor(
 
     val databaseProvider: StandaloneDatabaseProvider by lazy { StandaloneDatabaseProvider(context) }
 
+    /**
+     * Built once, lazily, and warmed off the main thread.
+     *
+     * Constructing a [SimpleCache] indexes everything already on disk, which grows with
+     * every downloaded book. The playback service builds its data source in `onCreate`,
+     * on the main thread, so without warming this the first playback after a cold start
+     * would block the main thread for as long as the index takes — an ANR waiting to
+     * happen, and worst for the people who have downloaded the most. `lazy` is
+     * thread-safe, so whichever gets there first does the work and the other waits.
+     */
     val cache: SimpleCache by lazy {
         SimpleCache(directory, NoOpCacheEvictor(), databaseProvider)
+    }
+
+    init {
+        Thread({ runCatching { cache } }, "lugu-cache-warmup").apply { isDaemon = true }.start()
     }
 
     /** Upstream for the downloader: authenticated, and the only thing that fills the cache. */
