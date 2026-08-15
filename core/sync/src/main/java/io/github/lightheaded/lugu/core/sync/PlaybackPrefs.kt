@@ -59,8 +59,17 @@ class PlaybackPrefs @Inject constructor(
         store.edit { prefs -> prefs[PLAYER_BUTTONS] = buttons.joinToString(",") { it.id } }
     }
 
-    suspend fun setNotificationButtons(buttons: Set<TransportButton>) {
-        store.edit { prefs -> prefs[NOTIFICATION_BUTTONS] = buttons.joinToString(",") { it.id } }
+    /** Order is preserved: it is what decides where each button sits in the notification. */
+    suspend fun setNotificationButtons(buttons: List<TransportButton>) {
+        store.edit { prefs -> prefs[NOTIFICATION_BUTTONS] = buttons.distinct().joinToString(",") { it.id } }
+    }
+
+    suspend fun setHeadsetNextAction(action: HeadsetAction) {
+        store.edit { it[HEADSET_NEXT] = action.id }
+    }
+
+    suspend fun setHeadsetPreviousAction(action: HeadsetAction) {
+        store.edit { it[HEADSET_PREVIOUS] = action.id }
     }
 
     suspend fun setDefaultSpeed(speed: Float) {
@@ -176,8 +185,12 @@ class PlaybackPrefs @Inject constructor(
     private fun Preferences.toPlayerSettings(): PlayerSettings = PlayerSettings(
         skipBackSec = this[SKIP_BACK] ?: DEFAULTS.skipBackSec,
         skipForwardSec = this[SKIP_FORWARD] ?: DEFAULTS.skipForwardSec,
-        playerButtons = this[PLAYER_BUTTONS]?.toButtons() ?: DEFAULTS.playerButtons,
+        playerButtons = this[PLAYER_BUTTONS]?.toButtons()?.toSet() ?: DEFAULTS.playerButtons,
         notificationButtons = this[NOTIFICATION_BUTTONS]?.toButtons() ?: DEFAULTS.notificationButtons,
+        headset = HeadsetSettings(
+            nextAction = HeadsetAction.fromId(this[HEADSET_NEXT]) ?: DEFAULTS.headset.nextAction,
+            previousAction = HeadsetAction.fromId(this[HEADSET_PREVIOUS]) ?: DEFAULTS.headset.previousAction,
+        ),
         noticeSeconds = this[NOTICE_SECONDS] ?: DEFAULTS.noticeSeconds,
         speed = SpeedSettings(
             defaultSpeed = this[DEFAULT_SPEED] ?: 1.0f,
@@ -205,8 +218,9 @@ class PlaybackPrefs @Inject constructor(
         ),
     )
 
-    private fun String.toButtons(): Set<TransportButton> =
-        split(',').mapNotNull { TransportButton.fromId(it.trim()) }.toSet()
+    /** Order survives the round trip, because for the notification it is the setting. */
+    private fun String.toButtons(): List<TransportButton> =
+        split(',').mapNotNull { TransportButton.fromId(it.trim()) }.distinct()
 
     private fun String.toSpeedList(): List<Float> =
         split(',').mapNotNull { it.trim().toFloatOrNull() }
@@ -246,5 +260,7 @@ class PlaybackPrefs @Inject constructor(
         val PAUSE_ON_DISCONNECT = booleanPreferencesKey("pause_on_disconnect")
         val RESUME_HEADPHONES = booleanPreferencesKey("resume_on_headphones")
         val RESUME_CAR = booleanPreferencesKey("resume_in_car")
+        val HEADSET_NEXT = stringPreferencesKey("headset_next_action")
+        val HEADSET_PREVIOUS = stringPreferencesKey("headset_previous_action")
     }
 }

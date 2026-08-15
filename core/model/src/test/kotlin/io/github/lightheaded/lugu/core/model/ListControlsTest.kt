@@ -88,6 +88,47 @@ class ListControlsTest {
         assertThat(sorted.map { it.title }).containsExactly("new", "middle", "old").inOrder()
     }
 
+    /**
+     * The bug this exists to prevent: lexicographic ordering compares one character at a
+     * time, so "10" sorts before "2" and a series is listed in an order that recommends
+     * book ten to somebody who has just finished book one.
+     */
+    @Test
+    fun `numbers in a title are compared as numbers`() {
+        val rows = listOf(
+            facts(title = "Breakwater Book 10"),
+            facts(title = "Breakwater Book 2"),
+            facts(title = "Breakwater Book 1"),
+        )
+
+        val sorted = ListControls.sortItems(rows, ItemSort.TITLE) { it }
+
+        assertThat(sorted.map { it.title })
+            .containsExactly("Breakwater Book 1", "Breakwater Book 2", "Breakwater Book 10")
+            .inOrder()
+    }
+
+    @Test
+    fun `leading zeros do not change the order`() {
+        assertThat(ListControls.naturalCompare("Chapter 07", "Chapter 7")).isEqualTo(0)
+        assertThat(ListControls.naturalCompare("Chapter 0007", "Chapter 1")).isGreaterThan(0)
+    }
+
+    @Test
+    fun `natural ordering is still case-insensitive and still orders plain text`() {
+        assertThat(ListControls.naturalCompare("apple", "Apple")).isEqualTo(0)
+        assertThat(ListControls.naturalCompare("Anvil", "Bell")).isLessThan(0)
+        // A prefix sorts before the longer string that contains it.
+        assertThat(ListControls.naturalCompare("Book", "Book 2")).isLessThan(0)
+    }
+
+    @Test
+    fun `a number is compared against the text at the same position`() {
+        // "2" against "b": neither run is a pair of digits, so this falls through to the
+        // character comparison rather than silently treating the digit as zero.
+        assertThat(ListControls.naturalCompare("Part 2", "Part b")).isLessThan(0)
+    }
+
     @Test
     fun `an unknown stored id falls back rather than throwing`() {
         // Sort choices are persisted by id, so a renamed or removed option must degrade

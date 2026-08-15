@@ -106,13 +106,13 @@ class ChapterAwarePlayerTest {
     private val seekOnly = PlayerSettings(
         skipBackSec = 15,
         skipForwardSec = 30,
-        notificationButtons = setOf(TransportButton.SKIP_BACK, TransportButton.SKIP_FORWARD),
+        notificationButtons = listOf(TransportButton.SKIP_BACK, TransportButton.SKIP_FORWARD),
     )
 
     private val withChapters = PlayerSettings(
         skipBackSec = 15,
         skipForwardSec = 30,
-        notificationButtons = setOf(
+        notificationButtons = listOf(
             TransportButton.SKIP_BACK,
             TransportButton.SKIP_FORWARD,
             TransportButton.PREVIOUS_CHAPTER,

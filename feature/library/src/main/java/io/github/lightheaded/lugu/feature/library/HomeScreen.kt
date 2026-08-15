@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import io.github.lightheaded.lugu.core.sync.StartTab
 
 /** The two jobs the signed-in app does, in the order they are wanted. */
 private enum class HomeTab(val label: String, val icon: ImageVector) {
@@ -75,6 +76,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenQueue: () -> Unit,
+    onBrowse: (kind: String) -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     bottomContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -88,7 +90,14 @@ fun HomeScreen(
     val libraryViewModel: LibraryViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(HomeTab.HOME) }
+    val startTab by viewModel.startTab.collectAsStateWithLifecycle()
+
+    // The stored preference only ever answers "which tab does lugu open on", so it is
+    // consulted exactly once — while nobody has chosen a tab in this instance. Seeding the
+    // saveable with it instead would let it win again after a rotation, and being sent back
+    // to the start tab halfway through browsing is worse than never honouring it at all.
+    var chosen by rememberSaveable { mutableStateOf<HomeTab?>(null) }
+    val tab = chosen ?: startTab?.toHomeTab()
 
     Scaffold(
         modifier = modifier,
@@ -128,7 +137,7 @@ fun HomeScreen(
                     HomeTab.entries.forEach { entry ->
                         NavigationBarItem(
                             selected = tab == entry,
-                            onClick = { tab = entry },
+                            onClick = { chosen = entry },
                             icon = { Icon(entry.icon, contentDescription = null) },
                             label = { Text(entry.label) },
                         )
@@ -138,6 +147,9 @@ fun HomeScreen(
         },
     ) { padding ->
         when (tab) {
+            // Nothing at all until the start tab is known, which is a frame at most.
+            null -> Unit
+
             HomeTab.HOME -> HomeTabContent(
                 state = state,
                 coverUrlFor = { viewModel.coverUrl(it) },
@@ -148,11 +160,18 @@ fun HomeScreen(
 
             HomeTab.LIBRARY -> LibraryScreen(
                 onOpenItem = onOpenItem,
+                onBrowse = onBrowse,
                 modifier = Modifier.fillMaxSize().padding(padding),
                 viewModel = libraryViewModel,
             )
         }
     }
+}
+
+/** The stored preference names one of the two tabs; this is that name, as a tab. */
+private fun StartTab.toHomeTab(): HomeTab = when (this) {
+    StartTab.HOME -> HomeTab.HOME
+    StartTab.LIBRARY -> HomeTab.LIBRARY
 }
 
 /**

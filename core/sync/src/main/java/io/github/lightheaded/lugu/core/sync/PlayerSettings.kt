@@ -38,6 +38,36 @@ data class SpeedSettings(
 }
 
 /**
+ * What a headset's previous and next buttons do.
+ *
+ * They exist because a headset has three buttons and a book has no tracks, so "next" has
+ * to mean something chosen rather than something obvious. Media3's own default is to move
+ * to the next media item, which on a single-file book means seeking to zero — the bug that
+ * once cost a forty-hour book its position and the reason any of this is configurable.
+ */
+enum class HeadsetAction(val id: String, val label: String) {
+    SKIP("skip", "Skip by the set seconds"),
+    CHAPTER("chapter", "Jump a chapter"),
+    ITEM("item", "Next or previous item"),
+    NOTHING("nothing", "Nothing"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): HeadsetAction? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * Defaults to skipping in both directions, matching the observed usage order: seeking back
+ * to catch a missed sentence is the dominant action, and a headset button is the control
+ * most often pressed without looking.
+ */
+data class HeadsetSettings(
+    val nextAction: HeadsetAction = HeadsetAction.SKIP,
+    val previousAction: HeadsetAction = HeadsetAction.SKIP,
+)
+
+/**
  * What is done to the audio itself.
  *
  * Both are off by default because both change what the listener hears. Silence skipping
@@ -121,11 +151,19 @@ data class PlayerSettings(
         TransportButton.PREVIOUS_CHAPTER,
         TransportButton.NEXT_CHAPTER,
     ),
-    /** Buttons offered to the notification and lock screen. */
-    val notificationButtons: Set<TransportButton> = setOf(
+    /**
+     * Buttons offered to the notification and lock screen, **in the order they appear**.
+     *
+     * A list rather than a set, because order is the whole point here. Media3's default
+     * notification builds previous / play-pause / next and offers no way in; a custom
+     * layout replaces it entirely, at which point the order stops being the framework's
+     * business and starts being a setting.
+     */
+    val notificationButtons: List<TransportButton> = listOf(
         TransportButton.SKIP_BACK,
         TransportButton.SKIP_FORWARD,
     ),
+    val headset: HeadsetSettings = HeadsetSettings(),
     val speed: SpeedSettings = SpeedSettings(),
     /**
      * How long an automatic-correction notice stays up.

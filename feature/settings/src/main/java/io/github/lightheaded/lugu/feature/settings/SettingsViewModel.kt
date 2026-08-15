@@ -9,12 +9,15 @@ import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
+import io.github.lightheaded.lugu.core.sync.HeadsetAction
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.QueuePrefs
 import io.github.lightheaded.lugu.core.sync.QueueSettings
+import io.github.lightheaded.lugu.core.sync.ShelfKind
+import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,9 +123,59 @@ class SettingsViewModel @Inject constructor(
         prefs.setPlayerButtons(if (button in current) current - button else current + button)
     }
 
+    /**
+     * Tap to add, tap again to remove — and the order of the taps is the order in the
+     * notification. A picker that also answers "in what order" without a second control is
+     * worth the small oddity of having to remove and re-add to reshuffle.
+     */
     fun toggleNotificationButton(button: TransportButton) = viewModelScope.launch {
         val current = state.value.settings.notificationButtons
         prefs.setNotificationButtons(if (button in current) current - button else current + button)
+    }
+
+    fun setHeadsetNextAction(action: HeadsetAction) =
+        viewModelScope.launch { prefs.setHeadsetNextAction(action) }
+
+    fun setHeadsetPreviousAction(action: HeadsetAction) =
+        viewModelScope.launch { prefs.setHeadsetPreviousAction(action) }
+
+    fun setStartTab(tab: StartTab) = viewModelScope.launch { libraryPrefs.setStartTab(tab) }
+
+    fun setShelfHidden(name: String, hidden: Boolean) =
+        viewModelScope.launch { libraryPrefs.setShelfHidden(name, hidden) }
+
+    /**
+     * Moves a shelf one place in the list as it is shown.
+     *
+     * The swap is with the neighbouring *visible* shelf, not the neighbouring stored one.
+     * Those differ as soon as anything is switched off, and swapping with a hidden shelf
+     * is a press that visibly does nothing — the worst kind of broken control, because it
+     * looks like the app ignored you.
+     *
+     * The order is written out in full rather than as a delta, because it may still be
+     * empty, meaning "however they are declared", and a delta against nothing has no
+     * meaning. The first move is what fixes the current arrangement in place.
+     */
+    fun moveShelf(name: String, up: Boolean) = viewModelScope.launch {
+        val settings = state.value.library
+        val declared = ShelfKind.entries.map { it.name }
+        // Anything the stored order predates is appended, so every shelf is addressable
+        // even after one is added in a later version.
+        val full = settings.shelfOrder.filter { it in declared } + declared.filterNot { it in settings.shelfOrder }
+
+        val visible = settings.arrangeShelves(ShelfKind.entries) { it.name }.map { it.name }
+        val position = visible.indexOf(name).takeIf { it >= 0 } ?: return@launch
+        val neighbour = visible.getOrNull(if (up) position - 1 else position + 1) ?: return@launch
+
+        val from = full.indexOf(name)
+        val to = full.indexOf(neighbour)
+        if (from < 0 || to < 0) return@launch
+        libraryPrefs.setShelfOrder(
+            full.toMutableList().apply {
+                set(from, neighbour)
+                set(to, name)
+            },
+        )
     }
 
     fun setDefaultSpeed(speed: Float) = viewModelScope.launch { prefs.setDefaultSpeed(speed) }

@@ -24,7 +24,7 @@ layout treats chapter skip as a peer of seek, which over-serves the rarest actio
 | Seek back/forward as the primary pair either side of play/pause | done |
 | Chapter skip present but visually secondary | done |
 | Notification's two side buttons skip by the configured seconds by default | done — see below |
-| Notification button *icons* and *ordering* | todo — needs Media3 custom layouts; see [BACKLOG.md](BACKLOG.md) |
+| Notification button *icons* and *ordering* | done 16 Aug |
 | Skip durations configurable, not hardcoded 10/30 | done |
 
 **The notification jumped by ten minutes** (found by Tom, 15 Aug). Its side buttons were
@@ -40,8 +40,20 @@ than changing them — and available commands are read when a controller connect
 nothing firing a change when a setting moves. Switching behaviour while leaving the
 commands advertised is deterministic and needs no cooperation from the notification.
 
-The buttons still carry previous/next *icons*. Fixing that, and the ordering, needs a
-Media3 custom layout — the same piece of work, still outstanding.
+**The icons and the order are now ours too** (16 Aug). The buttons did the right thing but
+still carried previous/next icons in Media3's order, because the default notification
+provider builds previous / play-pause / next and offers no seek button to pick. A custom
+layout replaces the provider's choice entirely: the buttons come from the settings list,
+in the order chosen there, with icons that match the configured skip — a 30-second skip
+gets the icon that says 30, and a duration with no matching icon gets the generic one,
+because a button labelled 30 that moves 15 is worse than one with no number at all.
+
+The order is set by the order of taps in Settings → Buttons, which is a slightly odd
+interaction and the right trade for a list of four things: it answers "which" and "in what
+order" with one gesture instead of adding a second control. The layout is pushed to live
+sessions when the setting changes, which is the part the earlier attempt got wrong — a
+notification that only picks up a preference on the next cold start reads as a setting
+that does nothing.
 
 ## Settings
 
@@ -53,7 +65,7 @@ and **searchable**.
 | Skip-back and skip-forward durations | done |
 | Which buttons appear in the player UI | done |
 | Which buttons appear in the notification | done |
-| What headphone/headset buttons do | todo — classifier logic exists, not surfaced |
+| What headphone/headset buttons do | done 16 Aug |
 | Categorised settings screen | done |
 | Searchable settings | done — matches synonyms too, so "data" finds Wi-Fi-only and "rewind" finds skip-back |
 
@@ -85,7 +97,22 @@ Links should be consistent **everywhere**, not just on one screen:
 | Item | Status |
 |---|---|
 | Now-playing title links to the item page | done |
-| Author/series/narrator links | todo — still no author or series *page* to link to. M2 added series awareness (a parsed series title and number, and a "Next in series" shelf), so the data now exists; the pages do not |
+| Author/series/narrator links | done 16 Aug |
+
+**The pages came before the links**, which is why this took until now. Linking to a dead
+end is worse than not linking, so the author, series and narrator on an item page stayed
+plain text while there was nowhere for them to lead.
+
+All three are computed from the local mirror rather than fetched. The server has an author
+page and a series page in its own web client and no API that hands either to a client, so
+grouping locally is both the only option and the faster one — and it means the pages work
+with the network off, like everything else that reads from Room.
+
+The series page is the one with a real decision in it: it groups on the parsed
+`seriesTitle` and orders by the parsed `seriesSequence`, never on the raw `seriesName` the
+server sends. That string has the number baked into it, so two books in one series do not
+compare equal — grouping by it would group nothing, and ordering by it puts "#10" before
+"#2".
 
 ## Shape of the app — home, libraries, and what belongs where
 

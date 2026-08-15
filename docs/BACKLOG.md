@@ -20,10 +20,7 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 
 | Item | Why not yet |
 |---|---|
-| **Configurable headphone/headset buttons** | The classification logic exists (`MediaButtonClassifier`) but is not surfaced as choices. Needs a mapping of button gesture → action, and the classifier reading it |
-| **Notification button icons and ordering** | The two side buttons now *do* the configured skip, but still carry previous/next icons, and their order is Media3's. Both need custom layouts (`CommandButton` + `setCustomLayout` + `onCustomCommand`) — the default provider builds previous / play-pause / next and offers no seek button to select |
-| **Author / series / narrator links** | Those pages still do not exist, and linking to a dead end is worse than not linking. M2 got halfway: `seriesTitle` and `seriesSequence` are parsed and stored, so a series page now has something to render. Author and narrator have no equivalent yet |
-| **Selection mode does not reach the library grid** | The episode list, the queue and the downloads screen share one selection mode; the grid does not have it yet, and "mark finished" is the action still missing from all of them (upstream app#1297) |
+| **One author credited two ways is two authors** | The browse pages group on the stored string, so "Corven, James T. R." and "James T. R. Corven" are separate, and a multi-author credit is its own entry. The alternative is guessing at name order for every language a library might hold, which is a worse kind of wrong — this wants the server's own author records, not smarter parsing here |
 | **The grid still shows no progress for a podcast** | Home falls back to the most recent episode's progress; the grid does not. A cover reading "60%" for a whole feed is arguably worse than none, so this is a decision to take rather than an oversight to fix |
 | **Sort and filter on the downloads screen are not remembered** | `LibraryPrefs` has keys for the grid and the episode list only, and reusing either would tie two unrelated screens together |
 
@@ -75,7 +72,6 @@ dominant context, even though it is not our platform.
 | Item | Note |
 |---|---|
 | **A paused notification that survives** | app#1800 and app#1571, 21 comments. Upstream's disappears a couple of minutes after pausing, so resuming means reopening the app. Already listed under *Why playback stops* as a risk here too; the fix is a foreground-service lifecycle decision, and the diary will say whether we have the problem |
-| **Chapter-scoped progress in the notification** | app#239, 11 👍. The bar spans the whole book even with chapters, which on a forty-hour book means it never visibly moves |
 | **A configurable rewind-after-pause curve** | app#205, 20 comments of people disagreeing about the right number — which is itself the argument for making it a setting rather than picking one |
 | **Skip intro and outro** | app#749, 7 👍. Per-podcast trim offsets, remembered, so a fifteen-second sting is not heard three hundred times |
 | **Duck rather than cut for other audio** | app#1259. A navigation prompt should lower the book, not interrupt it |
@@ -88,10 +84,7 @@ dominant context, even though it is not our platform.
 
 | Item | Note |
 |---|---|
-| **Choose the start tab; reorder or hide shelves** | app#1790 (10 👍) and app#743 (7 👍). Home and Library are now separate, but which one opens is fixed, and the six shelves are in a fixed order. Someone who only ever wants Downloaded should not scroll past five rows to reach it |
-| **Alphabetical fast-scroll** | app#544, 8 👍. An A–Z rail on a long grid |
-| **Natural sorting of titles** | server#2281. "Book 2" before "Book 10". Series ordering already parses numbers; plain title sort is still lexicographic, which is the same mistake in a different place |
-| **Mark finished from a selection** | app#1297, 5 👍. Selection mode exists on three screens; this is the action still missing from it |
+| **A–Z rail on the browse pages too** | The grid has one; the author, series and narrator lists do not, and a library with four hundred authors needs it just as much. They have a search box in the meantime |
 | **Edit collections from the phone** | app#207, 6 👍. Read-only on mobile upstream, though the API allows writing |
 | **Confirm covers are cached to disk** | app#907, 7 👍. Coil caches by default, but "by default" is an assumption, and a library that re-fetches every cover feels slow in exactly the way people describe |
 | **Sleep after N chapters** | app#202, 6 👍. Chapter count rather than clock time, which is how people actually decide when to stop |
@@ -109,6 +102,7 @@ Recorded so the same question is not re-litigated in six months.
 | CarPlay, App Store, AltStore (app#475, app#541, app#1346 — 128 👍) | iOS. Worth noting only as evidence of how much of upstream's attention iOS consumes |
 | UPnP, DLNA, Sonos (app#1424, app#1506) | Real demand, but a second transport stack with its own failure modes. Chromecast in M4 first, and only revisit if that lands cleanly |
 | Kobo sync (server#3504, 249 👍) | The highest-voted open issue in either repo, and entirely server-side. It says where the community's mass is, not what this client should do |
+| **Chapter-scoped notification progress** (app#239, 11 👍) | Attempted 16 Aug and withdrawn. The bar is drawn from the platform media session's playback state — one position and duration, read by the notification, the player screen, the scrubber and a car's seek bar alike, with no per-controller value and no hook that runs only on the way to the notification. Reporting chapter-relative numbers means a second, disagreeing notion of where the book is, in exactly the place `AbsoluteTiming` and `ChapterAwarePlayer` exist to keep single — which is how a resumed book starts in the wrong chapter. Not worth a bar that moves. The chapter title is in the notification text instead, where it costs nothing. Worth knowing that the complaint is narrower than it looks: on a multi-file book the bar already spans the current file rather than the whole book, so the forty-hour bar is the single-file case. Reasoning is in `LuguNotificationProvider`'s KDoc |
 
 Android TV (app#606) and Wear OS (app#676) are already M4 spikes and are not repeated here.
 

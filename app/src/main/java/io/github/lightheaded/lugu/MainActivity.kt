@@ -4,6 +4,7 @@ import android.app.SearchManager
 import android.content.Intent
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.lightheaded.lugu.feature.library.BrowseGroupScreen
+import io.github.lightheaded.lugu.feature.library.BrowseScreen
 import io.github.lightheaded.lugu.feature.library.DownloadsScreen
 import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
@@ -88,7 +91,34 @@ private object Routes {
     const val PLAYBACK_RECORD = "playback-record"
     const val FEEDBACK = "feedback"
 
+    /** Authors, series or narrators — the three groupings the item page links to. */
+    const val BROWSE = "browse/{kind}"
+    const val BROWSE_GROUP = "browse/{kind}/{name}"
+
     fun item(itemId: String) = "item/$itemId"
+
+    fun browse(kind: String) = "browse/$kind"
+
+    /**
+     * A name can be anything the server holds — a slash, a question mark, a hash, an
+     * accent — so it travels through the route as URL-safe base64 rather than as
+     * percent-encoded text.
+     *
+     * Percent-encoding is the obvious choice and the wrong one here: Navigation decodes
+     * path arguments itself, so the screen must not decode again, and whether it decodes
+     * is a property of the Navigation version rather than of anything in this file. That
+     * leaves a name containing a literal percent sign decoding twice on one version and
+     * once on another — a bug that appears on an upgrade nobody connects it to. Base64
+     * contains no character Navigation treats as special, so both sides agree by
+     * construction.
+     */
+    fun browseGroup(kind: String, name: String): String {
+        val encoded = Base64.encodeToString(
+            name.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+        return "browse/$kind/$encoded"
+    }
 }
 
 @Composable
@@ -129,6 +159,7 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                 onOpenQueue = { navController.navigate(Routes.QUEUE) },
+                onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
                 // A shelf tap on something already in progress means "carry on", so it
                 // plays rather than opening a page and asking again.
                 onPlay = { itemId, episodeId ->
@@ -170,6 +201,36 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                     playerViewModel.play(itemId, episodeId)
                     navController.navigate(Routes.PLAYER)
                 },
+                // The author, series and narrator on an item page are links now that there
+                // is somewhere for them to lead.
+                onBrowseGroup = { kind, name ->
+                    navController.navigate(Routes.browseGroup(kind, name))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.BROWSE,
+            arguments = listOf(navArgument("kind") { type = NavType.StringType }),
+        ) {
+            BrowseScreen(
+                onBack = { navController.popBackStack() },
+                onOpenGroup = { kind, name ->
+                    navController.navigate(Routes.browseGroup(kind, name))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.BROWSE_GROUP,
+            arguments = listOf(
+                navArgument("kind") { type = NavType.StringType },
+                navArgument("name") { type = NavType.StringType },
+            ),
+        ) {
+            BrowseGroupScreen(
+                onBack = { navController.popBackStack() },
+                onOpenItem = { navController.navigate(Routes.item(it)) },
             )
         }
 

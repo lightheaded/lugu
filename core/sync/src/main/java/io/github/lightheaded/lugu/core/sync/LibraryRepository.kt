@@ -4,6 +4,7 @@ import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.AbsJson
 import io.github.lightheaded.lugu.core.api.LibraryItemDto
 import io.github.lightheaded.lugu.core.api.toDomain
+import io.github.lightheaded.lugu.core.db.BrowseGroup
 import io.github.lightheaded.lugu.core.db.ChapterDao
 import io.github.lightheaded.lugu.core.db.ChapterEntity
 import io.github.lightheaded.lugu.core.db.EpisodeDao
@@ -25,6 +26,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 /** A computed row on the library screen. */
@@ -38,6 +40,24 @@ enum class ShelfKind(val label: String) {
 }
 
 data class Shelf(val kind: ShelfKind, val items: List<LibraryItem>)
+
+/**
+ * A way of grouping the library other than by title.
+ *
+ * These are the three links the app already renders on an item page — author, series and
+ * narrator — and until now every one of them pointed nowhere. Linking to a dead end is
+ * worse than not linking, which is why the pages come before the links.
+ */
+enum class BrowseKind(val id: String, val label: String, val singular: String) {
+    AUTHORS("authors", "Authors", "Author"),
+    SERIES("series", "Series", "Series"),
+    NARRATORS("narrators", "Narrators", "Narrator"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): BrowseKind = entries.firstOrNull { it.id == id } ?: AUTHORS
+    }
+}
 
 /**
  * The library mirror.
@@ -125,6 +145,37 @@ class LibraryRepository @Inject constructor(
             }
         }
 
+    /**
+     * The three ways a library is browsed other than by title.
+     *
+     * All computed from the mirror, which is why they work offline and why they exist at
+     * all: the server has an author page and a series page in its web client, and no API
+     * that hands either to a client. Grouping locally is both the only option and the
+     * faster one.
+     */
+    fun observeGroups(
+        account: ActiveAccount,
+        kind: BrowseKind,
+        libraryId: String? = null,
+    ): Flow<List<BrowseGroup>> = when (kind) {
+        BrowseKind.AUTHORS -> itemDao.observeAuthors(account.serverId, account.userId, libraryId)
+        BrowseKind.NARRATORS -> itemDao.observeNarrators(account.serverId, account.userId, libraryId)
+        BrowseKind.SERIES -> itemDao.observeSeries(account.serverId, account.userId, libraryId)
+    }
+
+    fun observeGroupItems(
+        account: ActiveAccount,
+        kind: BrowseKind,
+        name: String,
+    ): Flow<List<LibraryItem>> {
+        val rows = when (kind) {
+            BrowseKind.AUTHORS -> itemDao.observeByAuthor(account.serverId, account.userId, name)
+            BrowseKind.NARRATORS -> itemDao.observeByNarrator(account.serverId, account.userId, name)
+            BrowseKind.SERIES -> itemDao.observeBySeries(account.serverId, account.userId, name)
+        }
+        return rows.map { list -> list.distinctBy { it.id }.map { it.toDomain() } }
+    }
+
     fun observeContinueListening(account: ActiveAccount): Flow<List<LibraryItem>> =
         itemDao.observeContinueListening(account.serverId, account.userId).map { rows ->
             // The query already groups by item, but the UI keys this list by id and
@@ -147,7 +198,11 @@ class LibraryRepository @Inject constructor(
      * filtered the grid and left podcasts on the shelves directly above it — which reads,
      * correctly, as the filter being broken. The caller now has to say which it means.
      */
-    fun observeShelves(account: ActiveAccount, libraryId: String? = null): Flow<List<Shelf>> {
+    fun observeShelves(
+        account: ActiveAccount,
+        libraryId: String? = null,
+        hidden: Set<ShelfKind> = emptySet(),
+    ): Flow<List<Shelf>> {
         // Declared in the order they are shown. Listing them as pairs rather than as
         // combine() arguments keeps the display order and the query in one place, and
         // sidesteps combine()'s five-flow typed limit.
@@ -169,11 +224,18 @@ class LibraryRepository @Inject constructor(
                 itemDao.observeShortListens(account.serverId, account.userId, libraryId),
         )
 
-        return combine(sources.map { it.second }) { results ->
+        // A shelf switched off is not computed at all. Some of these are the heaviest
+        // queries in the app — "next in series" is three correlated subqueries over the
+        // whole mirror — and running one to throw the answer away is a cost paid on every
+        // change to the library by someone who said they did not want it.
+        val wanted = sources.filterNot { (kind, _) -> kind in hidden }
+        if (wanted.isEmpty()) return flowOf(emptyList())
+
+        return combine(wanted.map { it.second }) { results ->
             // Every one of these lists is keyed by id in Compose, where a duplicate key
             // is a crash rather than a cosmetic glitch — the same fan-out that once
             // crashed the continue-listening row (see ContinueListeningTest).
-            sources.mapIndexed { index, (kind, _) -> Shelf(kind, results[index].toItems()) }
+            wanted.mapIndexed { index, (kind, _) -> Shelf(kind, results[index].toItems()) }
                 .filter { it.items.isNotEmpty() }
         }
     }

@@ -39,6 +39,10 @@ data class EpisodeRow(
     val progressFraction: Float
         get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
 
+    /** Finished is a flag of its own, not "near enough to the end": the two disagree often. */
+    val isFinished: Boolean
+        get() = progress?.isFinished == true
+
     /**
      * The row as the shared sort and filter see it.
      *
@@ -53,7 +57,7 @@ data class EpisodeRow(
             publishedAtMs = episode.publishedAtMs,
             durationSec = episode.durationSec,
             progressFraction = progressFraction,
-            isFinished = progress?.isFinished == true,
+            isFinished = isFinished,
             isDownloaded = download?.isComplete == true,
         )
 }
@@ -107,6 +111,8 @@ data class ItemDetailUiState(
     val selectedIds: Set<String> = emptySet(),
     val progressFraction: Float = 0f,
     val positionSec: Double = 0.0,
+    /** The book's own finished flag; a podcast's lives on each episode row instead. */
+    val isFinished: Boolean = false,
     val coverUrl: String? = null,
     /** The item-level download; podcasts carry theirs per episode instead. */
     val download: DownloadStatus? = null,
@@ -160,6 +166,7 @@ class ItemDetailViewModel @Inject constructor(
                         },
                         progressFraction = itemProgress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f,
                         positionSec = itemProgress?.currentTimeSec ?: 0.0,
+                        isFinished = itemProgress?.isFinished == true,
                         coverUrl = "${current.baseUrl}/api/items/$itemId/cover?width=600",
                         download = downloadsByEpisode[""],
                         message = note,
@@ -269,6 +276,60 @@ class ItemDetailViewModel @Inject constructor(
             val current = authRepository.account() ?: return@launch
             queueRepository.addLast(current, itemId, episodeId)
             message.value = "Added to the queue"
+        }
+    }
+
+    /**
+     * Marks a book or one episode finished, or takes the mark off again.
+     *
+     * The duration is handed over as a fallback because a book nobody has opened has no
+     * progress row to take one from, and a finished book with no duration is a hundred per
+     * cent of nothing — the shelves and the filters would both disbelieve it.
+     *
+     * Un-finishing also puts the position back to the start, which is what the server's own
+     * web client does. Worth knowing before pressing it: someone who un-finishes a book to
+     * get it back into their in-progress list loses their place in it.
+     */
+    fun setFinished(isFinished: Boolean, episodeId: String? = null) {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            val duration = if (episodeId == null) {
+                state.value.item?.durationSec ?: 0.0
+            } else {
+                state.value.episodes.firstOrNull { it.episode.id == episodeId }?.episode?.durationSec ?: 0.0
+            }
+            progressRepository.setFinished(current, itemId, episodeId, isFinished, duration)
+            message.value = if (isFinished) "Marked as finished" else "Marked as not finished"
+        }
+    }
+
+    /**
+     * The same, for everything picked.
+     *
+     * One direction for the whole selection rather than a toggle per row: a batch that
+     * finished some rows and un-finished others would depend on state nobody can see from
+     * the bar, and could not be undone by pressing it again.
+     */
+    fun setSelectedFinished(isFinished: Boolean) {
+        val chosen = selectedRows()
+        if (chosen.isEmpty()) return
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            chosen.forEach {
+                progressRepository.setFinished(
+                    current,
+                    itemId,
+                    it.episode.id,
+                    isFinished,
+                    it.episode.durationSec,
+                )
+            }
+            message.value = if (isFinished) {
+                "Marked ${countOf(chosen.size)} as finished"
+            } else {
+                "Marked ${countOf(chosen.size)} as not finished"
+            }
+            clearSelection()
         }
     }
 

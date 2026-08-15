@@ -3,8 +3,8 @@
 A native Android client for [Audiobookshelf](https://www.audiobookshelf.org/).
 
 **Pre-alpha.** Sign in, browse and search your libraries, play books and podcast
-episodes, keep your position, and download for offline listening. Everything else in
-[docs/PLAN.md](docs/PLAN.md) is still ahead.
+episodes, keep your position, queue what is next, download for offline listening, and
+take it into the car. The rest of [docs/PLAN.md](docs/PLAN.md) is still ahead.
 
 *lugu* is Estonian for "story".
 
@@ -38,8 +38,24 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
 - **Downloads and offline playback.** A downloaded book opens no server session at all —
   the URLs, track offsets and chapters are on the phone, so it plays in airplane mode
   and the listening replays to the server when there is a connection again
-- Configurable transport: skip durations, which buttons appear in the player and the
-  notification, speed presets, speed remembered per book and per podcast
+- **Downloading ahead**, all off by default: what is queued, the next books in a series
+  you are reading, the latest episodes of a podcast you are listening to — on unmetered
+  networks only, because lugu deciding on its own to spend mobile data is not a thing it
+  should ever do
+- **A play queue**, with play-next, drag to reorder, and automatic continuation into the
+  next book in a series or the next podcast episode
+- **Android Auto**: a browse tree served from the local database, so it works before the
+  phone app has been opened, plus voice search and chapter and speed controls in the car
+- **Bookmarks**, synced to the server and written locally first, so one made in a tunnel
+  is still a bookmark
+- **Author, series and narrator pages**, computed locally — the server has no API that
+  hands a client either of the first two
+- Chapter list, silence skipping, volume boost, a sleep timer that fades out, rewinds
+  when you come back and can be extended with a shake
+- Configurable transport: skip durations, which buttons appear where and **in what
+  order**, what a headset's next and previous buttons do, speed presets, speed remembered
+  per book and per podcast
+- Search, sort, filter and multi-select on every long list
 - Searchable settings
 - Position kept on every pause, seek, track change and five-second tick; playback
   resumption after process death rebuilds from the database
@@ -48,13 +64,18 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
 - Durable outbox: progress changes are written locally first and drained by WorkManager
   with backoff, so being offline loses nothing
 - Every large position change is recorded, so an accidental jump can always be undone
+- **A local record of why playback stopped** — see Privacy below
 
 ## Not yet
 
-Auto-download rules, Android Auto, queue and auto-continuation, bookmarks, Chromecast,
-widgets, author and series pages. [docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) has
-the order these land in, and [docs/BACKLOG.md](docs/BACKLOG.md) lists everything
-knowingly unfinished, with the reason.
+Chromecast, widgets, Wear OS, Android TV, OIDC sign-in, multi-server, custom HTTP headers
+for reverse proxies, and live updates over Socket.IO — an edit made on the web currently
+takes until the next sync to appear.
+
+[docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) has the order these land in, and
+[docs/BACKLOG.md](docs/BACKLOG.md) lists everything knowingly unfinished, with the
+reason — including what has been built but never yet run on real hardware, which is not
+the same as done.
 
 ## Install
 

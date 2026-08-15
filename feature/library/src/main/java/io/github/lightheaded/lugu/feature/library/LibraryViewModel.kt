@@ -17,8 +17,10 @@ import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
+import io.github.lightheaded.lugu.core.sync.QueueRepository
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +50,10 @@ data class LibraryUiState(
     val isSyncing: Boolean = false,
     val syncMessage: String? = null,
     val error: String? = null,
+    val selectionActive: Boolean = false,
+    val selectedIds: Set<String> = emptySet(),
+    /** What a batch action just did, since none of them change the grid visibly. */
+    val message: String? = null,
 )
 
 /**
@@ -65,6 +71,7 @@ class LibraryViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
     private val downloadRepository: DownloadRepository,
+    private val queueRepository: QueueRepository,
     private val libraryPrefs: LibraryPrefs,
 ) : ViewModel() {
 
@@ -72,6 +79,12 @@ class LibraryViewModel @Inject constructor(
     private val syncing = MutableStateFlow(false)
     private val syncMessage = MutableStateFlow<String?>(null)
     private val error = MutableStateFlow<String?>(null)
+    private val message = MutableStateFlow<String?>(null)
+
+    // The same reducer the episode list uses. Selection is a property of a list rather than
+    // of a screen, and a second implementation here is how two lists end up disagreeing
+    // about what select-all means.
+    private val selection = MutableStateFlow(Selection())
 
     private val account: StateFlow<ActiveAccount?> =
         authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -127,6 +140,21 @@ class LibraryViewModel @Inject constructor(
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * Everything the grid shows that is not the grid.
+     *
+     * Nested one level deeper than the rest because `combine` tops out at five typed flows
+     * and there are seven of these. The nesting expresses that limit, not a grouping worth
+     * reading anything into.
+     */
+    private val extras: Flow<Extras> = combine(
+        combine(query, syncing, syncMessage, error) { text, isSyncing, syncNote, err ->
+            Extras(text, isSyncing, syncNote, err)
+        },
+        message,
+        selection,
+    ) { base, note, picked -> base.copy(note = note, selection = picked) }
+
     val state: StateFlow<LibraryUiState> = combine(
         libraries,
         selectedLibraryId,
@@ -134,28 +162,31 @@ class LibraryViewModel @Inject constructor(
         combine(progressByKey, downloadedItemIds, settings) { progress, downloaded, prefs ->
             Shaping(progress, downloaded, prefs.itemSort, prefs.itemFilter)
         },
-        combine(query, syncing, syncMessage, error) { text, isSyncing, message, err ->
-            Extras(text, isSyncing, message, err)
-        },
+        extras,
     ) { libs, selected, itemList, shaping, extras ->
         val rows = itemList.map { LibraryRow(it, shaping.progress["${it.id}#"]) }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
         val facts = rows.associate { it.item.id to it.facts(it.item.id in shaping.downloaded) }
+        val visible = ListControls.sortItems(
+            rows.filter { ListControls.matches(facts.getValue(it.item.id), shaping.filter) },
+            shaping.sort,
+        ) { facts.getValue(it.item.id) }
+        val onScreen = extras.selection.retaining(visible.map { it.item.id })
 
         LibraryUiState(
             libraries = libs,
             selectedLibraryId = selected,
-            items = ListControls.sortItems(
-                rows.filter { ListControls.matches(facts.getValue(it.item.id), shaping.filter) },
-                shaping.sort,
-            ) { facts.getValue(it.item.id) },
+            items = visible,
             query = extras.query,
             sort = shaping.sort,
             filter = shaping.filter,
             isSyncing = extras.isSyncing,
-            syncMessage = extras.message,
+            syncMessage = extras.syncMessage,
             error = extras.error,
+            selectionActive = onScreen.active,
+            selectedIds = onScreen.ids,
+            message = extras.note,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
@@ -169,8 +200,10 @@ class LibraryViewModel @Inject constructor(
     private data class Extras(
         val query: String,
         val isSyncing: Boolean,
-        val message: String?,
+        val syncMessage: String?,
         val error: String?,
+        val note: String? = null,
+        val selection: Selection = Selection(),
     )
 
     init {
@@ -208,6 +241,92 @@ class LibraryViewModel @Inject constructor(
     fun setFilter(filter: ListFilter) {
         viewModelScope.launch { libraryPrefs.setItemFilter(filter) }
     }
+
+    fun toggleSelection(itemId: String) {
+        selection.value = selection.value.toggle(itemId)
+    }
+
+    fun selectAllVisible() {
+        selection.value = selection.value.selectAll(state.value.items.map { it.item.id })
+    }
+
+    fun clearSelection() {
+        selection.value = selection.value.cleared()
+    }
+
+    fun dismissMessage() {
+        message.value = null
+    }
+
+    /**
+     * The point of picking eight books is not pressing download eight times.
+     *
+     * Only the first refusal is reported. The storage cap is the usual reason a batch
+     * stops, and once it is reached every remaining book gives the same answer — eight
+     * identical messages say nothing the first one did not.
+     */
+    fun downloadSelected() {
+        val chosen = selectedRows()
+        if (chosen.isEmpty()) return
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            var refusal: String? = null
+            chosen.forEach { row ->
+                downloadRepository.download(current, row.item.id, null)
+                    .onFailure { failure -> refusal = refusal ?: failure.message }
+            }
+            message.value = refusal ?: "Downloading ${countOf(chosen.size)}"
+            clearSelection()
+        }
+    }
+
+    fun addSelectedToQueue() {
+        val chosen = selectedRows()
+        if (chosen.isEmpty()) return
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            chosen.forEach { queueRepository.addLast(current, it.item.id, null) }
+            message.value = "Added ${countOf(chosen.size)} to the queue"
+            clearSelection()
+        }
+    }
+
+    /**
+     * Marks the selection finished, or takes the mark off again.
+     *
+     * Un-finishing resets the position to the start rather than leaving it at the end,
+     * which is what the server's own web client does: "not finished" there means the book
+     * is waiting to be listened to, not parked one second from the last page.
+     *
+     * The item's own duration is the fallback because a book nobody has opened has no
+     * progress row to read one from, and a finished position of zero seconds would sync a
+     * completion the server then computes as nought per cent.
+     */
+    fun setSelectedFinished(isFinished: Boolean) {
+        val chosen = selectedRows()
+        if (chosen.isEmpty()) return
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            chosen.forEach { row ->
+                progressRepository.setFinished(
+                    account = current,
+                    itemId = row.item.id,
+                    episodeId = null,
+                    isFinished = isFinished,
+                    fallbackDurationSec = row.item.durationSec,
+                )
+            }
+            val verb = if (isFinished) "Marked" else "Unmarked"
+            message.value = "$verb ${countOf(chosen.size)}"
+            clearSelection()
+        }
+    }
+
+    /** Read from the visible list, so a filtered-out row can never be acted on unseen. */
+    private fun selectedRows(): List<LibraryRow> =
+        state.value.items.filter { it.item.id in state.value.selectedIds }
+
+    private fun countOf(size: Int): String = if (size == 1) "1 item" else "$size items"
 
     /**
      * Re-mirrors from the server. The UI never waits on this: everything on screen is
