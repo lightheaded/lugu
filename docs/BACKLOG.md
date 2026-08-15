@@ -18,25 +18,18 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | **Configurable headphone/headset buttons** | The classification logic exists (`MediaButtonClassifier`) but is not surfaced as choices. Needs a mapping of button gesture → action, and the classifier reading it |
 | **Notification button icons and ordering** | The two side buttons now *do* the configured skip, but still carry previous/next icons, and their order is Media3's. Both need custom layouts (`CommandButton` + `setCustomLayout` + `onCustomCommand`) — the default provider builds previous / play-pause / next and offers no seek button to select |
 | **Author / series / narrator links** | Those pages still do not exist, and linking to a dead end is worse than not linking. M2 got halfway: `seriesTitle` and `seriesSequence` are parsed and stored, so a series page now has something to render. Author and narrator have no equivalent yet |
-| **Multi-select in every list** | Every action is one row at a time, so downloading eight episodes is eight trips through the same menu. Wants a selection mode shared by the episode list, the library grid and the queue — decided once, or it gets built three times. See [FEEDBACK.md](FEEDBACK.md#shape-of-the-app--home-libraries-and-what-belongs-where) |
-| **Episode rows carry no date or number** | Title and duration only, which is not enough to pick an episode. Wants the publication date and the season/episode number where the feed has them. `season`, `episodeNumber` and `publishedAtMs` are already mirrored into Room and reach the screen — the row just does not draw them, so this is rendering, not plumbing. Applies to the car's episode list too |
-| **Sort, filter and search in every list** | The episode list has no search, no filter, no sort and no paging, and renders every episode the server has — unusable on a podcast with a thousand. FTS already indexes episode titles and the plan's filter/sort UI was written for the grid; it should be one control used in both |
-| **A Home separate from the library** | One screen does two jobs: shelves answer "what now", the grid answers "show me everything". They want to be separate destinations, with media types as tabs rather than chips sharing a screen with shelves that ignore them |
-| **Shelves ignore the selected library** | Not a matter of taste — a real bug. The grid is scoped by `observeItems(account, libraryId)`, but `observeShelves(account)` and every shelf query filter on `serverId`/`userId` only, so podcasts sit on the shelves above a grid filtered to audiobooks. Whether shelves *should* span libraries is a real question; it has to be decided and shown, not left as an accident of two queries |
-| **No way to switch off a media type** | Someone who never uses podcasts should not see them. A setting, reaching the tabs, the shelves, search and the car's browse tree — which currently offers a Podcasts node to anyone with a podcast library |
+| **Selection mode does not reach the library grid** | The episode list, the queue and the downloads screen share one selection mode; the grid does not have it yet, and "mark finished" is the action still missing from all of them (upstream app#1297) |
+| **The grid still shows no progress for a podcast** | Home falls back to the most recent episode's progress; the grid does not. A cover reading "60%" for a whole feed is arguably worse than none, so this is a decision to take rather than an oversight to fix |
+| **Sort and filter on the downloads screen are not remembered** | `LibraryPrefs` has keys for the grid and the episode list only, and reusing either would tie two unrelated screens together |
 
 ## Player and playback — M1 remainder
 
 | Item | Note |
 |---|---|
-| Bookmarks | Server-synced; display must be speed-corrected |
-| Silence skipping | `SilenceSkippingAudioProcessor` in the pipeline, with a toggle |
-| Volume boost | Loudness enhancer for quiet recordings |
-| Bluetooth-disconnect pause | Pause rather than duck, with per-device-class resume (car vs headphones — official app #612) |
-| Chapter list UI | Prev/next and the current-chapter readout are done; there is no list to jump directly to a chapter |
-| Sleep timer options in settings | Fade duration, shake-to-extend and its sensitivity, and rewind-on-wake are all designed but neither exposed nor implemented in the UI |
 | Notification custom seek actions | Ties in with the ordering item above |
 | Physical headset and car test matrix | The AVRCP thresholds are user-tunable by design as an escape hatch; the matrix doc does not exist |
+| Bookmarks on a podcast episode | Audiobookshelf addresses a bookmark by library item alone, so there is nowhere to put an episode's. Local-only bookmarks would be bookmarks that vanish on a new phone (server #884 asks for the same thing) |
+| Configurable rewind-after-pause curve | Smart rewind scales with time away, which is the right shape; the thresholds are not adjustable. Upstream app#205, 20 comments of people disagreeing about the right number — which is itself the argument for making it a setting |
 
 ## M0 gaps still open
 
@@ -52,9 +45,8 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 |---|---|
 | **Offline playback has not been proven on hardware** | Downloading has now moved real bytes — a 629 MB book, downloaded and ready to play, 15 Aug. What is still untested is the other half: going offline for long enough to matter and confirming nothing is lost, and that the session replays on reconnect. Until then, "a week in airplane mode loses nothing" is a claim, not a result |
 | **Transcoded (HLS) downloads** | A download assumes direct play — one file per track. An item the server will only transcode has no stable file URL to cache, so it cannot be downloaded at all yet, and nothing says so in the UI |
-| **"Remove finished downloads" is ambiguous** | Reads as *finished downloading*. Should say it means books listened to the end, and spell out "After a week" rather than "After 7d" |
-| **Tapping an episode opens the player still showing Play** | Playback does not start on the tap, so the button invites a press that arrives mid-load and cancels it. Should start playback on the tap, with an optimistic Pause covering whatever delay remains. See [FEEDBACK.md](FEEDBACK.md#starting-playback) |
 | **Storage cap is checked, not enforced mid-download** | The estimate is charged against the cap before a download starts. A book much larger than its reported size can still overshoot; nothing aborts a download in flight |
+| **A streamed listen does not fill the download cache** | Streaming and downloading already share one cache, but a book listened to over the network is not retained, so listening ahead does not pre-warm anything. Upstream calls the split between the two concepts the root cause of much of its download trouble (app#1371) |
 | **Cache and Room can drift** | The cache is the truth about bytes and Room is the truth about state. `reconcile()` on start repairs the common case, but bytes evicted by the system outside the app would leave a row claiming "completed" |
 | **No download progress in a notification per item** | One foreground notification covers all downloads. Fine for a few, vague for a queue of ten |
 
@@ -68,6 +60,18 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | **New-episode detection needs one quiet pass to arm itself** | New is decided by comparing episode ids before and after a refresh, so the first refresh of any podcast establishes the baseline and reports nothing. Correct, but it means the feature looks broken for six hours after being switched on |
 | **Continuation cannot be undone** | If lugu starts the next book on its own, the notice says so and the transport can stop it, but there is no "no, go back" that also removes it from history. Probably wants the same treatment as the jump undo |
 
+## Why playback stops — open
+
+Reported 15 August. The record now exists; the cause does not.
+
+| Item | Note |
+|---|---|
+| **The root cause is still unknown** | Every candidate — the process being reclaimed, audio focus lost, an unsuitable output after a Bluetooth switch, a network stall leaving the player idle, a crash — looks identical from outside. The diary distinguishes them, so the next step is to read it after it happens rather than to guess and ship |
+| **The record has never been read in anger** | Written and unit-tested, but no real stop has been diagnosed with it yet. Until one has, it is a tool that has not been used, not a tool that works |
+| **A paused notification may still vanish** | Media3 leaves the foreground state when playback pauses, and Android may then reclaim the notification. Upstream has this open twice (app#1800, app#1571): resuming means reopening the app. Not yet observed here, and worth watching for in the diary before changing anything |
+| **A car that neither projects nor sets car mode reads as headphones** | Telling a car from headphones properly needs `BluetoothClass`, which needs `BLUETOOTH_CONNECT` on Android 12+ — a runtime permission prompt for a resume rule. The current answer infers it from the connected car-projection controller or `UiModeManager`, which covers Android Auto and misses a plain Bluetooth car stereo. Only affects which *resume* switch applies; pausing is unaffected |
+| **The foreground-service refusal is recorded, not handled** | `onForegroundServiceStartNotAllowedException` writes a diary line. What it should *do* — retry, or fall back to a plain notification — depends on when it actually happens, which is not yet known |
+
 ## Known behaviour gaps
 
 | Item | Note |
@@ -80,7 +84,8 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 
 | Item | Note |
 |---|---|
-| **R8 / minification off for release builds** | Media3, Room and Hilt keep-rules are unproven here. Turning it on needs a real regression pass, since the failure mode is a runtime crash in a shipped build |
+| **R8 is on, and has never run on a device** | Turned on 15 August with hand-written keep rules for Media3, Room, Hilt, kotlinx-serialization, Ktor, OkHttp, Coil and Sentry. A clean `assembleRelease` proves only that nothing is missing at compile time — every path R8 can break fails at runtime and only in a release build. **A device pass on a release APK is owed before the next release is treated as trustworthy**: sign in, play a streamed book, play a downloaded one, open Android Auto, and change a setting |
+| **Release stack traces are obfuscated with nowhere to send the mapping** | R8 renames everything, so a crash report from a release build is unreadable until `mapping.txt` reaches Sentry. The Gradle plugin does this but fails the build without an auth token. Either gate the plugin on the token in CI, or attach `mapping.txt` to the GitHub release and retrace by hand |
 | `:core:queue` and `:core:testing` modules not created | M3 shipped the queue without either. `QueueRepository` lives in `:core:sync` with the other repositories, its DAO in `:core:db` with the other DAOs; a module holding one repository that depends on `:core:sync` anyway would be structure without substance. `QueueEntity` was already in schema v1, so the plan's real requirement — no migration for M3 — held |
 | Speed formatting duplicated | `trimSpeed` in `:feature:player` and `formatSpeed` in `:feature:settings` do the same job. Wants one shared formatter, probably in `:core:model` alongside the other display helpers |
 | `EncryptedSharedPreferences` / `MasterKey` deprecated | Still the practical option for encrypted token storage on Android; needs a replacement decision, not just a version bump |

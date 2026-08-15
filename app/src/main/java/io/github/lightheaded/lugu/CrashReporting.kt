@@ -4,9 +4,14 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.sync.CrashReportingDecision
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
+import io.github.lightheaded.lugu.core.sync.PlaybackDiary
+import io.sentry.Breadcrumb
 import io.sentry.Sentry
+import io.sentry.SentryEvent
+import io.sentry.SentryLevel
 import io.sentry.SentryOptions
 import io.sentry.android.core.SentryAndroid
+import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +31,7 @@ import javax.inject.Singleton
 class CrashReporting @Inject constructor(
     @ApplicationContext private val context: Context,
     private val prefs: CrashReportingPrefs,
+    private val diary: PlaybackDiary,
 ) {
     private var started = false
 
@@ -62,6 +68,7 @@ class CrashReporting @Inject constructor(
                 if (event.isCrashed) {
                     runCatching { prefs.recordCrash(event.eventId.toString()) }
                 }
+                runCatching { attachPlaybackRecord(event) }
                 event
             }
         }
@@ -70,4 +77,67 @@ class CrashReporting @Inject constructor(
     private fun stop() {
         Sentry.close()
     }
+
+    /**
+     * Rides the playback record along with an event that was already going.
+     *
+     * A crash in an audio app is nearly always the end of a sequence — buffering, an
+     * output change, a suppression, then the fall over — and a stack trace with no
+     * sequence in front of it is a puzzle rather than a report. Attached here in
+     * `beforeSend` rather than pushed into the Sentry scope as playback happens, for two
+     * reasons: it runs only when something is genuinely being sent, so the diary never
+     * touches the player's hot path; and it cannot fire on its own, because there is no
+     * path from the diary to the network that does not start with an event.
+     *
+     * It runs at all only when the SDK has been initialised, which happens only after
+     * consent, so no separate check is needed here.
+     */
+    private fun attachPlaybackRecord(event: SentryEvent) {
+        for (entry in diary.entries.value.takeLast(BREADCRUMB_LIMIT)) {
+            event.addBreadcrumb(
+                Breadcrumb(Date(entry.atMs)).apply {
+                    category = "playback"
+                    level = SentryLevel.INFO
+                    message = Redaction.scrub(
+                        if (entry.detail.isNullOrBlank()) {
+                            entry.event
+                        } else {
+                            "${entry.event} — ${entry.detail}"
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    private companion object {
+        /**
+         * Enough to cover the run-up to a crash without pushing Sentry's own breadcrumbs
+         * out of the report; the SDK trims the list at 100 by default.
+         */
+        const val BREADCRUMB_LIMIT = 50
+    }
+}
+
+/**
+ * The last thing every outgoing string passes through.
+ *
+ * lugu talks to a server whose address is the user's own — often a hostname that says
+ * where they live or who they work for — and reaches it with a token in a query string.
+ * Neither belongs in a crash report or a piece of feedback, and neither is something a
+ * person can be expected to spot while reading a diagnostic dump. Nothing here is written
+ * expecting to carry a URL; this exists so that a line added carelessly somewhere else
+ * cannot turn into a leak.
+ *
+ * It lives beside the reporter deliberately: the rules about what may leave the device
+ * should be readable in one file.
+ */
+object Redaction {
+
+    /** Replaces any URL with a placeholder, keeping the scheme so the line still reads. */
+    fun scrub(text: String): String = URL.replace(text) { match ->
+        "${match.groupValues[1]}://<server>"
+    }
+
+    private val URL = Regex("""\b(https?)://\S+""", RegexOption.IGNORE_CASE)
 }

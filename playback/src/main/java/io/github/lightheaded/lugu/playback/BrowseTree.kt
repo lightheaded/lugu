@@ -12,8 +12,11 @@ import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.LibraryItemEntity
 import io.github.lightheaded.lugu.core.db.QueueDao
 import io.github.lightheaded.lugu.core.model.FtsQuery
+import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.LibraryPrefs
+import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
@@ -29,6 +32,11 @@ import kotlinx.coroutines.flow.first
  * The shape is shallow on purpose. Driving attention is measured in glances, so the top
  * level answers "carry on with what I was doing" — Continue, Up next, Downloaded —
  * before it offers anything that has to be browsed.
+ *
+ * Hidden media types are honoured on every node and in search. Someone who has switched
+ * podcasts off has said they do not want them in lugu, not that they do not want them on
+ * the phone; a car that still offered them would be the one surface where the setting did
+ * not apply, and the car is the surface where an unwanted row costs the most attention.
  */
 @Singleton
 class BrowseTree @Inject constructor(
@@ -38,6 +46,7 @@ class BrowseTree @Inject constructor(
     private val libraryDao: LibraryDao,
     private val queueDao: QueueDao,
     private val downloadDao: DownloadDao,
+    private val libraryPrefs: LibraryPrefs,
 ) {
     /**
      * The root, which must exist even when signed out.
@@ -55,24 +64,29 @@ class BrowseTree @Inject constructor(
         )
         val server = account.serverId
         val user = account.userId
+        val library = libraryPrefs.settings.first()
 
         return when (val node = BrowseNode.parse(parentId)) {
-            BrowseNode.Root -> rootChildren(account)
+            BrowseNode.Root -> rootChildren(account, library)
 
             BrowseNode.Continue -> itemDao.observeContinueListening(server, user).first()
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
                 .map { it.toMediaItem(account) }
 
-            BrowseNode.UpNext -> queueDao.observeRows(server, user).first().map { row ->
-                playable(
-                    node = BrowseNode.Playable(row.libraryItemId, row.episodeKey.ifEmpty { null }),
-                    title = row.title.ifBlank { "Not in this library any more" },
-                    subtitle = row.author,
-                    coverUrl = coverUrl(account, row.libraryItemId),
-                )
-            }
+            BrowseNode.UpNext -> queueDao.observeRows(server, user).first()
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
+                .map { row ->
+                    playable(
+                        node = BrowseNode.Playable(row.libraryItemId, row.episodeKey.ifEmpty { null }),
+                        title = row.title.ifBlank { "Not in this library any more" },
+                        subtitle = row.author,
+                        coverUrl = coverUrl(account, row.libraryItemId),
+                    )
+                }
 
             BrowseNode.Downloaded -> downloadDao.observeAll(server, user).first()
                 .filter { it.state == DownloadState.COMPLETED }
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
                 .map {
                     playable(
                         node = BrowseNode.Playable(it.libraryItemId, it.episodeKey.ifEmpty { null }),
@@ -82,21 +96,39 @@ class BrowseTree @Inject constructor(
                     )
                 }
 
-            BrowseNode.AllSeries -> itemDao.seriesTitles(server, user)
-                .map { browsable(BrowseNode.Series(it), it) }
+            // A series is a book idea, so the whole node goes with books.
+            BrowseNode.AllSeries -> if (!library.isVisible(MediaType.BOOK)) {
+                emptyList()
+            } else {
+                itemDao.seriesTitles(server, user).map { browsable(BrowseNode.Series(it), it) }
+            }
 
-            BrowseNode.AllPodcasts -> itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE)
-                .map { browsable(BrowseNode.Podcast(it.id), it.title, coverUrl(account, it.id)) }
+            // A car keeps ids across sessions, so a node hidden since it was last browsed
+            // can still be asked for by id. Answering with nothing is the honest reply.
+            BrowseNode.AllPodcasts -> if (!library.isVisible(MediaType.PODCAST)) {
+                emptyList()
+            } else {
+                itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE)
+                    .map { browsable(BrowseNode.Podcast(it.id), it.title, coverUrl(account, it.id)) }
+            }
 
             BrowseNode.Libraries -> libraryDao.observeAll(server, user).first()
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
                 .map { browsable(BrowseNode.Library(it.id), it.name) }
 
-            is BrowseNode.Series -> itemDao.bySeries(server, user, node.title).map { it.toMediaItem(account) }
+            is BrowseNode.Series -> itemDao.bySeries(server, user, node.title)
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
+                .map { it.toMediaItem(account) }
 
-            is BrowseNode.Podcast -> episodeDao.observeForItem(server, user, node.itemId).first()
-                .map { it.toMediaItem(node.itemId, account) }
+            is BrowseNode.Podcast -> if (!library.isVisible(MediaType.PODCAST)) {
+                emptyList()
+            } else {
+                episodeDao.observeForItem(server, user, node.itemId).first()
+                    .map { it.toMediaItem(node.itemId, account) }
+            }
 
             is BrowseNode.Library -> itemDao.byLibrary(server, user, node.libraryId)
+                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
                 .map { it.toMediaItem(account) }
 
             // A leaf has no children, and an id we do not recognise gets an empty list
@@ -113,24 +145,37 @@ class BrowseTree @Inject constructor(
      */
     suspend fun search(query: String): List<MediaItem> {
         val account = authRepository.account() ?: return emptyList()
+        val library = libraryPrefs.settings.first()
         val match = FtsQuery.toMatchExpression(query)
         val rows = if (match != null) {
             itemDao.searchEverywhere(account.serverId, account.userId, match, SEARCH_LIMIT)
         } else {
             itemDao.searchEverywhereLike(account.serverId, account.userId, query, SEARCH_LIMIT)
         }
-        return rows.map { it.toMediaItem(account) }
+        // Spoken search is the one path that can reach an item without passing a node, so
+        // filtering here is what stops "play me a podcast" working after podcasts were
+        // switched off.
+        return rows
+            .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
+            .map { it.toMediaItem(account) }
     }
 
     /** One node by id, for a controller that asks about a node rather than browsing to it. */
     suspend fun item(mediaId: String): MediaItem? {
         val account = authRepository.account() ?: return null
+        val library = libraryPrefs.settings.first()
         return when (val node = BrowseNode.parse(mediaId)) {
             is BrowseNode.Playable -> if (node.episodeId != null) {
-                episodeDao.byId(account.serverId, account.userId, node.episodeId)
-                    ?.toMediaItem(node.itemId, account)
+                if (!library.isVisible(MediaType.PODCAST)) {
+                    null
+                } else {
+                    episodeDao.byId(account.serverId, account.userId, node.episodeId)
+                        ?.toMediaItem(node.itemId, account)
+                }
             } else {
-                itemDao.byId(account.serverId, account.userId, node.itemId)?.toMediaItem(account)
+                itemDao.byId(account.serverId, account.userId, node.itemId)
+                    ?.takeIf { library.isVisible(mediaTypeOf(it.mediaType)) }
+                    ?.toMediaItem(account)
             }
 
             BrowseNode.Unknown -> null
@@ -138,18 +183,20 @@ class BrowseTree @Inject constructor(
         }
     }
 
-    private suspend fun rootChildren(account: ActiveAccount): List<MediaItem> {
+    private suspend fun rootChildren(account: ActiveAccount, library: LibrarySettings): List<MediaItem> {
         val server = account.serverId
         val user = account.userId
 
         // A category that opens onto nothing is worse in a car than one that is not
         // there, so each is offered only if it has something in it. Continue and
         // Libraries always appear: between them they are the way back to everything.
-        val hasQueue = queueDao.all(server, user).isNotEmpty()
+        val hasQueue = queueDao.observeRows(server, user).first()
+            .any { library.isVisible(mediaTypeOf(it.mediaType)) }
         val hasDownloads = downloadDao.observeAll(server, user).first()
-            .any { it.state == DownloadState.COMPLETED }
-        val hasSeries = itemDao.seriesTitles(server, user).isNotEmpty()
-        val hasPodcasts = itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE, limit = 1).isNotEmpty()
+            .any { it.state == DownloadState.COMPLETED && library.isVisible(mediaTypeOf(it.mediaType)) }
+        val hasSeries = library.isVisible(MediaType.BOOK) && itemDao.seriesTitles(server, user).isNotEmpty()
+        val hasPodcasts = library.isVisible(MediaType.PODCAST) &&
+            itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE, limit = 1).isNotEmpty()
 
         return buildList {
             add(browsable(BrowseNode.Continue, "Continue"))
@@ -160,6 +207,14 @@ class BrowseTree @Inject constructor(
             add(browsable(BrowseNode.Libraries, "Libraries"))
         }
     }
+
+    /**
+     * The stored media type as the settings understand it.
+     *
+     * Anything unrecognised reads as a book, which is what `MediaType.fromWire` does
+     * everywhere else — a row with an odd type is still a row worth showing.
+     */
+    private fun mediaTypeOf(stored: String): MediaType = MediaType.fromWire(stored)
 
     private fun LibraryItemEntity.toMediaItem(account: ActiveAccount): MediaItem = playable(
         node = BrowseNode.Playable(id, null),

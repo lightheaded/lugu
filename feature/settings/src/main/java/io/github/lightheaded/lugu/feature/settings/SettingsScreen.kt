@@ -37,8 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.model.MediaType
+import io.github.lightheaded.lugu.core.sync.AudioSettings
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.SleepSettings
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 
@@ -59,10 +62,19 @@ fun SettingsScreen(
     onSignedOut: () -> Unit,
     onOpenLicenses: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenPlaybackRecord: () -> Unit = {},
+    onOpenFeedback: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val entries = settingEntries(state, viewModel, onSignedOut, onOpenLicenses)
+    val entries = settingEntries(
+        state = state,
+        viewModel = viewModel,
+        onSignedOut = onSignedOut,
+        onOpenLicenses = onOpenLicenses,
+        onOpenPlaybackRecord = onOpenPlaybackRecord,
+        onOpenFeedback = onOpenFeedback,
+    )
     val visible = SettingsIndex.filter(entries, state.query)
 
     Scaffold(
@@ -131,10 +143,13 @@ private fun settingEntries(
     viewModel: SettingsViewModel,
     onSignedOut: () -> Unit,
     onOpenLicenses: () -> Unit,
+    onOpenPlaybackRecord: () -> Unit,
+    onOpenFeedback: () -> Unit,
 ): List<SettingEntry> {
     val settings = state.settings
     val downloads = state.downloads
     val queue = state.queue
+    val library = state.library
 
     return buildList {
         add(
@@ -313,6 +328,205 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "skip-silence",
+                category = "Sound",
+                title = "Skip silence",
+                keywords = "silence gaps pauses trim shorten faster podcast dead air",
+            ) {
+                SwitchRow(
+                    title = "Skip silence",
+                    subtitle = "Shortens long gaps. Saves real time on a badly mastered " +
+                        "recording, and clips pauses a narrator meant to be there.",
+                    checked = settings.audio.skipSilence,
+                    onChange = viewModel::setSkipSilence,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "volume-boost",
+                category = "Sound",
+                title = "Volume boost",
+                keywords = "volume loud quiet gain boost car bluetooth headphones louder amplify",
+            ) {
+                ChoiceRow(
+                    title = "Volume boost",
+                    subtitle = "For quiet recordings. Past a point this is distortion rather " +
+                        "than volume, so the range is deliberately short.",
+                    options = AudioSettings.BOOST_CHOICES_DB,
+                    selected = settings.audio.volumeBoostDb,
+                    format = { if (it == 0) "Off" else "+${it} dB" },
+                    onSelect = viewModel::setVolumeBoostDb,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "sleep-fade",
+                category = "Sleep timer",
+                title = "Fade out before stopping",
+                keywords = "sleep timer fade volume gentle wake stop night bed",
+            ) {
+                ChoiceRow(
+                    title = "Fade out before stopping",
+                    subtitle = "Stopping dead wakes people up, which rather defeats the point",
+                    options = SleepSettings.FADE_CHOICES,
+                    selected = settings.sleep.fadeSeconds,
+                    format = { if (it == 0) "No fade" else "${it}s" },
+                    onSelect = viewModel::setSleepFadeSeconds,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "sleep-rewind",
+                category = "Sleep timer",
+                title = "Rewind when you come back",
+                keywords = "sleep timer rewind back missed asleep resume night",
+            ) {
+                ChoiceRow(
+                    title = "Rewind when you come back",
+                    subtitle = "Whatever played in the last minutes before sleep was not " +
+                        "really heard",
+                    options = SleepSettings.REWIND_CHOICES,
+                    selected = settings.sleep.rewindOnWakeSec,
+                    format = { if (it == 0) "Off" else "${it}s" },
+                    onSelect = viewModel::setRewindOnWakeSec,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "sleep-shake",
+                category = "Sleep timer",
+                title = "Shake to add more time",
+                keywords = "sleep timer shake extend accelerometer motion dark night more",
+            ) {
+                SwitchRow(
+                    title = "Shake to add more time",
+                    subtitle = "Buys more time without finding the screen in the dark",
+                    checked = settings.sleep.shakeToExtend,
+                    onChange = viewModel::setShakeToExtend,
+                )
+            },
+        )
+        if (settings.sleep.shakeToExtend) {
+            add(
+                SettingEntry(
+                    id = "sleep-shake-sensitivity",
+                    category = "Sleep timer",
+                    title = "How hard to shake",
+                    keywords = "sleep timer shake sensitivity threshold accidental",
+                ) {
+                    ChoiceRow(
+                        title = "How hard to shake",
+                        subtitle = "Too sensitive and rolling over resets the timer",
+                        options = SleepSettings.SENSITIVITY_CHOICES,
+                        selected = settings.sleep.shakeSensitivity,
+                        format = { level -> listOf("A firm shake", "Normal", "A nudge")[level - 1] },
+                        onSelect = viewModel::setShakeSensitivity,
+                    )
+                },
+            )
+        }
+        add(
+            SettingEntry(
+                id = "sleep-extend",
+                category = "Sleep timer",
+                title = "How much time a shake adds",
+                keywords = "sleep timer extend minutes shake more time",
+            ) {
+                ChoiceRow(
+                    title = "How much time a shake adds",
+                    subtitle = null,
+                    options = SleepSettings.EXTEND_CHOICES,
+                    selected = settings.sleep.extendMinutes,
+                    format = { "$it min" },
+                    onSelect = viewModel::setSleepExtendMinutes,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "route-pause",
+                category = "Headphones and car",
+                title = "Pause when headphones disconnect",
+                keywords = "bluetooth headphones unplug disconnect pause car noisy",
+            ) {
+                SwitchRow(
+                    title = "Pause when headphones disconnect",
+                    subtitle = "Otherwise a book carries on playing to an empty room",
+                    checked = settings.route.pauseOnDisconnect,
+                    onChange = viewModel::setPauseOnDisconnect,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "route-resume-headphones",
+                category = "Headphones and car",
+                title = "Resume when headphones reconnect",
+                keywords = "bluetooth headphones reconnect resume continue automatic",
+            ) {
+                SwitchRow(
+                    title = "Resume when headphones reconnect",
+                    subtitle = "Off by default: reconnecting headphones does not always mean " +
+                        "carry on right now",
+                    checked = settings.route.resumeOnHeadphones,
+                    onChange = viewModel::setResumeOnHeadphones,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "route-resume-car",
+                category = "Headphones and car",
+                title = "Resume when the car connects",
+                keywords = "bluetooth car resume drive automatic engine android auto",
+            ) {
+                SwitchRow(
+                    title = "Resume when the car connects",
+                    subtitle = "A car connecting usually means the engine just started",
+                    checked = settings.route.resumeInCar,
+                    onChange = viewModel::setResumeInCar,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "library-media-types",
+                category = "Library",
+                title = "What to show",
+                keywords = "hide podcasts books media type tabs disable remove show library",
+            ) {
+                MediaTypePicker(
+                    hidden = library.hiddenMediaTypes,
+                    onToggle = { type, hidden -> viewModel.setMediaTypeHidden(type, hidden) },
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-shelves-scope",
+                category = "Library",
+                title = "Shelves follow the library picker",
+                keywords = "shelves home library filter scope continue listening podcasts mixed",
+            ) {
+                SwitchRow(
+                    title = "Shelves follow the library picker",
+                    subtitle = "On, the shelves show only the library you picked. Off, they " +
+                        "span everything you are part-way through.",
+                    checked = library.shelvesFollowLibrary,
+                    onChange = viewModel::setShelvesFollowLibrary,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "download-wifi",
                 category = "Downloads",
                 title = "Download on Wi-Fi only",
@@ -362,15 +576,19 @@ private fun settingEntries(
             SettingEntry(
                 id = "download-auto-delete",
                 category = "Downloads",
-                title = "Remove finished downloads",
-                keywords = "auto delete cleanup finished reclaim space tidy",
+                title = "Delete books you have listened to",
+                keywords = "auto delete cleanup finished listened complete reclaim space tidy",
             ) {
+                // "Remove finished downloads" was ambiguous in the one way that matters:
+                // finished *downloading* would mean deleting things the moment they
+                // arrive. Say which finished is meant, and spell out the intervals.
                 ChoiceRow(
-                    title = "Remove finished downloads",
-                    subtitle = "Deletes the files only; your position and history are kept",
+                    title = "Delete books you have listened to",
+                    subtitle = "Applies once you reach the end. Deletes the files only; your " +
+                        "position and history are kept.",
                     options = DownloadSettings.AUTO_DELETE_CHOICES_DAYS,
                     selected = downloads.autoDeleteFinishedAfterDays,
-                    format = { if (it == 0) "Never" else "After ${it}d" },
+                    format = ::formatAutoDeleteDelay,
                     onSelect = viewModel::setAutoDeleteFinishedAfterDays,
                 )
             },
@@ -538,6 +756,41 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "playback-record",
+                category = "Diagnostics",
+                title = "Why playback stopped",
+                keywords = "stopped stopping paused itself crash log record diagnose bug " +
+                    "playback halted silent debug",
+            ) {
+                // The record is local and always on — crash reporting is opt-in and off by
+                // default, and a diagnosis that only works for people who switched on
+                // telemetry is no diagnosis at all.
+                LinkRow(
+                    title = "Why playback stopped",
+                    subtitle = "A local record of starts, stops, errors and the app being " +
+                        "killed. Never sent anywhere on its own.",
+                    onClick = onOpenPlaybackRecord,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "feedback",
+                category = "Diagnostics",
+                title = "Send feedback",
+                keywords = "feedback bug report problem contact suggest tell issue crash",
+            ) {
+                LinkRow(
+                    title = "Send feedback",
+                    subtitle = "Say what went wrong, and see exactly what gets sent before " +
+                        "it goes",
+                    onClick = onOpenFeedback,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "licenses",
                 category = "About",
                 title = "Open source licenses",
@@ -694,6 +947,78 @@ private fun PresetEditor(presets: List<Float>, onAdd: (Float) -> Unit, onRemove:
             }
         }
     }
+}
+
+/**
+ * A row that opens somewhere else.
+ *
+ * The whole row is the target rather than a trailing chevron: a settings list is scanned
+ * and tapped at arm's length, and a small hit area at the far edge is the one that gets
+ * missed.
+ */
+@Composable
+private fun LinkRow(title: String, subtitle: String?, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        subtitle?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Which kinds of thing this listener keeps.
+ *
+ * Framed as what to *show* rather than what to hide, because that is the way round people
+ * think about it — and the last one cannot be switched off, since an app showing nothing
+ * is not a preference anyone means.
+ */
+@Composable
+private fun MediaTypePicker(hidden: Set<MediaType>, onToggle: (MediaType, Boolean) -> Unit) {
+    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Text("What to show", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "Switching one off removes it everywhere: the tabs, the shelves, search and " +
+                "the car. Nothing is deleted, and switching it back on is instant.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MediaType.entries.forEach { type ->
+                val shown = type !in hidden
+                FilterChip(
+                    selected = shown,
+                    onClick = { onToggle(type, shown) },
+                    label = { Text(mediaTypeLabel(type), maxLines = 1, softWrap = false) },
+                )
+            }
+        }
+    }
+}
+
+private fun mediaTypeLabel(type: MediaType): String = when (type) {
+    MediaType.BOOK -> "Audiobooks"
+    MediaType.PODCAST -> "Podcasts"
+}
+
+/** "After a week" rather than "After 7d" — a setting should read like a sentence. */
+internal fun formatAutoDeleteDelay(days: Int): String = when (days) {
+    0 -> "Never"
+    1 -> "After a day"
+    7 -> "After a week"
+    14 -> "After two weeks"
+    30 -> "After a month"
+    else -> "After $days days"
 }
 
 /** "2x" rather than "2.0x", which wraps onto two lines in a narrow chip. */

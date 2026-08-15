@@ -1,11 +1,15 @@
 package io.github.lightheaded.lugu.playback
 
 import android.app.PendingIntent
+import android.app.UiModeManager
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -16,6 +20,7 @@ import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
@@ -31,14 +36,18 @@ import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.PlaybackDiary
+import io.github.lightheaded.lugu.core.sync.PlaybackEvent
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -76,6 +85,8 @@ class LuguPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var browseTree: BrowseTree
 
+    @Inject lateinit var diary: PlaybackDiary
+
     /** Latest settings, kept current so the player can read them synchronously. */
     @Volatile private var currentSettings: PlayerSettings = PlayerSettings()
 
@@ -85,6 +96,51 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private var lastPersistedSec = -1.0
     private var lastTickWallClockMs = 0L
+
+    private val stopAttributor = StopAttributor()
+    private val retryPolicy = PlaybackRetryPolicy()
+
+    /**
+     * The reason Media3 gave the last time it stopped wanting to play.
+     *
+     * Held rather than read on demand because the reason is delivered once, with the
+     * change, and is gone by the time the stop is classified. It is cleared again on the
+     * way back up: a reason that explained an earlier pause must not be left lying around
+     * to explain a later stop it had nothing to do with.
+     */
+    private var lastStopReason = StopAttributor.REASON_UNREPORTED
+
+    private var retryAttempts = 0
+    private var retryJob: Job? = null
+
+    /** Throttles the buffering record, which would otherwise crowd out the diary. */
+    private var lastBufferingRecordMs = 0L
+
+    private var audioSessionId = C.AUDIO_SESSION_ID_UNSET
+    private var loudnessBoost: LoudnessBoost? = null
+
+    private var routeWatcher: AudioRouteWatcher? = null
+
+    /**
+     * The route whose disconnection stopped playback, and when.
+     *
+     * Only a stop caused by a disconnect may be undone by a reconnection. A book the
+     * listener paused on purpose must stay paused when they plug their headphones back
+     * in, which is the difference between a helpful resume and a startling one.
+     */
+    private var pausedByRoute: AudioRouteClass? = null
+    private var pausedByRouteAtMs = 0L
+
+    private var shakeDetector: ShakeDetector? = null
+
+    /** The sensitivity the accelerometer is currently registered at; null means not registered. */
+    private var shakeListeningAt: Int? = null
+
+    /** How far to rewind on the next play, set when the sleep timer stopped playback. */
+    private var pendingSleepRewindSec: Double? = null
+
+    /** Controllers that identify themselves as a car, by package name. */
+    private val carControllers = mutableSetOf<String>()
 
     /**
      * Wall clock at which playback last paused, used to size the smart rewind. Kept
@@ -96,6 +152,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        diary.record(PlaybackEvent.SERVICE_CREATED)
 
         // Reads through the download cache first and the network second, so a downloaded
         // book plays from disk on every surface without any of them having to know that
@@ -113,8 +170,9 @@ class LuguPlaybackService : MediaLibraryService() {
                     .build(),
                 /* handleAudioFocus = */ true,
             )
+            // The starting value only; the route setting takes over as soon as the first
+            // settings emission arrives, and pausing on disconnect is its default.
             .setHandleAudioBecomingNoisy(true)
-
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
             .apply {
@@ -124,22 +182,98 @@ class LuguPlaybackService : MediaLibraryService() {
             }
 
         player.addListener(PersistenceListener())
+        player.addListener(DiagnosticsListener())
+
+        loudnessBoost = LoudnessBoost(diary)
+        shakeDetector = ShakeDetector(this) { extendSleepTimerOnShake() }
 
         // The session sees a chapter-aware wrapper: notification and lock-screen
-        // buttons must never be able to seek a book back to zero.
-        val sessionPlayer = ChapterAwarePlayer(player, stateHolder) { currentSettings }
+        // buttons must never be able to seek a book back to zero. The outer wrapper
+        // exists only to hear the commands go past, so a stop that nobody asked for can
+        // be told apart from one that somebody did.
+        val sessionPlayer = TransportAnnouncingPlayer(
+            player = ChapterAwarePlayer(player, stateHolder) { currentSettings },
+            onPlayRequested = {
+                diary.record(PlaybackEvent.PLAY_REQUESTED, playbackDetail())
+                pausedByRoute = null
+            },
+            onPauseRequested = {
+                // A deliberate pause ends any retry in flight; nothing should start
+                // playing again after the listener has said stop.
+                retryJob?.cancel()
+                pausedByRoute = null
+            },
+            onStopRequested = {
+                stopAttributor.declare(StopAttributor.REASON_STOP_COMMAND, System.currentTimeMillis())
+            },
+        )
 
         session = MediaLibrarySession.Builder(this, sessionPlayer, LibrarySessionCallback())
             .setSessionActivity(openAppIntent())
             .build()
 
-        // Settings are read live, so changing a skip duration or hiding a button takes
-        // effect immediately rather than at the next playback session.
+        // Being refused a foreground service is one of the ways playback simply does not
+        // happen, and it is invisible from the outside: no error, no notification, no
+        // audio. Recording it is the difference between a diagnosis and a shrug.
+        setListener(
+            object : MediaSessionService.Listener {
+                override fun onForegroundServiceStartNotAllowedException() {
+                    diary.record(PlaybackEvent.ERROR, "foreground service start not allowed")
+                }
+            },
+        )
+
+        routeWatcher = AudioRouteWatcher(
+            context = this,
+            isCarMode = ::isCarMode,
+            onLost = ::onAudioRouteLost,
+            onGained = ::onAudioRouteGained,
+        ).also { it.start() }
+
+        // Settings are read live, so changing a skip duration, hiding a button or turning
+        // on silence skipping takes effect immediately rather than at the next session.
         scope.launch {
-            playbackPrefs.settings.collect { currentSettings = it }
+            playbackPrefs.settings.collect { settings ->
+                currentSettings = settings
+                applyAudioSettings(settings)
+                syncShakeListening()
+            }
+        }
+
+        // The accelerometer follows the timer rather than the app: a sensor registered
+        // for the whole life of the service is a battery cost nothing on screen explains.
+        scope.launch {
+            stateHolder.sleepTimer.collect { syncShakeListening() }
         }
 
         startPositionTicker()
+    }
+
+    /**
+     * Applies the settings that change what the audio itself sounds like.
+     *
+     * Called on every settings emission rather than only at startup, because all three
+     * are things a listener changes *while* something is playing — the point of the
+     * silence-skipping switch is to hear the difference on the recording in front of you.
+     */
+    private fun applyAudioSettings(settings: PlayerSettings) {
+        player.skipSilenceEnabled = settings.audio.skipSilence
+        player.setHandleAudioBecomingNoisy(settings.route.pauseOnDisconnect)
+        loudnessBoost?.apply(audioSessionId, settings.audio.volumeBoostDb)
+    }
+
+    /**
+     * Whether this phone is currently in a car.
+     *
+     * Two independent signals, either of which is enough: a controller that identifies
+     * itself as a car projection, and the system's own car UI mode. Neither needs a
+     * permission, which is the reason for taking this route rather than reading the
+     * Bluetooth device class — see [AudioRoutes].
+     */
+    private fun isCarMode(): Boolean {
+        if (carControllers.isNotEmpty()) return true
+        val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+        return uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_CAR
     }
 
     /**
@@ -239,18 +373,130 @@ class LuguPlaybackService : MediaLibraryService() {
             speed = player.playbackParameters.speed,
         )
 
-        val volume = SleepTimer.fadeVolume(remaining)
+        val volume = SleepFade.volumeFor(remaining, currentSettings.sleep.fadeSeconds)
         stateHolder.updateSleepTimer(remaining, isFading = volume < 1.0f)
         player.volume = volume
 
         if (remaining != null && remaining <= 0.0) {
+            // Declared before the pause, so the stop that follows is attributed to the
+            // timer rather than recorded as one nobody asked for.
+            stopAttributor.declare(StopAttributor.REASON_SLEEP_TIMER, System.currentTimeMillis())
+            diary.record(PlaybackEvent.SLEEP_TIMER_FIRED, playbackDetail())
             player.pause()
             // Restore the volume so the next play is not silent — the commonest way a
             // fade-out implementation leaves the app apparently broken.
             player.volume = 1.0f
             stateHolder.clearSleepTimer()
+            // Whatever played through the fade was not really heard, so the next play
+            // starts before it rather than where the ear gave up.
+            pendingSleepRewindSec = currentSettings.sleep.rewindOnWakeSec.toDouble().takeIf { it > 0 }
             persistPosition(reason = "sleep-timer")
+            syncShakeListening()
         }
+    }
+
+    /**
+     * Registers or drops the accelerometer to match the timer.
+     *
+     * Listening is worth its battery only while the timer is armed, the setting is on,
+     * and something is actually playing — outside that the answer to a shake would be to
+     * do nothing, and a sensor registered to do nothing is a bug the user cannot see.
+     */
+    private fun syncShakeListening() {
+        val sleep = currentSettings.sleep
+        val wanted = sleep.shakeSensitivity.takeIf {
+            sleep.shakeToExtend && stateHolder.sleepTimer.value.isArmed && player.isPlaying
+        }
+        if (wanted == shakeListeningAt) return
+        shakeListeningAt = wanted
+        if (wanted != null) shakeDetector?.start(wanted) else shakeDetector?.stop()
+    }
+
+    /**
+     * Buys more time without finding the screen in the dark.
+     *
+     * Re-arming from the current position is what makes this work mid-fade: the timer has
+     * already run down, so extending the old one would expire again immediately.
+     */
+    private fun extendSleepTimerOnShake() {
+        val timer = stateHolder.sleepTimer.value
+        if (!timer.isArmed) return
+        val position = currentAbsoluteSec() ?: return
+        val minutes = currentSettings.sleep.extendMinutes
+        stateHolder.armSleepTimer(SleepTimer.extend(timer.mode, minutes), position)
+        // A shake usually arrives during the fade, and an extension nobody can hear is
+        // indistinguishable from one that did not work.
+        player.volume = 1.0f
+        diary.record(PlaybackEvent.SLEEP_TIMER_EXTENDED, "by $minutes min, after a shake")
+    }
+
+    /**
+     * An output went away.
+     *
+     * The pause itself is Media3's, through `setHandleAudioBecomingNoisy`. All that
+     * happens here is remembering that a disconnect is what stopped playback, so a later
+     * reconnection may undo it — and declaring the stop, so it is not recorded as one
+     * nobody asked for.
+     */
+    private fun onAudioRouteLost(routeClass: AudioRouteClass) {
+        val wasPlaying = player.isPlaying || player.playWhenReady
+        diary.record(
+            PlaybackEvent.AUDIO_ROUTE_LOST,
+            playbackDetail("${routeClass.name.lowercase()}, was playing: $wasPlaying"),
+        )
+        if (!wasPlaying || !currentSettings.route.pauseOnDisconnect) return
+
+        stopAttributor.declare(StopAttributor.REASON_ROUTE_LOST, System.currentTimeMillis())
+        pausedByRoute = routeClass
+        pausedByRouteAtMs = System.currentTimeMillis()
+    }
+
+    /**
+     * An output came back.
+     *
+     * The decision belongs to the device that has just arrived rather than to the one
+     * that left: a car disconnecting also ends car mode, so the class recorded at
+     * disconnect time is the less reliable of the two. What is required from the earlier
+     * disconnect is only that there *was* one — a book the listener paused deliberately
+     * is never restarted by plugging something in.
+     *
+     * The window exists because "the headphones came back" stops meaning "carry on" after
+     * long enough. Finding a book playing the next morning is not a feature.
+     */
+    private fun onAudioRouteGained(routeClass: AudioRouteClass) {
+        diary.record(PlaybackEvent.AUDIO_ROUTE_GAINED, routeClass.name.lowercase())
+
+        if (pausedByRoute == null) return
+        val wanted = when (routeClass) {
+            AudioRouteClass.CAR -> currentSettings.route.resumeInCar
+            AudioRouteClass.HEADPHONES -> currentSettings.route.resumeOnHeadphones
+            AudioRouteClass.OTHER -> false
+        }
+        if (!wanted) return
+        if (System.currentTimeMillis() - pausedByRouteAtMs > ROUTE_RESUME_WINDOW_MS) return
+        if (player.mediaItemCount == 0) return
+
+        pausedByRoute = null
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        player.play()
+    }
+
+    /**
+     * Enough about the current playback to tell two stops apart when the diary is read
+     * back: what was playing, where it had reached, and whether the bytes were arriving
+     * over the network or coming off the disk.
+     */
+    private fun playbackDetail(extra: String? = null): String {
+        val title = stateHolder.nowPlaying.value?.title ?: "nothing loaded"
+        val position = currentAbsoluteSec()?.let { "at ${it.roundToInt()}s" } ?: "no position"
+        val source = if (isStreaming()) "streaming" else "downloaded"
+        return listOfNotNull(extra, title, position, source).joinToString(", ")
+    }
+
+    /** A downloaded track plays from a local path; anything over http is coming down a wire. */
+    private fun isStreaming(): Boolean {
+        val scheme = player.currentMediaItem?.localConfiguration?.uri?.scheme ?: return false
+        return scheme.startsWith("http")
     }
 
     private fun currentAbsoluteSec(): Double? {
@@ -296,19 +542,28 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     /**
-     * Applies the smart rewind, once, at the moment playback resumes.
+     * Applies the rewind, once, at the moment playback resumes.
      *
      * Doing it here rather than at pause time is the whole point: rewinding on pause
      * makes the stored position drift backwards on every pause, which is how a book
      * ends up minutes out of place (app #1147, #622). Computed from the real pause
      * duration, so a headset stutter moves nothing.
+     *
+     * Two corrections can be owed at once — the smart rewind for the length of the pause,
+     * and the sleep timer's own rewind for the part that was slept through. They answer
+     * the same question, so the larger wins rather than the two being added: someone who
+     * fell asleep did not miss fifty seconds because two features both think they missed
+     * some.
      */
-    private fun applySmartRewindOnResume() {
-        val pausedAt = pausedAtWallClockMs ?: return
+    private fun applyRewindOnResume() {
+        val sleepRewindSec = pendingSleepRewindSec
+        pendingSleepRewindSec = null
+        val pausedAt = pausedAtWallClockMs
         pausedAtWallClockMs = null
 
-        val pausedForMs = System.currentTimeMillis() - pausedAt
-        val rewindSec = SmartRewind.rewindSeconds(pausedForMs)
+        val pausedForMs = pausedAt?.let { System.currentTimeMillis() - it } ?: 0L
+        val smartRewindSec = SmartRewind.rewindSeconds(pausedForMs)
+        val rewindSec = maxOf(smartRewindSec, sleepRewindSec ?: 0.0)
         if (rewindSec <= 0.0) return
 
         val context = stateHolder.nowPlaying.value ?: return
@@ -318,7 +573,12 @@ class LuguPlaybackService : MediaLibraryService() {
         val position = AbsoluteTiming.toTrack(context.tracks, target)
         player.seekTo(position.trackIndex, position.positionMs)
         // Announce it: an automatic correction the listener cannot see is a bug to them.
-        stateHolder.setRewindNotice(SmartRewind.describe(pausedForMs))
+        val notice = if (sleepRewindSec != null && sleepRewindSec >= smartRewindSec) {
+            "Rewound ${rewindSec.roundToInt()}s from where you fell asleep"
+        } else {
+            SmartRewind.describe(pausedForMs)
+        }
+        stateHolder.setRewindNotice(notice)
     }
 
     private inner class PersistenceListener : Player.Listener {
@@ -331,9 +591,10 @@ class LuguPlaybackService : MediaLibraryService() {
                 persistPosition(reason = "pause")
                 SyncScheduler.flushNow(this@LuguPlaybackService)
             } else {
-                applySmartRewindOnResume()
+                applyRewindOnResume()
                 lastTickWallClockMs = System.currentTimeMillis()
             }
+            syncShakeListening()
         }
 
         override fun onPositionDiscontinuity(
@@ -396,6 +657,143 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     /**
+     * The record of why playback stopped, written as it happens.
+     *
+     * Separate from [PersistenceListener] because it does something different: that one
+     * keeps the listener's position safe, this one keeps the *reason* recoverable
+     * afterwards. Everything here is a write to the diary and, for a transient network
+     * failure, one bounded attempt to carry on.
+     */
+    private inner class DiagnosticsListener : Player.Listener {
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            lastStopReason = if (playWhenReady) StopAttributor.REASON_UNREPORTED else reason
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) {
+                // A stretch of successful playback is what makes the next failure a new
+                // one rather than a continuation of the last.
+                retryAttempts = 0
+                pausedByRoute = null
+                diary.record(PlaybackEvent.PLAYING, playbackDetail())
+                return
+            }
+
+            val verdict = stopAttributor.classify(
+                StopSignals(
+                    playbackState = player.playbackState,
+                    // A player that still wants to play was not stopped by a
+                    // `playWhenReady` change, so no reason from one applies.
+                    playWhenReadyChangeReason = if (player.playWhenReady) {
+                        StopAttributor.REASON_UNREPORTED
+                    } else {
+                        lastStopReason
+                    },
+                    suppressionReason = player.playbackSuppressionReason,
+                    hasError = player.playerError != null,
+                ),
+                System.currentTimeMillis(),
+            )
+            recordStop(verdict)
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            when (playbackState) {
+                // Idle after a failure is the state a stalled network leaves behind, and
+                // nothing restarts a player that is sitting in it.
+                Player.STATE_IDLE -> diary.record(PlaybackEvent.IDLE, playbackDetail())
+                Player.STATE_ENDED -> diary.record(PlaybackEvent.ENDED, playbackDetail())
+                Player.STATE_BUFFERING -> recordBufferingSparingly()
+                else -> Unit
+            }
+        }
+
+        /**
+         * The callback that tells "something else took the audio" apart from every other
+         * kind of stop. A phone call, a navigation prompt, a car head unit taking the
+         * output — all of them arrive here and nowhere else.
+         */
+        override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+            if (playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE) {
+                diary.record(PlaybackEvent.UNSUPPRESSED, playbackDetail())
+            } else {
+                diary.record(
+                    PlaybackEvent.SUPPRESSED,
+                    playbackDetail(suppressionReasonName(playbackSuppressionReason)),
+                )
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            diary.record(
+                PlaybackEvent.ERROR,
+                playbackDetail("${error.errorCodeName}: ${error.message.orEmpty()}"),
+            )
+            scheduleRetry(error, resumeAfterwards = player.playWhenReady)
+        }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            this@LuguPlaybackService.audioSessionId = audioSessionId
+            // The loudness effect is bound to the session, not to the player, so a new
+            // session means the old effect is attached to nothing.
+            loudnessBoost?.apply(audioSessionId, currentSettings.audio.volumeBoostDb)
+        }
+    }
+
+    /**
+     * Buffering happens on every seek and every track change, and a diary full of it
+     * would evict the lines worth reading. One record per interval is enough to show the
+     * pattern that matters: repeated stalls before a stop means the network, not the app.
+     */
+    private fun recordBufferingSparingly() {
+        val now = System.currentTimeMillis()
+        if (now - lastBufferingRecordMs < BUFFERING_RECORD_INTERVAL_MS) return
+        lastBufferingRecordMs = now
+        diary.record(PlaybackEvent.BUFFERING, playbackDetail())
+    }
+
+    /** Writes one stop to the diary under the name that says what kind it was. */
+    private fun recordStop(verdict: StopVerdict) {
+        val detail = playbackDetail(verdict.detail)
+        when (verdict.cause) {
+            // The end of an item is already recorded by the state change; recording it
+            // twice would only make the diary harder to read.
+            StopCause.ENDED -> Unit
+            StopCause.FAILED -> diary.record(PlaybackEvent.IDLE, detail)
+            StopCause.FOCUS_LOST -> diary.record(PlaybackEvent.SUPPRESSED, detail)
+            StopCause.ROUTE_LOST -> diary.record(PlaybackEvent.AUDIO_ROUTE_LOST, detail)
+            StopCause.INTERNAL, StopCause.REQUESTED -> diary.record(PlaybackEvent.PAUSED, detail)
+            StopCause.UNEXPECTED -> diary.record(PlaybackEvent.UNEXPECTED_STOP, detail)
+        }
+    }
+
+    /**
+     * Tries once more after a network failure, up to the policy's limit.
+     *
+     * This is the one likely cause of "it stopped on its own" that can be fixed rather
+     * than only recorded: ExoPlayer's response to a failed read is to go idle and wait
+     * for somebody to prepare it again, and until now nobody did. Each attempt is written
+     * to the diary, so a retry that did not help is as visible as one that did.
+     */
+    private fun scheduleRetry(error: PlaybackException, resumeAfterwards: Boolean) {
+        val delayMs = retryPolicy.retryDelayMs(error.errorCode, retryAttempts) ?: return
+        retryAttempts += 1
+        val attempt = retryAttempts
+
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            delay(delayMs)
+            diary.record(
+                PlaybackEvent.ERROR,
+                "retrying after ${error.errorCodeName}, attempt $attempt of ${PlaybackRetryPolicy.MAX_ATTEMPTS}",
+            )
+            player.prepare()
+            if (resumeAfterwards) player.play()
+        }
+    }
+
+    /**
      * The end of a book, and the moment a queue is for.
      *
      * Done here rather than in the UI because this is exactly when the UI is least
@@ -408,6 +806,11 @@ class LuguPlaybackService : MediaLibraryService() {
             val continuation = withContext(Dispatchers.IO) {
                 continuationResolver.resolveNext(finished.libraryItemId, finished.episodeId)
             } ?: return@launch
+
+            diary.record(
+                PlaybackEvent.CONTINUATION,
+                "${continuation.resumption.nowPlaying.title}, started automatically: ${continuation.autoStart}",
+            )
 
             stateHolder.set(continuation.resumption.nowPlaying)
             player.setMediaItems(
@@ -449,12 +852,22 @@ class LuguPlaybackService : MediaLibraryService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
+            // A car projection connecting is the most reliable "this is a car" signal
+            // there is, and it needs no permission — see [AudioRoutes].
+            if (CAR_CONTROLLER_PACKAGES.any { controller.packageName.startsWith(it) }) {
+                carControllers += controller.packageName
+            }
+
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
             carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands.build())
                 .setCustomLayout(carCommands)
                 .build()
+        }
+
+        override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+            carControllers -= controller.packageName
         }
 
         override fun onCustomCommand(
@@ -591,6 +1004,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Swiping the app away while paused should not silently lose the position.
+        diary.record(PlaybackEvent.TASK_REMOVED, playbackDetail("wanted to play: ${player.playWhenReady}"))
         persistPosition(reason = "task-removed")
         if (!player.playWhenReady || player.mediaItemCount == 0) {
             stopSelf()
@@ -598,7 +1012,18 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        // Recorded before anything is torn down, so the line exists even if the release
+        // itself is what goes wrong. A destroy with no preceding pause, followed by
+        // `process started`, is the system having reclaimed the process.
+        diary.record(PlaybackEvent.SERVICE_DESTROYED, playbackDetail("was playing: ${player.isPlaying}"))
+
         persistPosition(reason = "destroy")
+        retryJob?.cancel()
+        shakeDetector?.stop()
+        shakeListeningAt = null
+        routeWatcher?.stop()
+        loudnessBoost?.release()
+        clearListener()
         session?.run {
             player.release()
             release()
@@ -611,6 +1036,24 @@ class LuguPlaybackService : MediaLibraryService() {
     private companion object {
         const val TICK_MS = 5_000L
         const val SLEEP_TICK_MS = 500L
+
+        /** How long after a disconnect a reconnection still means "carry on". */
+        const val ROUTE_RESUME_WINDOW_MS = 30 * 60 * 1_000L
+
+        /** One buffering record per interval, so stalls show as a pattern without flooding. */
+        const val BUFFERING_RECORD_INTERVAL_MS = 30_000L
+
+        /**
+         * Package prefixes that mean a car is driving the session. Prefixes rather than
+         * exact names because the projection host has shipped under several ids.
+         */
+        val CAR_CONTROLLER_PACKAGES = listOf(
+            "com.google.android.projection",
+            "com.google.android.embedded.projection",
+            "com.google.android.autoembedded",
+            "com.google.android.gearhead",
+            "com.android.car",
+        )
 
         /** Within this much of the end counts as finished. */
         const val FINISHED_TAIL_SEC = 20.0

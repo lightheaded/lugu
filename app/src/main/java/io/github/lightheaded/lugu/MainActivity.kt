@@ -18,8 +18,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.feature.library.DownloadsScreen
+import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
-import io.github.lightheaded.lugu.feature.library.LibraryScreen
 import io.github.lightheaded.lugu.feature.library.QueueScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
@@ -27,8 +27,11 @@ import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
 import io.github.lightheaded.lugu.playback.PlaybackConnection
+import io.github.lightheaded.lugu.ui.CrashPrompt
+import io.github.lightheaded.lugu.ui.FeedbackScreen
 import io.github.lightheaded.lugu.ui.LicensesScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
+import io.github.lightheaded.lugu.ui.PlaybackRecordScreen
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 import javax.inject.Inject
 
@@ -68,13 +71,22 @@ class MainActivity : ComponentActivity() {
 
 private object Routes {
     const val LOGIN = "login"
-    const val LIBRARY = "library"
+
+    /**
+     * The signed-in destination. It hosts both Home — the computed shelves, answering
+     * "what should I play now" — and the library browse, which answers "show me
+     * everything". They are two jobs and two tabs; one route, because switching between
+     * them is not navigation anyone wants in their back stack.
+     */
+    const val HOME = "home"
     const val ITEM = "item/{itemId}"
     const val PLAYER = "player"
     const val SETTINGS = "settings"
     const val DOWNLOADS = "downloads"
     const val QUEUE = "queue"
     const val LICENSES = "licenses"
+    const val PLAYBACK_RECORD = "playback-record"
+    const val FEEDBACK = "feedback"
 
     fun item(itemId: String) = "item/$itemId"
 }
@@ -88,15 +100,19 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
     // user never sees the login screen flash past.
     val start = when (startState) {
         StartupState.Checking -> return
-        StartupState.SignedIn -> Routes.LIBRARY
+        StartupState.SignedIn -> Routes.HOME
         StartupState.SignedOut -> Routes.LOGIN
     }
+
+    // Offered once per crash, above whatever is on screen: the moment someone can say
+    // what they were doing is the moment right after it broke.
+    CrashPrompt(onOpenFeedback = { navController.navigate(Routes.FEEDBACK) })
 
     NavHost(navController = navController, startDestination = start) {
         composable(Routes.LOGIN) {
             LoginScreen(
                 onSignedIn = {
-                    navController.navigate(Routes.LIBRARY) {
+                    navController.navigate(Routes.HOME) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
@@ -106,12 +122,19 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
             )
         }
 
-        composable(Routes.LIBRARY) {
-            LibraryScreen(
+        composable(Routes.HOME) {
+            val playerViewModel: PlayerViewModel = hiltViewModel()
+            HomeScreen(
                 onOpenItem = { navController.navigate(Routes.item(it)) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                 onOpenQueue = { navController.navigate(Routes.QUEUE) },
+                // A shelf tap on something already in progress means "carry on", so it
+                // plays rather than opening a page and asking again.
+                onPlay = { itemId, episodeId ->
+                    playerViewModel.play(itemId, episodeId)
+                    navController.navigate(Routes.PLAYER)
+                },
                 bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
             )
         }
@@ -167,7 +190,20 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                     }
                 },
                 onOpenLicenses = { navController.navigate(Routes.LICENSES) },
+                onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
+                onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
             )
+        }
+
+        composable(Routes.PLAYBACK_RECORD) {
+            PlaybackRecordScreen(
+                onBack = { navController.popBackStack() },
+                onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
+            )
+        }
+
+        composable(Routes.FEEDBACK) {
+            FeedbackScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Routes.LICENSES) {

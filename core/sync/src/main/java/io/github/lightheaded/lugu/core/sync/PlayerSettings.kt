@@ -38,6 +38,72 @@ data class SpeedSettings(
 }
 
 /**
+ * What is done to the audio itself.
+ *
+ * Both are off by default because both change what the listener hears. Silence skipping
+ * is the one people ask for by name — a badly mastered recording can be a third silence —
+ * but it also clips the pauses a narrator put there on purpose, so it is a choice rather
+ * than a kindness. The boost exists for the opposite problem: a quiet recording that is
+ * inaudible in a car at motorway speed.
+ */
+data class AudioSettings(
+    val skipSilence: Boolean = false,
+    /**
+     * Extra gain in decibels, applied by the platform's loudness enhancer.
+     *
+     * Capped well below what the API allows. Gain is not free — past a point it is
+     * distortion rather than volume — and a setting that can make a book unlistenable
+     * is not a setting worth having.
+     */
+    val volumeBoostDb: Int = 0,
+) {
+    companion object {
+        val BOOST_CHOICES_DB = listOf(0, 3, 6, 10)
+        const val MAX_BOOST_DB = 12
+    }
+}
+
+/**
+ * How the sleep timer behaves once it is armed.
+ *
+ * The fade matters more than it sounds: stopping dead wakes people up, which defeats the
+ * point. Rewinding on the next play is the other half — whatever was heard in the last
+ * minutes before sleep was not really heard.
+ */
+data class SleepSettings(
+    /** Seconds of fade-out before the pause. Zero stops abruptly. */
+    val fadeSeconds: Int = 20,
+    /** Shake the phone to buy more time without finding the screen in the dark. */
+    val shakeToExtend: Boolean = false,
+    /** 1 is a deliberate shake, 3 is a nudge. */
+    val shakeSensitivity: Int = 2,
+    val extendMinutes: Int = 5,
+    /** How far back the next play starts, to recover the part that was slept through. */
+    val rewindOnWakeSec: Int = 30,
+) {
+    companion object {
+        val FADE_CHOICES = listOf(0, 5, 10, 20, 30, 60)
+        val EXTEND_CHOICES = listOf(5, 10, 15, 20, 30)
+        val REWIND_CHOICES = listOf(0, 15, 30, 60, 120, 300)
+        val SENSITIVITY_CHOICES = listOf(1, 2, 3)
+    }
+}
+
+/**
+ * What happens when the audio route changes.
+ *
+ * Pausing on disconnect is Android's own `becoming noisy` behaviour and is on by
+ * default, because the alternative is a book playing to an empty room. Resuming is the
+ * asymmetric part: plugging headphones back in usually means "carry on", while a car
+ * connecting usually means the engine started, so the two are separate switches.
+ */
+data class RouteSettings(
+    val pauseOnDisconnect: Boolean = true,
+    val resumeOnHeadphones: Boolean = false,
+    val resumeInCar: Boolean = true,
+)
+
+/**
  * Everything about the transport controls.
  *
  * Defaults follow the observed usage order: seeking back to catch a missed sentence is
@@ -71,6 +137,9 @@ data class PlayerSettings(
      * decide.
      */
     val noticeSeconds: Int = 10,
+    val audio: AudioSettings = AudioSettings(),
+    val sleep: SleepSettings = SleepSettings(),
+    val route: RouteSettings = RouteSettings(),
 ) {
     val showsChapterButtonsInPlayer: Boolean
         get() = TransportButton.PREVIOUS_CHAPTER in playerButtons ||

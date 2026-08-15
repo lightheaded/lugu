@@ -54,9 +54,29 @@ class LibraryRepository @Inject constructor(
     private val episodeDao: EpisodeDao,
     private val chapterDao: ChapterDao,
     private val ftsDao: LibraryItemFtsDao,
+    private val libraryPrefs: LibraryPrefs,
     private val clock: Clock,
 ) {
+    /**
+     * The libraries this listener wants to see.
+     *
+     * A hidden media type is filtered out here rather than at each screen, so switching
+     * podcasts off reaches the tabs, the shelves, search and the car's browse tree by
+     * construction instead of by remembering. Every library on the server is still
+     * mirrored and still syncs — hiding is a matter of what is shown, never of what is
+     * kept, so switching it back on is instant rather than a resync.
+     */
     fun observeLibraries(account: ActiveAccount): Flow<List<Library>> =
+        combine(
+            libraryDao.observeAll(account.serverId, account.userId),
+            libraryPrefs.settings,
+        ) { rows, settings ->
+            rows.map { Library(it.id, it.name, MediaType.fromWire(it.mediaType), it.displayOrder) }
+                .filter { settings.isVisible(it.mediaType) }
+        }
+
+    /** Every library, hidden types included — for settings, and for the sync sweep. */
+    fun observeAllLibraries(account: ActiveAccount): Flow<List<Library>> =
         libraryDao.observeAll(account.serverId, account.userId).map { rows ->
             rows.map { Library(it.id, it.name, MediaType.fromWire(it.mediaType), it.displayOrder) }
         }
@@ -120,19 +140,33 @@ class LibraryRepository @Inject constructor(
      * server's `/personalized` endpoint. That is the whole point: they render on a cold
      * start in airplane mode, and they can answer questions the server does not, like
      * "what have I downloaded".
+     *
+     * [libraryId] is what the shelves are scoped to; null spans every library. Passing it
+     * explicitly is deliberate. These shelves used to be account-wide while the grid
+     * beneath them was scoped to the selected library, so choosing the audiobook library
+     * filtered the grid and left podcasts on the shelves directly above it — which reads,
+     * correctly, as the filter being broken. The caller now has to say which it means.
      */
-    fun observeShelves(account: ActiveAccount): Flow<List<Shelf>> {
+    fun observeShelves(account: ActiveAccount, libraryId: String? = null): Flow<List<Shelf>> {
         // Declared in the order they are shown. Listing them as pairs rather than as
         // combine() arguments keeps the display order and the query in one place, and
         // sidesteps combine()'s five-flow typed limit.
         val sources: List<Pair<ShelfKind, Flow<List<LibraryItemEntity>>>> = listOf(
-            ShelfKind.CONTINUE to itemDao.observeContinueListening(account.serverId, account.userId),
-            ShelfKind.NEXT_IN_SERIES to itemDao.observeNextInSeries(account.serverId, account.userId),
-            ShelfKind.ALMOST_FINISHED to itemDao.observeAlmostFinished(account.serverId, account.userId),
-            ShelfKind.DOWNLOADED to itemDao.observeDownloaded(account.serverId, account.userId),
-            ShelfKind.PICK_IT_BACK_UP to
-                itemDao.observeStale(account.serverId, account.userId, clock.nowMs() - STALE_AFTER_MS),
-            ShelfKind.SHORT_LISTENS to itemDao.observeShortListens(account.serverId, account.userId),
+            ShelfKind.CONTINUE to
+                itemDao.observeContinueListening(account.serverId, account.userId, libraryId),
+            ShelfKind.NEXT_IN_SERIES to
+                itemDao.observeNextInSeries(account.serverId, account.userId, libraryId),
+            ShelfKind.ALMOST_FINISHED to
+                itemDao.observeAlmostFinished(account.serverId, account.userId, libraryId),
+            ShelfKind.DOWNLOADED to itemDao.observeDownloaded(account.serverId, account.userId, libraryId),
+            ShelfKind.PICK_IT_BACK_UP to itemDao.observeStale(
+                account.serverId,
+                account.userId,
+                clock.nowMs() - STALE_AFTER_MS,
+                libraryId,
+            ),
+            ShelfKind.SHORT_LISTENS to
+                itemDao.observeShortListens(account.serverId, account.userId, libraryId),
         )
 
         return combine(sources.map { it.second }) { results ->

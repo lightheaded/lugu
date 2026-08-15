@@ -250,6 +250,46 @@ class ShelfQueryTest {
         assertThat(rows.map { it.id }).containsExactly("pod")
     }
 
+    /**
+     * The shelves used to be account-wide while the grid below them was scoped to the
+     * selected library, so picking the audiobook library filtered the grid and left
+     * podcasts on the shelves directly above it — which reads as the filter being broken.
+     * Passing a library id has to actually narrow every shelf, and passing none has to
+     * still span everything, because both are real choices the settings screen offers.
+     */
+    @Test
+    fun `a library id narrows every shelf, and no library id spans them`() = runTest {
+        db.libraryItemDao().upsertAll(
+            listOf(
+                item("book", durationSec = 3_600.0),
+                item("pod", mediaType = "PODCAST").copy(libraryId = "lib2"),
+            ),
+        )
+        db.progressDao().upsertAll(
+            listOf(
+                progress("book", 0.4),
+                progress("pod", 0.4, episodeId = "ep1"),
+            ),
+        )
+        db.downloadDao().upsert(download("book", DownloadState.COMPLETED, completedAtMs = 10))
+        db.downloadDao().upsert(
+            download("pod", DownloadState.COMPLETED, episodeKey = "ep1", completedAtMs = 20),
+        )
+
+        val dao = db.libraryItemDao()
+        assertThat(dao.observeContinueListening(serverId, userId, "lib1").first().map { it.id })
+            .containsExactly("book")
+        assertThat(dao.observeContinueListening(serverId, userId, "lib2").first().map { it.id })
+            .containsExactly("pod")
+        assertThat(dao.observeContinueListening(serverId, userId).first().map { it.id })
+            .containsExactly("book", "pod")
+
+        assertThat(dao.observeDownloaded(serverId, userId, "lib2").first().map { it.id })
+            .containsExactly("pod")
+        assertThat(dao.observeStale(serverId, userId, staleBeforeMs = now + 1, libraryId = "lib1")
+            .first().map { it.id }).containsExactly("book")
+    }
+
     private fun download(
         itemId: String,
         state: String,

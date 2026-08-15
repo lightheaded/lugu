@@ -70,8 +70,56 @@ class CrashReportingPrefs @Inject constructor(
         prefs.edit().remove(KEY_LAST_CRASH).apply()
     }
 
+    /**
+     * The crash the launch prompt has already been shown for, or null if it has never
+     * been shown. Stored as an id rather than a flag so that a *second*, different crash
+     * still gets asked about — see [CrashPromptDecision].
+     */
+    fun askedAboutKey(): String? = prefs.getString(KEY_ASKED_ABOUT, null)
+
+    fun markAsked(key: String) {
+        prefs.edit().putString(KEY_ASKED_ABOUT, key).apply()
+    }
+
     private companion object {
         const val KEY_ENABLED = "crash_reporting_enabled"
         const val KEY_LAST_CRASH = "last_crash_event_id"
+        const val KEY_ASKED_ABOUT = "asked_about_crash"
     }
+}
+
+/**
+ * Whether to offer the post-crash prompt on this launch, and about which crash.
+ *
+ * The failure mode this exists to prevent is a crash loop: an app that falls over on
+ * every launch would otherwise ask about it on every launch, which is nagging in the
+ * precise moment someone is least inclined to be helpful. Keying on the event id means
+ * the same crash is offered once and a genuinely new one is still offered.
+ *
+ * Pure, so the loop case can be tested without a crash.
+ */
+object CrashPromptDecision {
+
+    /**
+     * The key to ask about, or null to stay quiet.
+     *
+     * Note that with crash reporting off the SDK is never initialised, so
+     * `Sentry.isCrashedLastRun()` is null and no id is ever recorded — the prompt does
+     * not appear at all. That is correct rather than a gap: with nothing to send there is
+     * nothing to offer.
+     */
+    fun keyToAskAbout(
+        crashedLastRun: Boolean,
+        lastCrashEventId: String?,
+        alreadyAskedKey: String?,
+    ): String? {
+        // An id is the good case. Without one there is nothing to tell this crash from
+        // the next, so the fixed key asks once and then stays quiet — the wrong side to
+        // err on would be asking forever.
+        val key = lastCrashEventId ?: if (crashedLastRun) UNIDENTIFIED else return null
+        return key.takeIf { it != alreadyAskedKey }
+    }
+
+    /** Used when Sentry reports a crash it has no recorded id for. */
+    const val UNIDENTIFIED = "unidentified-crash"
 }

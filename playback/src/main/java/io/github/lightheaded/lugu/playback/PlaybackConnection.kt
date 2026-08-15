@@ -98,6 +98,25 @@ class PlaybackConnection @Inject constructor(
     private var pendingSeekTargetSec: Double? = null
     private var seekJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * True from the moment play is asked for until the player reports it is playing.
+     *
+     * Starting an item takes a round trip or two — resolving the session, reading the
+     * chapters, buffering the first bytes — and for that whole time the player honestly
+     * reports that it is not playing. A transport that reports the same thing invites the
+     * listener to press play again, and by the time that second press lands the player
+     * has started, so the toggle pauses the playback they were trying to begin.
+     *
+     * So the transport says "playing" on the player's behalf. That is a promise the UI is
+     * making rather than a fact it has observed, and a promise has to be surrendered the
+     * moment it is broken: on an error, on an explicit pause, and after [START_PROMISE_MS]
+     * if the player never reports anything at all. A promise that is never surrendered
+     * stops being optimism and becomes a lie — a play button that cannot be pressed
+     * because the UI believes something is already playing.
+     */
+    @Volatile private var startingPlayback = false
+    private var startPromiseJob: kotlinx.coroutines.Job? = null
+
     val nowPlaying: StateFlow<NowPlaying?> get() = stateHolder.nowPlaying
     val pendingJump get() = stateHolder.pendingJump
     val rewindNotice get() = stateHolder.rewindNotice
@@ -122,12 +141,24 @@ class PlaybackConnection @Inject constructor(
         val created = MediaController.Builder(context, token).buildAsync().await()
         created.addListener(
             object : Player.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) = pushState()
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    // The player has caught up with the promise, or has stopped without
+                    // ever keeping it. Either way it is now the authority.
+                    if (isPlaying) clearStartPromise()
+                    pushState()
+                }
 
-                override fun onPlaybackStateChanged(playbackState: Int) = pushState()
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
+                        clearStartPromise()
+                    }
+                    pushState()
+                }
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    clearStartPromise()
                     _state.value = _state.value.copy(error = error.errorCodeName)
+                    pushState()
                 }
             },
         )
@@ -152,7 +183,7 @@ class PlaybackConnection @Inject constructor(
         val chapters = context?.chapters.orEmpty()
         val chapter = Chapters.at(chapters, effectivePosition)
         _state.value = _state.value.copy(
-            isPlaying = player.isPlaying,
+            isPlaying = player.isPlaying || startingPlayback,
             isBuffering = player.playbackState == Player.STATE_BUFFERING,
             positionSec = effectivePosition,
             durationSec = context?.durationSec ?: (player.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0),
@@ -186,14 +217,23 @@ class PlaybackConnection @Inject constructor(
     /** Starts an item from wherever the sync engine says it should start. */
     fun play(libraryItemId: String, episodeId: String? = null) {
         scope.launch {
-            _state.value = _state.value.copy(isBuffering = true, error = null)
-            val account = authRepository.account() ?: return@launch
+            makeStartPromise()
+            // Reported here rather than waiting for the next poll: the press that has to
+            // be prevented is the one that arrives in the next half second.
+            _state.value = _state.value.copy(isPlaying = true, isBuffering = true, error = null)
+            val account = authRepository.account() ?: run {
+                clearStartPromise()
+                pushState()
+                return@launch
+            }
 
             val resolved = withContext(Dispatchers.IO) {
                 mediaResolver.resolve(account, libraryItemId, episodeId)
             }.getOrElse { failure ->
+                clearStartPromise()
                 _state.value = _state.value.copy(
                     isBuffering = false,
+                    isPlaying = false,
                     error = failure.message ?: "Could not start playback",
                 )
                 return@launch
@@ -237,9 +277,51 @@ class PlaybackConnection @Inject constructor(
         }
     }
 
-    fun togglePlayPause() = withController { if (it.isPlaying) it.pause() else it.play() }
+    /**
+     * The transport button, which acts on what the listener can see.
+     *
+     * While the promise is held the button reads Pause, so a press has to mean pause even
+     * though the player may not have started yet — anything else would leave the control
+     * doing the opposite of what it says.
+     */
+    fun togglePlayPause() = withController {
+        if (it.isPlaying || startingPlayback) {
+            clearStartPromise()
+            it.pause()
+        } else {
+            it.play()
+        }
+    }
 
-    fun pause() = withController { it.pause() }
+    fun pause() = withController {
+        clearStartPromise()
+        it.pause()
+    }
+
+    /**
+     * Holds the promise, with a deadline.
+     *
+     * The deadline is the honest part. A start that never reports anything — a service
+     * that failed to come up, a controller that never connected — must not leave the
+     * transport claiming to play forever.
+     */
+    private fun makeStartPromise() {
+        startingPlayback = true
+        startPromiseJob?.cancel()
+        startPromiseJob = scope.launch {
+            delay(START_PROMISE_MS)
+            if (startingPlayback) {
+                startingPlayback = false
+                pushState()
+            }
+        }
+    }
+
+    private fun clearStartPromise() {
+        startingPlayback = false
+        startPromiseJob?.cancel()
+        startPromiseJob = null
+    }
 
     /**
      * Relative seek in whole-book seconds.
@@ -413,6 +495,15 @@ class PlaybackConnection @Inject constructor(
 
     private companion object {
         const val POLL_MS = 500L
+
+        /**
+         * How long the transport will claim to be playing on the player's behalf.
+         *
+         * Long enough for a cold service start and a slow first byte over a poor
+         * connection, short enough that a start which is never going to happen corrects
+         * itself while the listener is still looking at the screen.
+         */
+        const val START_PROMISE_MS = 20_000L
 
         /** How long presses are allowed to accumulate before a seek is issued. */
         const val SEEK_SETTLE_MS = 350L

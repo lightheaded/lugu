@@ -113,6 +113,13 @@ and the device model to a Sentry project hosted in the EU. It does not send your
 your server address, your library, or what you were listening to. Turning it back off
 stops it immediately, not at the next launch.
 
+There is one more thing under Diagnostics: **why playback stopped**, a record of starts,
+stops, errors and the app being killed. It is written to a file on the phone and nowhere
+else. It is not telemetry and does not become telemetry — nothing reads it but you, unless
+you deliberately attach it to a report. It exists because "it just stopped" has half a
+dozen causes that look identical from the outside, and a diagnosis that only works for
+people who opted into crash reporting is no diagnosis at all.
+
 ## License
 
 Copyright (C) 2026 lightheaded.

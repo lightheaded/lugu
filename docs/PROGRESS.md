@@ -387,3 +387,116 @@ schema v1.
 3. Run the M0 QA checklist ([qa/m0.md](qa/m0.md)) — process death and reboot resumption
    are still the promises never exercised on hardware.
 4. Socket.IO delta updates.
+
+## 2026-08-15 (later still) — the shape of the app, the rest of M1, and finding out why playback stops
+
+A large pass that clears the whole of the navigation feedback from daily driving, finishes
+the M1 playback features that were designed and never built, and answers a new report —
+*playback stops occasionally and I cannot tell whether it crashed* — with a record rather
+than a guess.
+
+### Home, the library, and a filter that was not filtering
+
+The single screen was doing two jobs: the computed shelves answer "what should I play now"
+and the grid answers "show me everything". They are now two tabs of one destination, with
+the mini player above the tab bar so it survives the switch, and a one-tap resume for the
+most recent thing at the top of Home — which is the answer to the complaint every client
+of this server attracts, that getting back to your book takes five taps.
+
+Underneath the taste question was a real bug. The grid was scoped by the selected library
+while every shelf above it was scoped to the account, so picking the audiobook library
+filtered the grid and left podcasts on the shelves directly above it. Every shelf query now
+takes a library id and the caller has to pass one or explicitly pass none. Whether shelves
+*should* span libraries is a genuine question — "continue listening" arguably does — so it
+is a setting, and when they are spanning everything the screen says so rather than leaving
+it to be inferred.
+
+The selection itself moved into `LibraryPrefs`. Two screens depending on a value that one
+of them owns is how they end up disagreeing for a frame, and the visible symptom of that is
+shelves that span every library and then snap.
+
+A media type can now be switched off entirely. It is filtered at `observeLibraries`, the
+single place every surface reads from, so it reaches the tabs, the shelves, search and the
+car's browse tree by construction rather than by being remembered in four places. Nothing
+is deleted and syncing carries on, so it is instantly reversible.
+
+### One control for every long list
+
+Search, ordering and a five-way filter, shared by the episode list, the library grid and
+the downloads screen, with a selection mode shared by the same three. Both are built once
+in `:core:model` and `ListControlsUi` rather than three times, because three
+implementations disagree — quietly, about what "in progress" means, which is the kind of
+inconsistency nobody reports and everybody notices.
+
+Episode rows finally say what an episode is: `S2 E14 · 12 Mar · 48m`, with recent dates as
+"Today" and "3 days ago". None of that needed fetching or migrating; it was already in Room
+and already reaching the screen, and the row simply did not draw it.
+
+Paging was deliberately not added to the episode list. `LazyColumn` already composes only
+what is visible, so a thousand episodes was never the rendering problem it looked like —
+the problem was having no way to narrow the list.
+
+While fixing the shelves, a bug nobody had reported: a podcast never showed progress on the
+continue shelf, because progress is per episode and the shelf read the item-level row a
+podcast does not have. It now falls back to the most recently updated episode, which is
+also the episode the resume affordance plays.
+
+### The rest of M1
+
+Bookmarks, synced to the server and written locally first, so one made in a tunnel is a
+bookmark rather than a failed button. The server addresses a bookmark by `(item, time)`
+with no id of its own, which makes the *time* the identity — so it is rounded to whole
+seconds at the boundary, and a delete leaves a tombstone rather than a hole the next pull
+would fill back in. Displayed times are the audio position, because that is what the
+scrubber shows and the only figure that stays put when the speed changes.
+
+Also: a chapter list to jump directly rather than stepping through; silence skipping;
+volume boost through the platform loudness enhancer; pause and resume on route changes with
+the car and headphones as separate switches, because a car connecting usually means the
+engine started and headphones reconnecting usually does not mean carry on right now; and
+the sleep timer options that had been designed and stored but never implemented — fade,
+rewind-on-wake, and shake-to-extend with the accelerometer registered only while the timer
+is armed, since a permanently registered sensor is a battery bug.
+
+### Why playback stops
+
+Reported this session, and the honest answer was that we could not have known. The process
+being reclaimed, audio focus lost, an unsuitable output after a Bluetooth switch, a network
+stall leaving the player idle with nothing retrying, a crash, and the sleep timer doing
+exactly what it was told all look identical from outside.
+
+So the first thing built was the record. `PlaybackDiary` writes starts, stops, errors,
+suppression reasons and the service's lifecycle to a file — a file specifically, because
+the case with the least evidence is the process being killed, and an unexplained gap
+followed by a fresh "process started" line *is* the diagnosis. Settings → Diagnostics reads
+it back with an interpreted summary.
+
+It is local and always on. Crash reporting is opt-in and off by default and will stay that
+way, so a diagnosis that only worked for people who had switched on telemetry would be no
+diagnosis at all. When crash reporting *is* on, the recent entries ride along with an
+outgoing crash as breadcrumbs — never on their own.
+
+Upstream has this complaint open twice, and the second one is instructive: app#204,
+"playback closes when connecting to car Bluetooth", has been open since 2022 marked
+*unable to reproduce*. That is what happens when nobody can see what the app was doing.
+
+### In-app feedback, and R8
+
+The post-crash prompt and feedback screen from the backlog are built, with the "exactly
+what gets sent" section above the Send button — the element that makes the opt-in claim
+credible rather than decorative.
+
+R8 is on for release builds with hand-written keep rules. This is the change in this pass
+with the least evidence behind it: a clean `assembleRelease` proves only that nothing is
+missing at compile time, and every path R8 can break — Room's generated code, Hilt's graph,
+kotlinx-serialization's reflectively resolved serializers, Media3's service — fails at
+runtime and only in a release build. A device pass on a signed release APK is owed.
+
+### Next
+
+1. **Read the diary after a real stop.** It is a tool that has not been used yet, not a
+   tool that is known to work.
+2. **A release-build device pass**, now that R8 is on. Sign in, stream, play offline, open
+   Android Auto, change a setting.
+3. Run [qa/auto.md](qa/auto.md) in the DHU, then in a car.
+4. The upstream issue review, and whichever of its proposals are accepted.

@@ -206,7 +206,28 @@ data class MediaProgressDto(
 )
 
 @Serializable
-data class MediaProgressListResponse(val mediaProgress: List<MediaProgressDto> = emptyList())
+data class MediaProgressListResponse(
+    val mediaProgress: List<MediaProgressDto> = emptyList(),
+    /** `/api/me` carries the whole user, and bookmarks ride along with progress. */
+    val bookmarks: List<BookmarkDto> = emptyList(),
+)
+
+/**
+ * A bookmark as the server keeps it.
+ *
+ * There is no id: a bookmark is addressed by its library item and its `time` in whole
+ * seconds, which is also why the delete endpoint takes a time in its path.
+ */
+@Serializable
+data class BookmarkDto(
+    val libraryItemId: String,
+    val title: String = "",
+    val time: Long = 0,
+    val createdAt: Long = 0,
+)
+
+@Serializable
+data class BookmarkRequest(val time: Long, val title: String)
 
 @Serializable
 data class ProgressUpdateRequest(

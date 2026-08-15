@@ -83,6 +83,46 @@ class PlaybackPrefs @Inject constructor(
         store.edit { it[REMEMBER_PER_PODCAST] = enabled }
     }
 
+    suspend fun setSkipSilence(enabled: Boolean) {
+        store.edit { it[SKIP_SILENCE] = enabled }
+    }
+
+    suspend fun setVolumeBoostDb(db: Int) {
+        store.edit { it[VOLUME_BOOST_DB] = db.coerceIn(0, AudioSettings.MAX_BOOST_DB) }
+    }
+
+    suspend fun setSleepFadeSeconds(seconds: Int) {
+        store.edit { it[SLEEP_FADE] = seconds.coerceIn(0, 300) }
+    }
+
+    suspend fun setShakeToExtend(enabled: Boolean) {
+        store.edit { it[SLEEP_SHAKE] = enabled }
+    }
+
+    suspend fun setShakeSensitivity(level: Int) {
+        store.edit { it[SLEEP_SHAKE_SENSITIVITY] = level.coerceIn(1, 3) }
+    }
+
+    suspend fun setSleepExtendMinutes(minutes: Int) {
+        store.edit { it[SLEEP_EXTEND] = minutes.coerceIn(1, 120) }
+    }
+
+    suspend fun setRewindOnWakeSec(seconds: Int) {
+        store.edit { it[SLEEP_REWIND] = seconds.coerceIn(0, 600) }
+    }
+
+    suspend fun setPauseOnDisconnect(enabled: Boolean) {
+        store.edit { it[PAUSE_ON_DISCONNECT] = enabled }
+    }
+
+    suspend fun setResumeOnHeadphones(enabled: Boolean) {
+        store.edit { it[RESUME_HEADPHONES] = enabled }
+    }
+
+    suspend fun setResumeInCar(enabled: Boolean) {
+        store.edit { it[RESUME_CAR] = enabled }
+    }
+
     suspend fun setSpeedPresets(presets: List<Float>) {
         store.edit { prefs ->
             prefs[SPEED_PRESETS] = presets
@@ -147,6 +187,22 @@ class PlaybackPrefs @Inject constructor(
             rememberPerPodcast = this[REMEMBER_PER_PODCAST] ?: true,
             presets = this[SPEED_PRESETS]?.toSpeedList() ?: SpeedSettings.DEFAULT_PRESETS,
         ),
+        audio = AudioSettings(
+            skipSilence = this[SKIP_SILENCE] ?: DEFAULTS.audio.skipSilence,
+            volumeBoostDb = this[VOLUME_BOOST_DB] ?: DEFAULTS.audio.volumeBoostDb,
+        ),
+        sleep = SleepSettings(
+            fadeSeconds = this[SLEEP_FADE] ?: DEFAULTS.sleep.fadeSeconds,
+            shakeToExtend = this[SLEEP_SHAKE] ?: DEFAULTS.sleep.shakeToExtend,
+            shakeSensitivity = this[SLEEP_SHAKE_SENSITIVITY] ?: DEFAULTS.sleep.shakeSensitivity,
+            extendMinutes = this[SLEEP_EXTEND] ?: DEFAULTS.sleep.extendMinutes,
+            rewindOnWakeSec = this[SLEEP_REWIND] ?: DEFAULTS.sleep.rewindOnWakeSec,
+        ),
+        route = RouteSettings(
+            pauseOnDisconnect = this[PAUSE_ON_DISCONNECT] ?: DEFAULTS.route.pauseOnDisconnect,
+            resumeOnHeadphones = this[RESUME_HEADPHONES] ?: DEFAULTS.route.resumeOnHeadphones,
+            resumeInCar = this[RESUME_CAR] ?: DEFAULTS.route.resumeInCar,
+        ),
     )
 
     private fun String.toButtons(): Set<TransportButton> =
@@ -180,5 +236,15 @@ class PlaybackPrefs @Inject constructor(
         val REMEMBER_PER_BOOK = booleanPreferencesKey("remember_per_book")
         val REMEMBER_PER_PODCAST = booleanPreferencesKey("remember_per_podcast")
         val SPEED_PRESETS = stringPreferencesKey("speed_presets")
+        val SKIP_SILENCE = booleanPreferencesKey("skip_silence")
+        val VOLUME_BOOST_DB = intPreferencesKey("volume_boost_db")
+        val SLEEP_FADE = intPreferencesKey("sleep_fade_seconds")
+        val SLEEP_SHAKE = booleanPreferencesKey("sleep_shake_to_extend")
+        val SLEEP_SHAKE_SENSITIVITY = intPreferencesKey("sleep_shake_sensitivity")
+        val SLEEP_EXTEND = intPreferencesKey("sleep_extend_minutes")
+        val SLEEP_REWIND = intPreferencesKey("sleep_rewind_on_wake_sec")
+        val PAUSE_ON_DISCONNECT = booleanPreferencesKey("pause_on_disconnect")
+        val RESUME_HEADPHONES = booleanPreferencesKey("resume_on_headphones")
+        val RESUME_CAR = booleanPreferencesKey("resume_in_car")
     }
 }

@@ -13,6 +13,7 @@ import io.github.lightheaded.lugu.core.api.AuthInterceptor
 import io.github.lightheaded.lugu.core.api.DeviceInfoDto
 import io.github.lightheaded.lugu.core.api.ServerUrlProvider
 import io.github.lightheaded.lugu.core.api.TokenStore
+import io.github.lightheaded.lugu.core.db.BookmarkDao
 import io.github.lightheaded.lugu.core.db.ChapterDao
 import io.github.lightheaded.lugu.core.db.DownloadDao
 import io.github.lightheaded.lugu.core.db.EpisodeDao
@@ -63,6 +64,8 @@ object DatabaseModule {
     @Provides fun downloadDao(db: LuguDatabase): DownloadDao = db.downloadDao()
 
     @Provides fun libraryItemFtsDao(db: LuguDatabase): LibraryItemFtsDao = db.libraryItemFtsDao()
+
+    @Provides fun bookmarkDao(db: LuguDatabase): BookmarkDao = db.bookmarkDao()
 }
 
 @Module

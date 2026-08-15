@@ -21,8 +21,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PositionHistoryEntity::class,
         DownloadEntity::class,
         LibraryItemFtsEntity::class,
+        BookmarkEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class LuguDatabase : RoomDatabase() {
@@ -49,6 +50,8 @@ abstract class LuguDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
 
     abstract fun libraryItemFtsDao(): LibraryItemFtsDao
+
+    abstract fun bookmarkDao(): BookmarkDao
 
     companion object {
         const val NAME = "lugu.db"
@@ -162,9 +165,40 @@ abstract class LuguDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds bookmarks. Additive, like the two before it.
+         *
+         * No backfill: the server is the source of truth for bookmarks made on other
+         * devices, and the first pull after an upgrade fills the table. Nothing local
+         * can be lost, because nothing local existed.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `bookmark` (
+                        `serverId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `libraryItemId` TEXT NOT NULL,
+                        `timeSec` INTEGER NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `createdAtMs` INTEGER NOT NULL,
+                        `isDirty` INTEGER NOT NULL DEFAULT 0,
+                        `isDeleted` INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`serverId`, `userId`, `libraryItemId`, `timeSec`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_bookmark_serverId_userId_libraryItemId` " +
+                        "ON `bookmark` (`serverId`, `userId`, `libraryItemId`)",
+                )
+            }
+        }
+
         fun build(context: Context): LuguDatabase =
             Room.databaseBuilder(context.applicationContext, LuguDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }

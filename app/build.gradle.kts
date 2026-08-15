@@ -75,10 +75,18 @@ android {
             buildConfigField("String", "DEV_PASS", "\"${devProp("lugu.dev.pass")}\"")
         }
         release {
-            // R8 stays off until M1: Media3/Room/Hilt keep-rules are not yet proven,
-            // and a testable alpha matters more than a smaller APK.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 on, with the keep rules in proguard-rules.pro. Note that a clean build
+            // proves only that nothing is missing at compile time: the paths this can
+            // break — Room's generated code, Hilt's graph, kotlinx-serialization's
+            // reflectively resolved serializers, Media3's service — all fail at runtime
+            // and only on a release build, so a device pass is part of the change rather
+            // than a follow-up.
+            //
+            // Stack traces from this build are obfuscated. Sentry's Gradle plugin would
+            // upload the mapping file, but it fails the build without an auth token, so
+            // the mapping has to reach Sentry another way — see the backlog.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "DEV_SERVER_URL", "\"\"")
             buildConfigField("String", "DEV_USER", "\"\"")
