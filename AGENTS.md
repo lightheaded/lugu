@@ -58,3 +58,8 @@ to code, docs, tests, comments, commit messages and issue text alike.
   with `--no-verify` — fix the commits instead.
 - `local.properties`, keystores, `.env*`, `.claude/` and `build/api-capture/` are
   gitignored and must stay that way.
+- This is a greenfield project: keep every dependency at its **latest stable** —
+  libraries, the Gradle wrapper, and the GitHub Actions in `ci.yml`. When touching
+  the version catalog or the workflow, check for and take available stable bumps
+  (never alphas/betas), and let CI prove them. A deprecation warning in a CI log is
+  a work item, not noise.
