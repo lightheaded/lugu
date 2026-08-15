@@ -146,6 +146,47 @@ interface LibraryItemDao {
     ): Flow<List<LibraryItemEntity>>
 
     /**
+     * The same index, across every library at once.
+     *
+     * A car has no library picker and a voice search has no way to name one, so "play
+     * the dark forest" has to look everywhere the phone would let you look.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item_fts f
+        INNER JOIN library_item i
+            ON i.serverId = f.serverId AND i.userId = f.userId AND i.id = f.itemId
+        WHERE f.serverId = :serverId AND f.userId = :userId
+          AND library_item_fts MATCH :match
+        ORDER BY i.title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    suspend fun searchEverywhere(
+        serverId: String,
+        userId: String,
+        match: String,
+        limit: Int = 50,
+    ): List<LibraryItemEntity>
+
+    /** The fallback for a query the FTS syntax cannot take, also across every library. */
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId
+          AND (title LIKE '%' || :query || '%' OR authorName LIKE '%' || :query || '%')
+        ORDER BY title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    suspend fun searchEverywhereLike(
+        serverId: String,
+        userId: String,
+        query: String,
+        limit: Int = 50,
+    ): List<LibraryItemEntity>
+
+    /**
      * Almost finished: past the threshold but not marked done. These are the ones worth
      * an hour on a commute to clear, and the ones easiest to forget about.
      */
@@ -270,6 +311,59 @@ interface LibraryItemDao {
         """,
     )
     fun observeDownloaded(serverId: String, userId: String, limit: Int = 50): Flow<List<LibraryItemEntity>>
+
+    /**
+     * Every series, once. Backs the series node of the car browse tree, where a flat
+     * list of every book is unusable and the series is the unit people think in.
+     */
+    @Query(
+        """
+        SELECT DISTINCT seriesTitle FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND seriesTitle IS NOT NULL
+        ORDER BY seriesTitle COLLATE NOCASE
+        """,
+    )
+    suspend fun seriesTitles(serverId: String, userId: String): List<String>
+
+    /** One series, in reading order — by sequence, never by title. */
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND seriesTitle = :seriesTitle
+        ORDER BY seriesSequence IS NULL, seriesSequence, title COLLATE NOCASE
+        """,
+    )
+    suspend fun bySeries(serverId: String, userId: String, seriesTitle: String): List<LibraryItemEntity>
+
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND mediaType = :mediaType
+        ORDER BY title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    suspend fun byMediaType(
+        serverId: String,
+        userId: String,
+        mediaType: String,
+        limit: Int = 500,
+    ): List<LibraryItemEntity>
+
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+        ORDER BY title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    suspend fun byLibrary(
+        serverId: String,
+        userId: String,
+        libraryId: String,
+        limit: Int = 500,
+    ): List<LibraryItemEntity>
 
     /**
      * The volume that follows this one in its series, if it has not been started.

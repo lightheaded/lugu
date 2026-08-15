@@ -76,6 +76,7 @@ class PlaybackConnection @Inject constructor(
     private val progressRepository: ProgressRepository,
     private val playbackPrefs: PlaybackPrefs,
     private val stateHolder: PlaybackStateHolder,
+    private val browseTree: BrowseTree,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val connectMutex = Mutex()
@@ -162,6 +163,24 @@ class PlaybackConnection @Inject constructor(
             chapterPositionSec = Chapters.offsetInChapter(chapters, effectivePosition),
             chapterDurationSec = chapter?.let { (it.endSec - it.startSec).coerceAtLeast(0.0) } ?: 0.0,
         )
+    }
+
+    /**
+     * "Play *the dark forest* on lugu", from Assistant or a car.
+     *
+     * Answered from the same offline index the search box uses, and it plays the first
+     * match rather than opening a list: a spoken request is an instruction, and someone
+     * who asked out loud is usually not in a position to read a page of results.
+     */
+    fun playFromSearch(query: String) {
+        scope.launch {
+            val match = withContext(Dispatchers.IO) { browseTree.search(query) }.firstOrNull() ?: run {
+                _state.value = _state.value.copy(error = "Nothing found for \"$query\"")
+                return@launch
+            }
+            val target = BrowseNode.parse(match.mediaId) as? BrowseNode.Playable ?: return@launch
+            play(target.itemId, target.episodeId)
+        }
     }
 
     /** Starts an item from wherever the sync engine says it should start. */

@@ -6,8 +6,18 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+      `MissingMediaBrowserServiceIntentFilter` is a false positive here. The check reads
+      this file, and `LuguPlaybackService` is declared in `:playback` — where it already
+      advertises `android.media.browse.MediaBrowserService`. The merged manifest that
+      ships in the APK carries the action; verify with
+      `app/build/intermediates/merged_manifest/*/AndroidManifest.xml` before removing
+      this. Suppressed here rather than disabled project-wide so it still applies to any
+      service declared in this module.
+    -->
     <application
         android:name=".LuguApplication"
+        tools:ignore="MissingMediaBrowserServiceIntentFilter"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -23,6 +33,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              "Play the dark forest on lugu", said out loud. Assistant delivers a spoken
+              request here rather than through the media session, so without this filter
+              a voice request opens the app and stops — which in a car is the same as
+              nothing happening.
+            -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!--
@@ -34,6 +55,15 @@
         <meta-data
             android:name="io.sentry.auto-init"
             android:value="false" />
+
+        <!--
+          Android Auto looks for this before it will show lugu in a car at all. The
+          playback service already advertises the legacy browser action alongside the
+          Media3 ones, which is the other half of being visible there.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
 
         <!-- Hilt supplies the worker factory; the default initialiser must stand down. -->
         <provider

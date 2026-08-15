@@ -12,15 +12,21 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
+import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.download.DownloadCache
+import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
+import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
@@ -67,6 +73,8 @@ class LuguPlaybackService : MediaLibraryService() {
     @Inject lateinit var continuationResolver: ContinuationResolver
 
     @Inject lateinit var playbackPrefs: PlaybackPrefs
+
+    @Inject lateinit var browseTree: BrowseTree
 
     /** Latest settings, kept current so the player can read them synchronously. */
     @Volatile private var currentSettings: PlayerSettings = PlayerSettings()
@@ -132,6 +140,52 @@ class LuguPlaybackService : MediaLibraryService() {
         }
 
         startPositionTicker()
+    }
+
+    /**
+     * Chapter navigation for a surface that has no idea what a chapter is.
+     *
+     * Falls back to the configured skip when the book has none, so the button always
+     * does something rather than appearing broken on an unchaptered recording.
+     */
+    private fun seekChapter(forward: Boolean) {
+        val context = stateHolder.nowPlaying.value ?: return
+        val position = currentAbsoluteSec() ?: return
+        val target = if (forward) {
+            Chapters.nextChapterStart(context.chapters, position)
+                ?: (position + currentSettings.skipForwardSec)
+        } else {
+            Chapters.previousChapterStart(context.chapters, position)
+                ?: (position - currentSettings.skipBackSec)
+        }
+        val destination = AbsoluteTiming.toTrack(context.tracks, target.coerceAtLeast(0.0))
+        player.seekTo(destination.trackIndex, destination.positionMs)
+    }
+
+    /**
+     * Steps through the speed presets, wrapping at the end.
+     *
+     * A car cannot show a slider, and cycling is the one gesture that works with a
+     * glance: press until it sounds right. The presets are the listener's own.
+     */
+    private fun cycleSpeed() {
+        val presets = currentSettings.speed.presets.sorted().ifEmpty { return }
+        val current = player.playbackParameters.speed
+        val next = presets.firstOrNull { it > current + SPEED_EPSILON } ?: presets.first()
+        player.setPlaybackSpeed(next)
+
+        // Remembered like any other speed change, so a change made in the car is still
+        // in force on the phone.
+        val context = stateHolder.nowPlaying.value ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                playbackPrefs.setSpeedFor(
+                    context.libraryItemId,
+                    if (context.episodeId != null) MediaType.PODCAST else MediaType.BOOK,
+                    next,
+                )
+            }
+        }
     }
 
     private fun openAppIntent(): PendingIntent {
@@ -368,19 +422,149 @@ class LuguPlaybackService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Chapter navigation and speed, as buttons a car can show.
+     *
+     * A car's own transport has no concept of a chapter and no speed control, and both
+     * are what an audiobook listener actually reaches for. They are session commands
+     * rather than player commands because neither maps onto anything Media3 defines.
+     */
+    private val carCommands = listOf(
+        CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+            .setSessionCommand(SessionCommand(COMMAND_CHAPTER_PREVIOUS, android.os.Bundle.EMPTY))
+            .setDisplayName("Previous chapter")
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_NEXT)
+            .setSessionCommand(SessionCommand(COMMAND_CHAPTER_NEXT, android.os.Bundle.EMPTY))
+            .setDisplayName("Next chapter")
+            .build(),
+        CommandButton.Builder(CommandButton.ICON_PLAYBACK_SPEED)
+            .setSessionCommand(SessionCommand(COMMAND_SPEED_CYCLE, android.os.Bundle.EMPTY))
+            .setDisplayName("Speed")
+            .build(),
+    )
+
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
-        ): MediaSession.ConnectionResult = MediaSession.ConnectionResult.AcceptedResultBuilder(session).build()
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+            carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands.build())
+                .setCustomLayout(carCommands)
+                .build()
+        }
 
         override fun onCustomCommand(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
             customCommand: SessionCommand,
             args: android.os.Bundle,
-        ): ListenableFuture<SessionResult> =
-            Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        ): ListenableFuture<SessionResult> {
+            when (customCommand.customAction) {
+                COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
+                COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
+                COMMAND_SPEED_CYCLE -> cycleSpeed()
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        override fun onGetLibraryRoot(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            params: MediaLibraryService.LibraryParams?,
+        ): ListenableFuture<LibraryResult<MediaItem>> =
+            Futures.immediateFuture(LibraryResult.ofItem(browseTree.root(), params))
+
+        override fun onGetChildren(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            parentId: String,
+            page: Int,
+            pageSize: Int,
+            params: MediaLibraryService.LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+            val children = withContext(Dispatchers.IO) { browseTree.children(parentId) }
+            LibraryResult.ofItemList(ImmutableList.copyOf(children), params)
+        }
+
+        override fun onGetItem(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            mediaId: String,
+        ): ListenableFuture<LibraryResult<MediaItem>> = scope.future {
+            val item = withContext(Dispatchers.IO) { browseTree.item(mediaId) }
+            if (item == null) {
+                LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            } else {
+                LibraryResult.ofItem(item, null)
+            }
+        }
+
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: MediaLibraryService.LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> = scope.future {
+            val results = withContext(Dispatchers.IO) { browseTree.search(query) }
+            session.notifySearchResultChanged(browser, query, results.size, params)
+            LibraryResult.ofVoid()
+        }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: MediaLibraryService.LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+            val results = withContext(Dispatchers.IO) { browseTree.search(query) }
+            LibraryResult.ofItemList(ImmutableList.copyOf(results), params)
+        }
+
+        /**
+         * A car hands back an id, or a spoken phrase, and expects playback.
+         *
+         * Neither carries anything else — no URLs, no track list, no position — so the
+         * whole session is resolved here, exactly as it would be from the phone. That is
+         * what makes a downloaded book start instantly in a car with no signal.
+         */
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
+            val requested = mediaItems.firstOrNull()
+                ?: return@future MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
+
+            val target = BrowseNode.parse(requested.mediaId) as? BrowseNode.Playable
+                ?: withContext(Dispatchers.IO) {
+                    requested.requestMetadata.searchQuery?.let { spoken ->
+                        browseTree.search(spoken).firstOrNull()
+                            ?.let { BrowseNode.parse(it.mediaId) as? BrowseNode.Playable }
+                    }
+                }
+                // Already-resolved items (the app's own play path) pass through untouched.
+                ?: return@future MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
+
+            val resolved = withContext(Dispatchers.IO) {
+                resumptionResolver.resolve(target.itemId, target.episodeId)
+            } ?: return@future MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
+
+            stateHolder.set(resolved.nowPlaying)
+            MediaSession.MediaItemsWithStartPosition(
+                resolved.mediaItems,
+                resolved.startTrackIndex,
+                resolved.startPositionMs,
+            )
+        }
 
         /**
          * The headset play button after the app was killed, or after a reboot.
@@ -433,12 +617,22 @@ class LuguPlaybackService : MediaLibraryService() {
 
         /** A jump at least this large offers an undo, because it may not have been meant. */
         const val UNDO_PROMPT_SEC = 120.0
+
+        /** Float comparison slack, so cycling never sticks on the preset it is already at. */
+        const val SPEED_EPSILON = 0.001f
+
+        const val COMMAND_CHAPTER_PREVIOUS = "io.github.lightheaded.lugu.CHAPTER_PREVIOUS"
+        const val COMMAND_CHAPTER_NEXT = "io.github.lightheaded.lugu.CHAPTER_NEXT"
+        const val COMMAND_SPEED_CYCLE = "io.github.lightheaded.lugu.SPEED_CYCLE"
     }
 }
 
 /** Injected so [LuguPlaybackService] does not need to know how resumption is worked out. */
 interface ResumptionResolver {
     suspend fun resolveLastPlayed(): Resumption?
+
+    /** Everything needed to play one item, given nothing but its id. */
+    suspend fun resolve(itemId: String, episodeId: String?): Resumption?
 }
 
 data class Resumption(

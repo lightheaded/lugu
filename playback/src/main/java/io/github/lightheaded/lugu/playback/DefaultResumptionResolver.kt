@@ -27,25 +27,32 @@ class DefaultResumptionResolver @Inject constructor(
     override suspend fun resolveLastPlayed(): Resumption? {
         val account = authRepository.account() ?: return null
         val last = progressDao.mostRecent(account.serverId, account.userId) ?: return null
+        return resolve(last.libraryItemId, last.episodeKey.toEpisodeIdOrNull())
+    }
 
-        val resolved = mediaResolver.resolve(
-            account = account,
-            itemId = last.libraryItemId,
-            episodeId = last.episodeKey.toEpisodeIdOrNull(),
-        ).getOrNull() ?: return null
+    /**
+     * One item, resolved into something a player can take.
+     *
+     * Shared by resumption, by the end-of-book continuation and by anything a car asks
+     * to play, because all three arrive with nothing but an id and none of them can
+     * count on a screen being alive to fill in the rest.
+     */
+    override suspend fun resolve(itemId: String, episodeId: String?): Resumption? {
+        val account = authRepository.account() ?: return null
+        val resolved = mediaResolver.resolve(account, itemId, episodeId).getOrNull() ?: return null
 
         val chapters = runCatching {
-            libraryRepository.chapters(account, last.libraryItemId).map {
+            libraryRepository.chapters(account, itemId).map {
                 Chapter(it.chapterIndex, it.startSec, it.endSec, it.title)
             }
         }.getOrDefault(emptyList())
 
         val nowPlaying = NowPlaying(
-            libraryItemId = last.libraryItemId,
-            episodeId = last.episodeKey.toEpisodeIdOrNull(),
+            libraryItemId = itemId,
+            episodeId = episodeId,
             title = resolved.session.title,
             author = resolved.session.author,
-            coverUrl = runCatching { libraryRepository.coverUrl(last.libraryItemId, 600) }.getOrNull(),
+            coverUrl = runCatching { libraryRepository.coverUrl(itemId, 600) }.getOrNull(),
             durationSec = resolved.session.durationSec,
             tracks = resolved.session.tracks,
             chapters = chapters.ifEmpty { resolved.session.chapters },
