@@ -87,6 +87,57 @@ Links should be consistent **everywhere**, not just on one screen:
 | Now-playing title links to the item page | done |
 | Author/series/narrator links | todo — still no author or series *page* to link to. M2 added series awareness (a parsed series title and number, and a "Next in series" shelf), so the data now exists; the pages do not |
 
+## Shape of the app — home, libraries, and what belongs where
+
+Reported 15 Aug, after M2. Four related asks, all about a library too big to work through
+one row at a time.
+
+| Item | Status |
+|---|---|
+| **Multi-select everywhere** — pick several episodes and download them in one go | todo |
+| **Sort and filter everywhere** — find an episode in a podcast with a thousand of them | todo |
+| **A "Home" or "Dashboard" separate from the library itself** | todo |
+| **Library selection does not scope what is shown** — podcasts appear when only audiobooks is selected | todo — cause found, see below |
+| **Let a media type be switched off entirely**, so someone who never listens to podcasts never sees them | todo |
+
+**Multi-select.** Every action in the app is currently one row at a time, which is fine
+for a book and wrong for a podcast: downloading eight episodes means eight round trips
+through the same menu. The obvious answer is a selection mode — long-press to enter it,
+then Download, Add to queue and Remove acting on the set — and the same mode should serve
+the queue screen, so clearing five entries is not five swipes. Worth deciding early that
+selection is a property of a *list*, not of the episode list, or it will be built three
+times.
+
+**Sort and filter.** The episode list has no search, no filter and no sort control, and
+it renders every episode the server has. On a podcast with a thousand episodes that is
+both unusable and slow. The pieces already exist elsewhere: FTS covers episode titles,
+and the plan's filter/sort UI (duration, narrator, year, progress, downloaded) was
+written for the library grid. It should be one control used in both places, plus paging
+on the episode list, because a screen that renders a thousand rows is a scroll nobody
+finishes.
+
+**Home versus library.** The single screen does two jobs. The computed shelves — Continue,
+Next in series, Almost finished — answer "what should I play now"; the grid answers "show
+me everything". Those want to be separate destinations: a Home that is only the shelves,
+and a library that is only the browse, with the media types as their own tabs or as a
+picker rather than as chips sharing a screen with shelves that ignore them.
+
+**Which is also the bug.** The confusion is not a matter of taste — the screen genuinely
+mixes libraries. The grid is scoped by the selected library (`observeItems(account,
+libraryId)`), but every shelf above it is scoped to the account only
+(`observeShelves(account)`, and each shelf query filters on `serverId`/`userId` and
+nothing else). So selecting the audiobook library filters the grid and leaves podcasts on
+the shelves directly above it, which reads as the filter being broken. Whether shelves
+*should* be per-library is a real question — "continue listening" arguably spans
+everything — but it has to be decided and shown, not left as an accident of two different
+queries.
+
+**Switching a type off.** If someone has no podcasts, or has them and does not want them
+here, the podcast tab should not exist. A setting, and it should reach everywhere: the
+tabs, the shelves, search results, and the car's browse tree, which currently offers a
+Podcasts node to anyone with a podcast library. The same switch is the honest answer to
+"why am I seeing this" — better to remove it than to explain it.
+
 ## Notices (rewound, jumped)
 
 Automatic corrections must be announced — a silent one is indistinguishable from the app
