@@ -20,7 +20,9 @@ import io.github.lightheaded.lugu.core.sync.Clock
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 
 /** What a screen needs to know about one item's download. */
@@ -49,14 +51,34 @@ sealed interface DownloadRefusal {
 
 class DownloadRefusedException(val refusal: DownloadRefusal) : Exception(describe(refusal)) {
     private companion object {
+        /**
+         * A refusal states its arithmetic.
+         *
+         * "You are over your cap" with no numbers is unfalsifiable: it reads as a setting
+         * the listener chose badly, when it can just as easily be the app's own estimate
+         * being wrong. Printing all three numbers makes a bad estimate visible as a bad
+         * estimate — which is exactly how the podcast feed-size bug was reported.
+         */
         fun describe(refusal: DownloadRefusal): String = when (refusal) {
             is DownloadRefusal.OverStorageCap ->
-                "Not enough of the download allowance left — raise the storage cap in " +
-                    "Settings, or remove a download."
+                "Needs ${formatBytes(refusal.neededBytes)}, and " +
+                    "${formatBytes(refusal.usedBytes)} of the " +
+                    "${formatBytes(refusal.capBytes)} cap is already used. Raise the cap " +
+                    "in Settings, or remove a download."
 
             DownloadRefusal.NoAudioFiles -> "The server lists no audio files for this item."
         }
     }
+}
+
+/** Bytes as a listener would say them. Binary units, because that is what the cap is set in. */
+fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 MB"
+    val gb = bytes / (1024.0 * 1024 * 1024)
+    if (gb >= 1) return "%.1f GB".format(gb)
+    val mb = bytes / (1024.0 * 1024)
+    if (mb >= 1) return "%.0f MB".format(mb)
+    return "%.0f KB".format(bytes / 1024.0)
 }
 
 /**
@@ -85,8 +107,22 @@ class DownloadRepository @Inject constructor(
         downloadDao.observeForItem(account.serverId, account.userId, itemId)
             .map { rows -> rows.map { it.toStatus() } }
 
+    /**
+     * What the storage readout shows — and deliberately the same number the cap check
+     * reads, rather than the sum of the rows.
+     *
+     * They can disagree: the cache holds bytes for a download whose row was deleted
+     * while the service was dead, and the rows are per account while the cache and the
+     * cap are per device. A readout that says 600 MB while the check says the phone is
+     * full is how a correct refusal ends up reported as a bug. Room's own sum is kept as
+     * the change signal, since it is what moves when a download does.
+     */
     fun observeBytesUsed(account: ActiveAccount): Flow<Long> =
         downloadDao.observeBytesUsed(account.serverId, account.userId)
+            .map { downloadCache.bytesUsed() }
+            // Off the main thread: reading the cache blocks until it has finished
+            // indexing, which on a phone full of books is not instant.
+            .flowOn(Dispatchers.IO)
 
     suspend fun status(account: ActiveAccount, itemId: String, episodeId: String?): DownloadStatus? =
         downloadDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))?.toStatus()
@@ -133,7 +169,7 @@ class DownloadRepository @Inject constructor(
             throw DownloadRefusedException(DownloadRefusal.NoAudioFiles)
         }
 
-        val estimatedBytes = estimateBytes(dto.media?.size, manifest, domain.durationSec)
+        val estimatedBytes = estimateBytes(manifest, domain.durationSec)
         val usedBytes = downloadCache.bytesUsed()
         if (usedBytes + estimatedBytes > settings.storageCapBytes) {
             throw DownloadRefusedException(
@@ -232,16 +268,25 @@ class DownloadRepository @Inject constructor(
     }
 
     /**
-     * Size to charge against the cap.
+     * Size to charge against the cap: the files about to be fetched, and only those.
      *
-     * The server's own `size` is preferred; when it is missing the estimate comes from
-     * duration at a typical spoken-word bitrate, which is coarse but errs high enough to
-     * be a useful guard.
+     * This used to prefer the item's own `media.size`, which is a different number than
+     * it looks. On a podcast it is the entire feed — one 56 MB episode of an 18 GB show
+     * was charged the whole 18 GB, so an empty 8 GB cap refused the first episode
+     * anyone tapped. On a book it also counts the ebook and any file flagged `exclude`,
+     * neither of which is downloaded. The manifest already knows what is coming down;
+     * asking it is both correct and narrower.
+     *
+     * Per track, the fallback ladder runs size → bitrate (both resolved when the
+     * manifest was built) → duration at a typical spoken-word bitrate.
      */
-    private fun estimateBytes(reportedSize: Long?, manifest: DownloadManifest, durationSec: Double): Long {
-        reportedSize?.takeIf { it > 0 }?.let { return it }
-        val seconds = manifest.tracks.sumOf { it.durationSec }.takeIf { it > 0 } ?: durationSec
-        return (seconds * ASSUMED_BYTES_PER_SECOND).toLong().coerceAtLeast(1)
+    private fun estimateBytes(manifest: DownloadManifest, durationSec: Double): Long {
+        val total = manifest.tracks.sumOf { track ->
+            track.sizeBytes?.takeIf { it > 0 }
+                ?: (track.durationSec * ASSUMED_BYTES_PER_SECOND).toLong()
+        }
+        if (total > 0) return total
+        return (durationSec * ASSUMED_BYTES_PER_SECOND).toLong().coerceAtLeast(1)
     }
 
     private fun titleFor(dto: io.github.lightheaded.lugu.core.api.LibraryItemDto, episodeId: String?): String? {

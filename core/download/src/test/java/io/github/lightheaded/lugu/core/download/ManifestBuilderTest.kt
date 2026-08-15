@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import io.github.lightheaded.lugu.core.api.AudioFileDto
 import io.github.lightheaded.lugu.core.api.AudioTrackDto
 import io.github.lightheaded.lugu.core.api.EpisodeDto
+import io.github.lightheaded.lugu.core.api.FileMetadataDto
 import io.github.lightheaded.lugu.core.api.LibraryItemDto
 import io.github.lightheaded.lugu.core.api.MediaDto
 import org.junit.Test
@@ -140,6 +141,97 @@ class ManifestBuilderTest {
         val dto = LibraryItemDto(id = "li_pod", media = MediaDto(episodes = emptyList()))
 
         assertThat(ManifestBuilder.forEpisode(dto, "ep_missing", baseUrl)).isNull()
+    }
+
+    /**
+     * The podcast storage-cap bug, in one assertion.
+     *
+     * `media.size` on a podcast is the whole feed — 371 MB across 8 episodes on the test
+     * server, 18 GB across 327 on the largest real one. Charging that to a single
+     * episode is what refused the first download anyone tried against an 8 GB cap.
+     */
+    @Test
+    fun `an episode is charged for itself and not for the feed`() {
+        val episode = { id: String, bytes: Long ->
+            EpisodeDto(
+                id = id,
+                title = id,
+                size = bytes,
+                audioTrack = AudioTrackDto(
+                    duration = 2716.77,
+                    contentUrl = "/api/items/li_pod/file/$id",
+                    mimeType = "audio/mpeg",
+                    metadata = FileMetadataDto(size = bytes),
+                ),
+            )
+        }
+        val dto = LibraryItemDto(
+            id = "li_pod",
+            media = MediaDto(
+                size = 371_051_313,
+                episodes = listOf(episode("ep_1", 43_469_774), episode("ep_2", 51_000_000)),
+            ),
+        )
+
+        val manifest = ManifestBuilder.forEpisode(dto, "ep_1", baseUrl)
+
+        assertThat(manifest?.tracks?.single()?.sizeBytes).isEqualTo(43_469_774)
+    }
+
+    /** No size recorded, but a bitrate: still far better than guessing from duration. */
+    @Test
+    fun `a missing size falls back to bitrate times duration`() {
+        val dto = LibraryItemDto(
+            id = "li_pod",
+            media = MediaDto(
+                episodes = listOf(
+                    EpisodeDto(
+                        id = "ep_1",
+                        title = "One",
+                        audioFile = AudioFileDto(
+                            ino = "999",
+                            duration = 3600.0,
+                            mimeType = "audio/mpeg",
+                            bitRate = 128_000,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val manifest = ManifestBuilder.forEpisode(dto, "ep_1", baseUrl)
+
+        assertThat(manifest?.tracks?.single()?.sizeBytes).isEqualTo(57_600_000)
+    }
+
+    /**
+     * A book's size is the sum of its tracks — which is not `media.size`, because that
+     * also counts the ebook and every file the server flagged `exclude`.
+     */
+    @Test
+    fun `a book is charged for the tracks it will actually fetch`() {
+        val sized = { index: Int, bytes: Long ->
+            track(index, 0.0, 1000.0, "ino$index").copy(metadata = FileMetadataDto(size = bytes))
+        }
+        val dto = LibraryItemDto(
+            id = "li_1",
+            media = MediaDto(
+                size = 900_000_000,
+                tracks = listOf(sized(1, 11_406_447), sized(2, 12_000_000)),
+            ),
+        )
+
+        val manifest = ManifestBuilder.forBook(dto, baseUrl)
+
+        assertThat(manifest.tracks.sumOf { it.sizeBytes ?: 0 }).isEqualTo(23_406_447)
+    }
+
+    /** Nothing to go on: null, so the caller knows to estimate rather than trust a zero. */
+    @Test
+    fun `a track with neither size nor bitrate reports no size at all`() {
+        val dto = LibraryItemDto(id = "li_1", media = MediaDto(tracks = listOf(track(1, 0.0, 100.0, "a"))))
+
+        assertThat(ManifestBuilder.forBook(dto, baseUrl).tracks.single().sizeBytes).isNull()
     }
 
     @Test
