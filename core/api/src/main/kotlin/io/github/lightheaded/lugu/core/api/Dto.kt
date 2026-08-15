@@ -92,6 +92,16 @@ data class MediaDto(
     val metadata: MetadataDto? = null,
     val chapters: List<ChapterDto> = emptyList(),
     val audioFiles: List<AudioFileDto> = emptyList(),
+    /**
+     * The playable timeline, present on `?expanded=1`.
+     *
+     * Preferred over [audioFiles] wherever both would do. Verified live on 2.36.0: the
+     * server has already computed `startOffset` and `contentUrl` here, and — the part
+     * that matters — it has already dropped any audio file flagged `exclude`. Building a
+     * book out of [audioFiles] therefore risks including a file the server would never
+     * play, at offsets derived by re-doing arithmetic the server already did.
+     */
+    val tracks: List<AudioTrackDto> = emptyList(),
     val episodes: List<EpisodeDto> = emptyList(),
     val tags: List<String> = emptyList(),
 )
@@ -123,11 +133,14 @@ data class ChapterDto(
 
 @Serializable
 data class AudioFileDto(
+    /** Null on podcast episode files (verified live on 2.36.0), so it coerces to 0. */
     val index: Int = 0,
     val ino: String = "",
     val duration: Double = 0.0,
     val mimeType: String? = null,
     val codec: String? = null,
+    /** Files the server will not play. Excluded from `media.tracks` and from downloads. */
+    val exclude: Boolean = false,
 )
 
 @Serializable

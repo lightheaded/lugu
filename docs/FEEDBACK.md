@@ -39,7 +39,7 @@ and **searchable**.
 | Which buttons appear in the notification | done |
 | What headphone/headset buttons do | todo — classifier logic exists, not surfaced |
 | Categorised settings screen | done |
-| Searchable settings | todo — categories are the index search will use |
+| Searchable settings | done — matches synonyms too, so "data" finds Wi-Fi-only and "rewind" finds skip-back |
 
 ## Speed
 
@@ -69,7 +69,7 @@ Links should be consistent **everywhere**, not just on one screen:
 | Item | Status |
 |---|---|
 | Now-playing title links to the item page | done |
-| Author/series/narrator links | deferred — needs author and series pages, which do not exist yet (M2 discoverability) |
+| Author/series/narrator links | todo — still no author or series *page* to link to. M2 added series awareness (a parsed series title and number, and a "Next in series" shelf), so the data now exists; the pages do not |
 
 ## Rewind notice
 

@@ -29,6 +29,7 @@ dependencies {
     implementation(project(":core:api"))
     implementation(project(":core:db"))
     implementation(project(":core:sync"))
+    implementation(project(":core:download"))
 
     api(libs.media3.common)
     api(libs.media3.session)

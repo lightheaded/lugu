@@ -39,7 +39,11 @@ raw = sys.stdin.read()
 raw = raw.replace(server, "https://SERVER").replace(user, "USER")
 raw = re.sub(r'"(li|ep|pl|col|lib|usr|play)_[A-Za-z0-9]+"', r'"\1_REDACTED"', raw)
 raw = re.sub(r'"(accessToken|refreshToken|token|password)"\s*:\s*"[^"]*"', r'"\1":"REDACTED"', raw)
-raw = re.sub(r'"(path|relPath|coverPath|contentUrl|libraryFolderId)"\s*:\s*"[^"]*"', r'"\1":"REDACTED"', raw)
+# Filesystem paths can carry a real name or a directory layout, so they go entirely.
+raw = re.sub(r'"(path|relPath|coverPath|libraryFolderId)"\s*:\s*"[^"]*"', r'"\1":"REDACTED"', raw)
+# contentUrl deliberately keeps its shape. Blanking it defeated the point of the
+# capture: that URL template is the single thing lugu most needs confirmed, and the
+# ids inside it have already been replaced by the rule above.
 try:
     print(json.dumps(json.loads(raw), indent=2)[:20000])
 except Exception:
@@ -89,8 +93,18 @@ if [ -n "$ITEM" ]; then
     -d '{"deviceInfo":{"deviceId":"capture","clientName":"lugu","clientVersion":"0.1.0"},
          "supportedMimeTypes":["audio/flac","audio/mpeg","audio/mp4","audio/aac","audio/ogg"],
          "mediaPlayer":"exo-player","forceDirectPlay":false,"forceTranscode":false}' \
-    "$SERVER/api/items/$ITEM/play" | redact > "$OUT/play-session.json"
+    "$SERVER/api/items/$ITEM/play" > "$OUT/.play-session.raw"
+  redact < "$OUT/.play-session.raw" > "$OUT/play-session.json"
   echo "wrote $OUT/play-session.json"
+
+  # Close the session again. This runs against a real account: an open session left
+  # behind shows up in someone's listening history as a book they never played.
+  SESSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' \
+    "$OUT/.play-session.raw" 2>/dev/null || true)"
+  if [ -n "$SESSION" ]; then
+    auth -X POST "$SERVER/api/session/$SESSION/close" >/dev/null && echo "closed the capture session"
+  fi
+  rm -f "$OUT/.play-session.raw"
 fi
 
 say "GET /api/me (progress table)"

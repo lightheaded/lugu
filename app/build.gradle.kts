@@ -24,8 +24,8 @@ android {
         applicationId = "io.github.lightheaded.lugu"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0-alpha01"
+        versionCode = 2
+        versionName = "0.2.0-alpha01"
     }
 
     signingConfigs {
@@ -92,6 +92,7 @@ dependencies {
     implementation(project(":core:api"))
     implementation(project(":core:db"))
     implementation(project(":core:sync"))
+    implementation(project(":core:download"))
     implementation(project(":playback"))
     implementation(project(":feature:library"))
     implementation(project(":feature:player"))

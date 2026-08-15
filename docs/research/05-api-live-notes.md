@@ -2,13 +2,13 @@
 
 *Started 2026-08-14 during M0. Server branch: `advplyr/audiobookshelf@master` (v2.36 era).*
 
-**Status: endpoint paths capture-verified against a live 2.36.0 server; payload shapes
-still source-verified.** The shapes below were read out of the server's own code, and
-each entry names the file it came from. Unauthenticated endpoints have since been
-confirmed live (below). Anything marked **UNVERIFIED** still needs a real
-request/response pair — that is the remaining part of Phase 2 task 1 in
-[../EXECUTION-PLAN.md](../EXECUTION-PLAN.md), and it needs credentials in
-`local.properties` to finish.
+**Status: authenticated capture run against a live 2.36.0 server on 2026-08-15** (a
+real book library and a podcast library). The item, library, series and playback
+shapes below are now confirmed against real responses rather than read out of the server
+source. Anything still marked **UNVERIFIED** has not had a real request/response pair.
+
+The capture corrected two assumptions M2 had already been built on; both are recorded
+under "Item payload" below, because both would have shipped as bugs.
 
 ## Live capture — unauthenticated (server 2.36.0)
 
@@ -101,6 +101,58 @@ GET  /api/me                      → user incl. the full mediaProgress array
 - **UNVERIFIED**: whether a `local-all` upload moves `MediaProgress` forward on its own,
   or whether the client must also PATCH progress. lugu currently does both, which is
   harmless but possibly redundant.
+
+## Item payload (captured live, 2.36.0)
+
+```
+GET /api/items/:id?expanded=1
+  media: {id, coverPath, duration, size, numAudioFiles, numChapters, numTracks,
+          metadata, chapters[], audioFiles[], tracks[], tags[]}
+  media.tracks[]:      {index, startOffset, duration, contentUrl, mimeType, codec, ino, …}
+  media.audioFiles[]:  {index, ino, duration, mimeType, codec, exclude, bitRate, …}
+```
+
+Two corrections to what lugu assumed while M2 was being written:
+
+1. **`media.tracks` is the playable timeline; `media.audioFiles` is not.** The server has
+   already computed `startOffset` on `tracks`, and has already dropped files flagged
+   `exclude`. Building a download manifest from `audioFiles` means re-deriving offsets by
+   hand *and* risking a file the server would never play — which would surface as a
+   stretch of wrong audio partway through a book. `ManifestBuilder` now prefers `tracks`
+   and keeps `audioFiles` only as a fallback.
+2. **`contentUrl` is confirmed as `/api/items/:id/file/:ino`**, relative to the server
+   root, on both book tracks and podcast episode tracks. This was the shape the whole
+   offline manifest rests on.
+
+Also observed:
+
+- `audioFiles[].index` is 1-based on books and **null** on podcast episode files.
+- A podcast episode carries its own single `audioTrack` with a `contentUrl`, so an
+  episode download does not need the `ino` path at all.
+- The minified list payload has no `tracks`, `audioFiles` or `chapters` — only
+  `numAudioFiles`/`numChapters` counts. Downloading therefore needs the expanded fetch.
+
+## Series metadata (captured live, 2.36.0)
+
+`metadata.series` came back **empty on every item** in the list payload; the only series
+information an item carries is `metadata.seriesName`, a single string of the form
+`"Example Series #10"`. `GET /api/libraries/:id/series` lists the series
+themselves but the per-item sequence still only exists inside that
+string.
+
+Measured across the library: about a third have a `seriesName`, and **about two-thirds of those carry a parseable
+`#N`**. The rest are genuine series with no volume number ("The Tidelands",
+"The Silt Roads") or metadata noise ("Unabridged").
+
+Two consequences, both now in the code:
+
+- The sequence has to be parsed out of the name (`core/model/Series.kt`) and stored as a
+  number. This library contains "Example Series #19", "#21", "#29" and "Example
+  Series #10", so ordering a series by its name string would put #10 before #2 and
+  recommend the wrong book — not a hypothetical.
+- Items whose sequence will not parse are left out of "next in series" rather than
+  guessed at. That is roughly a third of series items here, and the alternative is
+  confidently recommending a volume out of order.
 
 ## Still to capture live
 

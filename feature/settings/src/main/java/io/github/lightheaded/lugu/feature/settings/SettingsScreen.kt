@@ -1,8 +1,10 @@
 package io.github.lightheaded.lugu.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,14 +12,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -30,15 +36,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 
 /**
  * Settings, grouped by what the listener is trying to change rather than by which
- * subsystem implements it.
+ * subsystem implements it — and searchable, because categories stop helping somewhere
+ * around the third screenful.
  *
- * Search is not here yet; the categories are the ordering that search will index.
+ * Every setting is declared as an entry with its own synonyms rather than written
+ * inline, so adding one automatically makes it findable. The alternative — a search
+ * index maintained separately from the UI — goes stale the first time someone adds a
+ * setting and forgets, and a search that silently omits a setting is worse than none.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,7 +60,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val settings = state.settings
+    val entries = settingEntries(state, viewModel, onSignedOut)
+    val visible = SettingsIndex.filter(entries, state.query)
 
     Scaffold(
         modifier = modifier,
@@ -64,12 +76,70 @@ fun SettingsScreen(
             )
         },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp),
-        ) {
-            item { SectionHeader("Skipping") }
-            item {
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            OutlinedTextField(
+                value = state.query,
+                onValueChange = viewModel::onQueryChange,
+                label = { Text("Search settings") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (state.query.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.onQueryChange("") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+
+            if (visible.isEmpty()) {
+                Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.TopCenter) {
+                    Text(
+                        "Nothing matches “${state.query}”.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                return@Column
+            }
+
+            LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
+                // Headers come from the entries themselves, so filtering can never leave
+                // a category heading with nothing under it.
+                items(visible, key = { it.id }) { entry ->
+                    val isFirstOfCategory = visible.first { it.category == entry.category }.id == entry.id
+                    if (isFirstOfCategory) SectionHeader(entry.category)
+                    entry.content()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The whole settings surface, declared once.
+ *
+ * Kept as data rather than as a hand-written column so that search, ordering and
+ * rendering all read from the same list.
+ */
+@Composable
+private fun settingEntries(
+    state: SettingsUiState,
+    viewModel: SettingsViewModel,
+    onSignedOut: () -> Unit,
+): List<SettingEntry> {
+    val settings = state.settings
+    val downloads = state.downloads
+
+    return buildList {
+        add(
+            SettingEntry(
+                id = "skip-back",
+                category = "Skipping",
+                title = "Skip back",
+                keywords = "rewind back seconds jump replay again re-listen missed",
+            ) {
                 ChoiceRow(
                     title = "Skip back",
                     subtitle = "Used most often, to re-hear something missed",
@@ -78,8 +148,15 @@ fun SettingsScreen(
                     format = { "${it}s" },
                     onSelect = viewModel::setSkipBack,
                 )
-            }
-            item {
+            },
+        )
+        add(
+            SettingEntry(
+                id = "skip-forward",
+                category = "Skipping",
+                title = "Skip forward",
+                keywords = "forward fast skip ahead seconds jump",
+            ) {
                 ChoiceRow(
                     title = "Skip forward",
                     subtitle = null,
@@ -88,84 +165,202 @@ fun SettingsScreen(
                     format = { "${it}s" },
                     onSelect = viewModel::setSkipForward,
                 )
-            }
+            },
+        )
 
-            item { SectionHeader("Buttons") }
-            item {
-                Text(
-                    "The skip pair is always shown. Choose what else appears.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                )
-            }
-            item {
+        add(
+            SettingEntry(
+                id = "buttons-player",
+                category = "Buttons",
+                title = "Buttons in the player",
+                keywords = "controls transport chapter layout screen show hide",
+            ) {
                 ButtonPicker(
                     title = "In the player",
+                    subtitle = "The skip pair is always shown. Choose what else appears.",
                     selected = settings.playerButtons,
                     onToggle = viewModel::togglePlayerButton,
                 )
-            }
-            item {
+            },
+        )
+        add(
+            SettingEntry(
+                id = "buttons-notification",
+                category = "Buttons",
+                title = "Buttons in the notification",
+                keywords = "notification lock screen controls headphones bluetooth chapter show hide",
+            ) {
                 ButtonPicker(
                     title = "In the notification",
                     subtitle = "Space is tight here; fewer is usually better",
                     selected = settings.notificationButtons,
                     onToggle = viewModel::toggleNotificationButton,
                 )
-            }
+            },
+        )
 
-            item { SectionHeader("Speed") }
-            item {
+        add(
+            SettingEntry(
+                id = "speed-default",
+                category = "Speed",
+                title = "Default speed",
+                keywords = "tempo rate faster slower 1.5x 2x pace",
+            ) {
                 SpeedRow(
                     title = "Default speed",
                     speed = settings.speed.defaultSpeed,
                     onChange = viewModel::setDefaultSpeed,
                 )
-            }
-            item {
+            },
+        )
+        add(
+            SettingEntry(
+                id = "speed-podcast-separate",
+                category = "Speed",
+                title = "Separate speed for podcasts",
+                keywords = "podcast rate tempo different pace",
+            ) {
                 SwitchRow(
                     title = "Separate speed for podcasts",
                     subtitle = "Podcasts often suit a different pace to books",
                     checked = settings.speed.separatePodcastSpeed,
                     onChange = viewModel::setSeparatePodcastSpeed,
                 )
-            }
-            if (settings.speed.separatePodcastSpeed) {
-                item {
+            },
+        )
+        if (settings.speed.separatePodcastSpeed) {
+            add(
+                SettingEntry(
+                    id = "speed-podcast-default",
+                    category = "Speed",
+                    title = "Default podcast speed",
+                    keywords = "podcast rate tempo pace",
+                ) {
                     SpeedRow(
                         title = "Default podcast speed",
                         speed = settings.speed.defaultPodcastSpeed,
                         onChange = viewModel::setDefaultPodcastSpeed,
                     )
-                }
-            }
-            item {
+                },
+            )
+        }
+        add(
+            SettingEntry(
+                id = "speed-remember-book",
+                category = "Speed",
+                title = "Remember speed per book",
+                keywords = "per book narrator remember sticky",
+            ) {
                 SwitchRow(
                     title = "Remember speed per book",
                     subtitle = null,
                     checked = settings.speed.rememberPerBook,
                     onChange = viewModel::setRememberPerBook,
                 )
-            }
-            item {
+            },
+        )
+        add(
+            SettingEntry(
+                id = "speed-remember-podcast",
+                category = "Speed",
+                title = "Remember speed per podcast",
+                keywords = "per podcast series episode narrator remember sticky",
+            ) {
                 SwitchRow(
                     title = "Remember speed per podcast",
                     subtitle = "Kept for the whole podcast, not one episode — the narrator is the same",
                     checked = settings.speed.rememberPerPodcast,
                     onChange = viewModel::setRememberPerPodcast,
                 )
-            }
-            item {
+            },
+        )
+        add(
+            SettingEntry(
+                id = "speed-presets",
+                category = "Speed",
+                title = "Speed presets",
+                keywords = "presets choices chips one tap 1.5x 2x custom",
+            ) {
                 PresetEditor(
                     presets = settings.speed.presets,
                     onAdd = viewModel::addSpeedPreset,
                     onRemove = viewModel::removeSpeedPreset,
                 )
-            }
+            },
+        )
 
-            item { SectionHeader("Account") }
-            item {
+        add(
+            SettingEntry(
+                id = "download-wifi",
+                category = "Downloads",
+                title = "Download on Wi-Fi only",
+                keywords = "wifi mobile data cellular metered offline allowance roaming",
+            ) {
+                SwitchRow(
+                    title = "Wi-Fi only",
+                    subtitle = "A book is often a gigabyte or two",
+                    checked = downloads.wifiOnly,
+                    onChange = viewModel::setWifiOnly,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-charging",
+                category = "Downloads",
+                title = "Only while charging",
+                keywords = "charging battery power plugged offline",
+            ) {
+                SwitchRow(
+                    title = "Only while charging",
+                    subtitle = null,
+                    checked = downloads.requiresCharging,
+                    onChange = viewModel::setRequiresCharging,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-cap",
+                category = "Downloads",
+                title = "Storage cap",
+                keywords = "storage space limit size gb full disk offline",
+            ) {
+                ChoiceRow(
+                    title = "Storage cap",
+                    subtitle = "Downloads stop before this; nothing is ever deleted to make room",
+                    options = DownloadSettings.CAP_CHOICES_BYTES,
+                    selected = downloads.storageCapBytes,
+                    format = { "${it / (1024 * 1024 * 1024)} GB" },
+                    onSelect = viewModel::setStorageCap,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-auto-delete",
+                category = "Downloads",
+                title = "Remove finished downloads",
+                keywords = "auto delete cleanup finished reclaim space tidy",
+            ) {
+                ChoiceRow(
+                    title = "Remove finished downloads",
+                    subtitle = "Deletes the files only; your position and history are kept",
+                    options = DownloadSettings.AUTO_DELETE_CHOICES_DAYS,
+                    selected = downloads.autoDeleteFinishedAfterDays,
+                    format = { if (it == 0) "Never" else "After ${it}d" },
+                    onSelect = viewModel::setAutoDeleteFinishedAfterDays,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "account",
+                category = "Account",
+                title = "Account",
+                keywords = "server sign out log out user session address",
+            ) {
                 state.account?.let { account ->
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
                         Text(account.username, style = MaterialTheme.typography.bodyLarge)
@@ -185,8 +380,8 @@ fun SettingsScreen(
                 ) {
                     Text("Sign out", color = MaterialTheme.colorScheme.error)
                 }
-            }
-        }
+            },
+        )
     }
 }
 

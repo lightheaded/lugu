@@ -10,6 +10,8 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
+import io.github.lightheaded.lugu.core.sync.Shelf
+import io.github.lightheaded.lugu.core.sync.ShelfKind
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,10 +34,13 @@ data class LibraryRow(
         get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
 }
 
+/** A computed row of the home screen, already paired with progress. */
+data class ShelfRow(val kind: ShelfKind, val rows: List<LibraryRow>)
+
 data class LibraryUiState(
     val libraries: List<Library> = emptyList(),
     val selectedLibraryId: String? = null,
-    val continueListening: List<LibraryRow> = emptyList(),
+    val shelves: List<ShelfRow> = emptyList(),
     val items: List<LibraryRow> = emptyList(),
     val query: String = "",
     val isSyncing: Boolean = false,
@@ -84,9 +89,9 @@ class LibraryViewModel @Inject constructor(
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val continueListening: StateFlow<List<LibraryItem>> = account
+    private val shelves: StateFlow<List<Shelf>> = account
         .flatMapLatest { current ->
-            if (current == null) flowOf(emptyList()) else libraryRepository.observeContinueListening(current)
+            if (current == null) flowOf(emptyList()) else libraryRepository.observeShelves(current)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -94,15 +99,17 @@ class LibraryViewModel @Inject constructor(
         libraries,
         selectedLibraryId,
         items,
-        continueListening,
+        shelves,
         combine(progressByKey, query, syncing, syncMessage, error) { progress, text, isSyncing, message, err ->
             Extras(progress, text, isSyncing, message, err)
         },
-    ) { libs, selected, itemList, continuing, extras ->
+    ) { libs, selected, itemList, shelfList, extras ->
         LibraryUiState(
             libraries = libs,
             selectedLibraryId = selected,
-            continueListening = continuing.map { LibraryRow(it, extras.progress["${it.id}#"]) },
+            shelves = shelfList.map { shelf ->
+                ShelfRow(shelf.kind, shelf.items.map { LibraryRow(it, extras.progress["${it.id}#"]) })
+            },
             items = itemList.map { LibraryRow(it, extras.progress["${it.id}#"]) },
             query = extras.query,
             isSyncing = extras.isSyncing,
