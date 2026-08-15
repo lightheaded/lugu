@@ -21,6 +21,21 @@ Per requirement:
 5. **Cast**: media3-cast `CastPlayer` rewritten in 1.9.0 for automatic local↔remote transitions; custom `MediaItemConverter` for audiobook metadata.
 6. **Processing**: stock `SilenceSkippingAudioProcessor` + `SonicAudioProcessor` (speed w/o pitch shift); shake-to-extend is app-level SensorManager code (see Voice).
 
+**Notification layout caveat (learned the hard way, 1.11.0)**: `DefaultMediaNotificationProvider`
+builds its layout from **previous / play-pause / next** and has no seek-back or
+seek-forward button to select. Two consequences an audiobook client runs straight into:
+
+- Withdrawing `COMMAND_SEEK_TO_PREVIOUS`/`NEXT` to "hide chapter buttons" does not swap
+  them for seek buttons — it removes the side buttons entirely.
+- Available commands are read when a controller **connects**. A `ForwardingPlayer` that
+  computes `getAvailableCommands()` from live settings fires no change event, so the
+  session keeps whatever it saw at connect time and the withdrawal may never be seen.
+
+Net: with the default provider, the only reliable lever is *what those two buttons do*,
+not whether they exist. Real seek icons and explicit ordering require a custom layout
+(`CommandButton` + `setCustomLayout` + `onCustomCommand`). lugu shipped a ten-minute
+notification jump because of this — see docs/FEEDBACK.md.
+
 **AVRCP caveat (any stack)**: headset-firmware-level quirks (stale positions, dropped mappings) require a physical BT device test matrix. Media3 1.11.0 still patching this surface (AVRCP browsing fix for API 36–37).
 
 **HLS position caveat (any stack)**: HLS seeks snap to segment starts; reported position can start seconds in. Direct-play the original file whenever the device can decode it.
