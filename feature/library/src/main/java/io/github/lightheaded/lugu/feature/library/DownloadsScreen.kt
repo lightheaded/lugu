@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.download.DownloadStatus
+import io.github.lightheaded.lugu.core.download.formatBytes
 
 /**
  * What is on the phone, and how much room it is taking.
@@ -176,14 +177,4 @@ private fun DownloadRowView(
             compact = true,
         )
     }
-}
-
-/** Binary units, because that is what a phone's storage screen shows. */
-internal fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 MB"
-    val gb = bytes / (1024.0 * 1024 * 1024)
-    if (gb >= 1) return "%.1f GB".format(gb)
-    val mb = bytes / (1024.0 * 1024)
-    if (mb >= 1) return "%.0f MB".format(mb)
-    return "%.0f KB".format(bytes / 1024.0)
 }

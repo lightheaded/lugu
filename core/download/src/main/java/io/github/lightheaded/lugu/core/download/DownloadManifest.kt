@@ -26,6 +26,14 @@ data class DownloadTrack(
      * who moves their server to a new hostname should not silently lose every download.
      */
     val cacheKey: String,
+    /**
+     * What this file weighs, straight from the server's own file metadata.
+     *
+     * Per file rather than per item because the item's `size` answers a different
+     * question: on a podcast it is the whole feed. Null when the server did not say and
+     * the bitrate could not stand in; the caller estimates from duration instead.
+     */
+    val sizeBytes: Long? = null,
 )
 
 @Serializable
@@ -86,6 +94,7 @@ object ManifestBuilder {
                         url = absolute(track.contentUrl, baseUrl),
                         mimeType = track.mimeType.ifBlank { DEFAULT_MIME },
                         cacheKey = DownloadKeys.cacheKey(dto.id, "", track.index),
+                        sizeBytes = sizeOf(track.metadata?.size, track.bitRate, track.duration),
                     )
                 },
             )
@@ -101,6 +110,7 @@ object ManifestBuilder {
                 url = "$baseUrl/api/items/${dto.id}/file/${file.ino}",
                 mimeType = file.mimeType.orEmpty().ifBlank { DEFAULT_MIME },
                 cacheKey = DownloadKeys.cacheKey(dto.id, "", file.index),
+                sizeBytes = sizeOf(file.metadata?.size, file.bitRate, file.duration),
             )
             offset += file.duration
             track
@@ -131,9 +141,26 @@ object ManifestBuilder {
                         ?: file?.mimeType?.ifBlank { null }
                         ?: DEFAULT_MIME,
                     cacheKey = DownloadKeys.cacheKey(dto.id, episodeId, 0),
+                    sizeBytes = sizeOf(
+                        track?.metadata?.size ?: file?.metadata?.size ?: episode.size,
+                        track?.bitRate ?: file?.bitRate,
+                        track?.duration ?: file?.duration ?: 0.0,
+                    ),
                 ),
             ),
         )
+    }
+
+    /**
+     * The file's own byte count, or the best stand-in.
+     *
+     * Bitrate times duration is close enough for a storage guard when the server did not
+     * record a size, and both beat guessing from duration alone.
+     */
+    private fun sizeOf(reportedSize: Long?, bitRate: Long?, durationSec: Double): Long? {
+        reportedSize?.takeIf { it > 0 }?.let { return it }
+        val fromBitrate = bitRate?.takeIf { it > 0 }?.let { (durationSec * it / 8).toLong() }
+        return fromBitrate?.takeIf { it > 0 }
     }
 
     private fun absolute(contentUrl: String, baseUrl: String): String =

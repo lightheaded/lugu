@@ -19,7 +19,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -45,6 +47,9 @@ class DownloadEngine @Inject constructor(
 
     /** Serialises recomputation so two file events for one book cannot interleave. */
     private val refreshLock = Mutex()
+
+    /** Runs only while something is downloading; see [startTicking]. */
+    private var tickerJob: Job? = null
 
     private val downloadManagerLazy = lazy {
         DownloadManager(
@@ -93,6 +98,7 @@ class DownloadEngine @Inject constructor(
         val settings = downloadPrefs.current()
         applyRequirements(settings.wifiOnly, settings.requiresCharging)
         downloadDao.unfinished().forEach { refresh(it) }
+        startTicking()
     }
 
     private inner class ProgressListener : DownloadManager.Listener {
@@ -114,6 +120,30 @@ class DownloadEngine @Inject constructor(
         scope.launch {
             refreshLock.withLock {
                 downloadDao.findAny(itemId, episodeKey)?.let { refresh(it, error) }
+            }
+        }
+        startTicking()
+    }
+
+    /**
+     * Polls while bytes are actually moving, because nothing else will.
+     *
+     * [DownloadManager.Listener] fires when a download changes *state* — queued,
+     * downloading, completed — and never once in between, so a row written at "queued"
+     * stayed at 0% until the file finished. The notification looked fine throughout,
+     * because [DownloadService] polls on its own timer, and the app looked frozen next
+     * to it: a 629 MB book with a visible bar in the shade and nothing moving in the
+     * screen that started it.
+     *
+     * The tick stops as soon as no file is downloading, so a download parked waiting for
+     * Wi-Fi costs nothing; the state change that resumes it starts the tick again.
+     */
+    private fun startTicking() {
+        if (tickerJob?.isActive == true) return
+        tickerJob = scope.launch {
+            while (downloadManager.currentDownloads.any { it.state == Download.STATE_DOWNLOADING }) {
+                delay(PROGRESS_TICK_MS)
+                refreshLock.withLock { downloadDao.unfinished().forEach { refresh(it) } }
             }
         }
     }
@@ -175,5 +205,8 @@ class DownloadEngine @Inject constructor(
          * connection and do make the progress bar jump around between files.
          */
         const val MAX_PARALLEL_DOWNLOADS = 3
+
+        /** Matches the download notification's own update interval; a bar that moves once a second reads as alive. */
+        const val PROGRESS_TICK_MS = 1_000L
     }
 }

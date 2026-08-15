@@ -138,39 +138,46 @@ downloaded that round trip should not be on the critical path at all.
 
 | Item | Status |
 |---|---|
-| **Storage cap said "exceeded" immediately, on an 8 GB cap with nothing downloaded** | todo — reported 15 Aug, not yet reproduced or fixed |
+| **Storage cap said "exceeded" immediately, on an 8 GB cap** | fixed 15 Aug — cause confirmed against the live server |
+| **A download showed no progress in the app, only in the notification** | fixed 15 Aug |
 | "Remove finished downloads" reads as *finished downloading*, not *finished listening* | todo — reword |
 
-**The cap refusal is the serious one.** A refusal on an empty 8 GB allowance means the
-arithmetic is wrong, and the wrongness is in the worst possible place: the check that
+**The cap refusal is the serious one.** A refusal on a nearly empty 8 GB allowance means
+the arithmetic is wrong, and the wrongness is in the worst possible place: the check that
 decides whether the app will download anything at all. Getting it wrong in this direction
 makes offline mode simply unavailable, with a message that blames the listener's settings.
 
-The check is `usedBytes + estimatedBytes > cap`. The cap itself is right (8 GiB, and the
-picker writes the same units it reads), so one of the two other numbers is inflated.
-Suspects, in the order they should be tested:
+The check is `usedBytes + estimatedBytes > cap`. The cap itself was right, so one of the
+other two numbers was inflated — and a capture from the live server settled it in one
+call. **`media.size` on a podcast is the whole feed.** The estimate preferred that field,
+so tapping one 56 MB episode of a 327-episode show charged 18.36 GB against an 8 GB cap.
+Every podcast in the library over about 8 GB was undownloadable, one episode at a time,
+and the two biggest are 18.36 GB and 8.81 GB. On a book the same field is wrong more
+quietly: it counts the ebook and any file flagged `exclude`, neither of which is fetched.
 
-1. **`media.size` on a podcast is the whole feed, not the episode.** The estimate prefers
-   the server's reported size and only falls back to duration × bitrate. On a podcast that
-   field covers every episode the server holds, so downloading one 40-minute episode is
-   charged as the entire archive — which clears 8 GB on any long-running show. This is the
-   likeliest cause and the easiest to confirm.
-2. **`media.size` on a book may cover more than the audio** — an ebook, or files flagged
-   `exclude` that will never be fetched. Smaller error, same direction.
-3. **`usedBytes` comes from `SimpleCache.cacheSpace`, which counts the whole cache
-   directory.** If anything other than completed downloads has landed there, it is charged
-   against the allowance. Note this is a *different* number from the one the Downloads
-   screen displays, which sums the Room rows — so the screen can read near-empty while the
-   check reads full, which is exactly what a report of "it says I'm over and I'm not"
-   looks like.
+The fix is the one the manifest was already in a position to give. Every track and audio
+file carries `metadata.size` — its own byte count — so the manifest now records a size per
+track and the estimate is their sum: exactly the files about to be downloaded, nothing
+else. Where a server records no size, bitrate × duration stands in, and only then the old
+duration guess.
 
-Two fixes are wanted regardless of which suspect it is: the estimate must be the sum of
-the tracks *in the manifest being downloaded* (which is already built, and already knows
-about `exclude` and about single episodes) rather than a whole-item field, and the refusal
-must state the actual numbers — "needs 12 GB, 8 GB allowed, 0 GB used" — because a refusal
-that shows its arithmetic reports its own bug, while this one just looks like a setting the
-listener chose badly. The live server was not reachable when this was written, so the
-suspects above are unverified.
+Two things went in alongside it, because the bug was reported the way it was for a reason:
+
+- **The refusal states its arithmetic** — "Needs 56 MB, and 600 MB of the 8 GB cap is
+  already used" — rather than asserting that the allowance is full. A refusal that shows
+  its numbers reports its own bug; the old one just looked like a setting chosen badly.
+- **The storage readout and the cap check now read the same number.** The readout summed
+  the Room rows while the check read `SimpleCache.cacheSpace`, so the screen could show
+  near-empty while the check saw full. Two numbers for one quantity is how a correct
+  refusal gets reported as a lie.
+
+**Progress was invisible in the app** while the notification showed it moving, which is a
+strange thing to watch on a 629 MB book. Media3's `DownloadManager.Listener` fires when a
+download changes *state* and never once in between, so the row written at "queued" stayed
+at 0% until the file finished; the notification looked fine because `DownloadService`
+polls on its own timer. The engine now polls too, but only while a file is actually
+downloading — a download parked waiting for Wi-Fi costs nothing, and the state change that
+resumes it starts the polling again.
 
 **The auto-delete wording**: "Remove finished downloads" is ambiguous in the one way that
 matters, since *finished* can mean finished downloading — which would read as "delete

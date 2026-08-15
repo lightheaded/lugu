@@ -85,6 +85,14 @@ data class MediaDto(
     val id: String? = null,
     val coverPath: String? = null,
     val duration: Double? = null,
+    /**
+     * Every byte the item owns, and never the size of a download.
+     *
+     * On a podcast this is the entire feed — 18 GB across 327 episodes on the test
+     * server — not the episode someone tapped. On a book it includes the ebook and any
+     * audio file flagged `exclude`. Sizes that gate a download come per file, from
+     * [AudioFileDto.metadata] and [AudioTrackDto.metadata].
+     */
     val size: Long? = null,
     val numTracks: Int? = null,
     val numChapters: Int? = null,
@@ -131,6 +139,13 @@ data class ChapterDto(
     val title: String = "",
 )
 
+/**
+ * The on-disk facts about one file. Only [size] is of interest here, and it is the one
+ * byte count worth trusting: it is this file, not the item it belongs to.
+ */
+@Serializable
+data class FileMetadataDto(val size: Long? = null)
+
 @Serializable
 data class AudioFileDto(
     /** Null on podcast episode files (verified live on 2.36.0), so it coerces to 0. */
@@ -139,6 +154,8 @@ data class AudioFileDto(
     val duration: Double = 0.0,
     val mimeType: String? = null,
     val codec: String? = null,
+    val bitRate: Long? = null,
+    val metadata: FileMetadataDto? = null,
     /** Files the server will not play. Excluded from `media.tracks` and from downloads. */
     val exclude: Boolean = false,
 )
@@ -154,6 +171,8 @@ data class EpisodeDto(
     val subtitle: String? = null,
     val description: String? = null,
     val publishedAt: Long? = null,
+    /** This episode's bytes — unlike `media.size`, which is the whole feed. */
+    val size: Long? = null,
     val audioFile: AudioFileDto? = null,
     val audioTrack: AudioTrackDto? = null,
 )
@@ -167,6 +186,8 @@ data class AudioTrackDto(
     val contentUrl: String = "",
     val mimeType: String = "",
     val codec: String? = null,
+    val bitRate: Long? = null,
+    val metadata: FileMetadataDto? = null,
 )
 
 @Serializable
