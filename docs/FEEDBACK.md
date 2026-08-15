@@ -110,6 +110,73 @@ configurable — and a notice carrying an Undo has to stay up long enough to rea
 timestamp and decide. Letting it time out keeps the new position, which is what the old
 "Keep" button did, so that button is gone.
 
+## Starting playback
+
+| Item | Status |
+|---|---|
+| Tapping a podcast episode opens the player but the button still reads **Play** | todo — reported 15 Aug |
+
+Tapping an episode in the list is unambiguous: it means *play this*. The player opens, but
+the transport still shows Play, so the natural next move is to press it — and pressing it
+during the gap either does nothing or pauses the playback that just started. A control that
+invites a press it cannot honour is worse than a slow one.
+
+The fix Tom asked for, in his order of preference:
+
+1. **Actually start playing on the tap.** Preferred, and the honest fix: the button reads
+   Play because nothing is playing yet.
+2. **Failing that, show Pause optimistically** from the moment the tap is handled, and only
+   fall back to Play if the load genuinely fails.
+
+The second is a smaller change but it is a promise the UI cannot always keep, so it should
+be the fallback for the part of the delay that cannot be removed, not the whole answer. The
+delay itself is worth measuring before either: resolving an episode goes out to the server
+for a play session before the player has anything to hold, and if the episode is already
+downloaded that round trip should not be on the critical path at all.
+
+## Downloads
+
+| Item | Status |
+|---|---|
+| **Storage cap said "exceeded" immediately, on an 8 GB cap with nothing downloaded** | todo — reported 15 Aug, not yet reproduced or fixed |
+| "Remove finished downloads" reads as *finished downloading*, not *finished listening* | todo — reword |
+
+**The cap refusal is the serious one.** A refusal on an empty 8 GB allowance means the
+arithmetic is wrong, and the wrongness is in the worst possible place: the check that
+decides whether the app will download anything at all. Getting it wrong in this direction
+makes offline mode simply unavailable, with a message that blames the listener's settings.
+
+The check is `usedBytes + estimatedBytes > cap`. The cap itself is right (8 GiB, and the
+picker writes the same units it reads), so one of the two other numbers is inflated.
+Suspects, in the order they should be tested:
+
+1. **`media.size` on a podcast is the whole feed, not the episode.** The estimate prefers
+   the server's reported size and only falls back to duration × bitrate. On a podcast that
+   field covers every episode the server holds, so downloading one 40-minute episode is
+   charged as the entire archive — which clears 8 GB on any long-running show. This is the
+   likeliest cause and the easiest to confirm.
+2. **`media.size` on a book may cover more than the audio** — an ebook, or files flagged
+   `exclude` that will never be fetched. Smaller error, same direction.
+3. **`usedBytes` comes from `SimpleCache.cacheSpace`, which counts the whole cache
+   directory.** If anything other than completed downloads has landed there, it is charged
+   against the allowance. Note this is a *different* number from the one the Downloads
+   screen displays, which sums the Room rows — so the screen can read near-empty while the
+   check reads full, which is exactly what a report of "it says I'm over and I'm not"
+   looks like.
+
+Two fixes are wanted regardless of which suspect it is: the estimate must be the sum of
+the tracks *in the manifest being downloaded* (which is already built, and already knows
+about `exclude` and about single episodes) rather than a whole-item field, and the refusal
+must state the actual numbers — "needs 12 GB, 8 GB allowed, 0 GB used" — because a refusal
+that shows its arithmetic reports its own bug, while this one just looks like a setting the
+listener chose badly. Verifying against the live server was not possible; it was not
+reachable when this was written.
+
+**The auto-delete wording**: "Remove finished downloads" is ambiguous in the one way that
+matters, since *finished* can mean finished downloading — which would read as "delete
+things the moment they arrive". It should say plainly that it means books you have listened
+to the end of, and the choices should say "After a week" rather than "After 7d".
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport
