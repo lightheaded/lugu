@@ -21,6 +21,7 @@ class PlayerViewModel @Inject constructor(
     val nowPlaying = connection.nowPlaying
     val pendingJump = connection.pendingJump
     val rewindNotice = connection.rewindNotice
+    val continuation = connection.continuation
     val sleepTimer = connection.sleepTimer
     val positionHistory = connection.observePositionHistory()
     val settings = connection.settings
@@ -54,4 +55,6 @@ class PlayerViewModel @Inject constructor(
     fun dismissJump() = connection.dismissJump()
 
     fun dismissRewindNotice() = connection.dismissRewindNotice()
+
+    fun dismissContinuationNotice() = connection.dismissContinuationNotice()
 }

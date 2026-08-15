@@ -17,6 +17,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.feature.library.DownloadsScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
 import io.github.lightheaded.lugu.feature.library.LibraryScreen
+import io.github.lightheaded.lugu.feature.library.QueueScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
@@ -47,6 +48,7 @@ private object Routes {
     const val PLAYER = "player"
     const val SETTINGS = "settings"
     const val DOWNLOADS = "downloads"
+    const val QUEUE = "queue"
     const val LICENSES = "licenses"
 
     fun item(itemId: String) = "item/$itemId"
@@ -84,6 +86,7 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                 onOpenItem = { navController.navigate(Routes.item(it)) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
+                onOpenQueue = { navController.navigate(Routes.QUEUE) },
                 bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
             )
         }
@@ -92,6 +95,19 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
             DownloadsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenItem = { navController.navigate(Routes.item(it)) },
+            )
+        }
+
+        composable(Routes.QUEUE) {
+            val playerViewModel: PlayerViewModel = hiltViewModel()
+            QueueScreen(
+                onBack = { navController.popBackStack() },
+                // Tapping a queued item plays it now rather than opening its page: the
+                // queue is a list of things to play, so that is what a tap must mean.
+                onPlay = { itemId, episodeId ->
+                    playerViewModel.play(itemId, episodeId)
+                    navController.navigate(Routes.PLAYER)
+                },
             )
         }
 

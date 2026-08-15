@@ -13,6 +13,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
+import io.github.lightheaded.lugu.core.sync.QueueRepository
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,6 +53,7 @@ class ItemDetailViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
     private val downloadRepository: DownloadRepository,
+    private val queueRepository: QueueRepository,
 ) : ViewModel() {
 
     private val itemId: String = checkNotNull(savedStateHandle["itemId"])
@@ -111,6 +113,29 @@ class ItemDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             downloadRepository.remove(current, itemId, episodeId)
+        }
+    }
+
+    /**
+     * Queueing confirms itself.
+     *
+     * The queue is on another screen, so without a word here the button looks like it
+     * did nothing — and the second press would be read as a second copy if the queue
+     * were not already careful about that.
+     */
+    fun playNext(episodeId: String? = null) {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            queueRepository.addNext(current, itemId, episodeId)
+            message.value = "Playing next"
+        }
+    }
+
+    fun addToQueue(episodeId: String? = null) {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            queueRepository.addLast(current, itemId, episodeId)
+            message.value = "Added to the queue"
         }
     }
 

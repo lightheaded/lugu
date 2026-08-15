@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +54,7 @@ fun LibraryScreen(
     onOpenItem: (String) -> Unit,
     onOpenSettings: () -> Unit = {},
     onOpenDownloads: () -> Unit = {},
+    onOpenQueue: () -> Unit = {},
     modifier: Modifier = Modifier,
     bottomContent: @Composable () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
@@ -65,6 +67,9 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("lugu") },
                 actions = {
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Up next")
+                    }
                     IconButton(onClick = onOpenDownloads) {
                         Icon(Icons.Default.Download, contentDescription = "Downloads")
                     }

@@ -100,8 +100,11 @@ class PlaybackConnection @Inject constructor(
     val nowPlaying: StateFlow<NowPlaying?> get() = stateHolder.nowPlaying
     val pendingJump get() = stateHolder.pendingJump
     val rewindNotice get() = stateHolder.rewindNotice
+    val continuation get() = stateHolder.continuation
 
     fun dismissRewindNotice() = stateHolder.clearRewindNotice()
+
+    fun dismissContinuationNotice() = stateHolder.clearContinuationNotice()
 
     init {
         scope.launch {

@@ -773,9 +773,13 @@ interface QueueDao {
  *
  * Gaps would work for ordering but not for the queue screen, which moves a row by index;
  * keeping them dense means the index a listener drags is the position stored.
+ *
+ * List order is taken as the truth and never re-derived from the old positions — a
+ * reorder is precisely a list whose order disagrees with them, so sorting here would
+ * undo every move.
  */
 private fun List<QueueEntity>.renumbered(from: Int = 0): List<QueueEntity> =
-    sortedBy { it.position }.mapIndexed { index, entry -> entry.copy(position = from + index) }
+    mapIndexed { index, entry -> entry.copy(position = from + index) }
 
 @Dao
 interface PositionHistoryDao {
