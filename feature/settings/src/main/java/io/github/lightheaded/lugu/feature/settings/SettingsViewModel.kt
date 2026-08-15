@@ -70,6 +70,18 @@ class SettingsViewModel @Inject constructor(
     fun setAutoDeleteFinishedAfterDays(days: Int) =
         viewModelScope.launch { downloadPrefs.setAutoDeleteFinishedAfterDays(days) }
 
+    fun setAutoDownloadQueue(enabled: Boolean) =
+        viewModelScope.launch { downloadPrefs.setAutoDownloadQueue(enabled) }
+
+    fun setAutoDownloadNextInSeries(count: Int) =
+        viewModelScope.launch { downloadPrefs.setAutoDownloadNextInSeries(count) }
+
+    fun setAutoDownloadLatestEpisodes(count: Int) =
+        viewModelScope.launch { downloadPrefs.setAutoDownloadLatestEpisodes(count) }
+
+    fun setNotifyNewEpisodes(enabled: Boolean) =
+        viewModelScope.launch { downloadPrefs.setNotifyNewEpisodes(enabled) }
+
     fun setSkipBack(seconds: Int) = viewModelScope.launch { prefs.setSkipBack(seconds) }
 
     fun setSkipForward(seconds: Int) = viewModelScope.launch { prefs.setSkipForward(seconds) }

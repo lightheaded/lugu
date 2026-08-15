@@ -313,6 +313,26 @@ interface LibraryItemDao {
     fun observeDownloaded(serverId: String, userId: String, limit: Int = 50): Flow<List<LibraryItemEntity>>
 
     /**
+     * Podcasts being listened to — the only ones worth refreshing or downloading ahead.
+     *
+     * "Listened to" means at least one episode has been started, which is the closest
+     * thing to a subscription lugu can know without asking anyone to manage a list.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        WHERE i.serverId = :serverId AND i.userId = :userId AND i.mediaType = 'PODCAST'
+          AND EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+              AND p.currentTimeSec > 0
+          )
+        ORDER BY i.title COLLATE NOCASE
+        """,
+    )
+    suspend fun followedPodcasts(serverId: String, userId: String): List<LibraryItemEntity>
+
+    /**
      * Every series, once. Backs the series node of the car browse tree, where a flat
      * list of every book is unusable and the series is the unit people think in.
      */
@@ -566,6 +586,42 @@ interface EpisodeDao {
         itemId: String,
         afterPublishedAtMs: Long,
     ): EpisodeEntity?
+
+    @Query(
+        """
+        SELECT * FROM episode
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        ORDER BY publishedAtMs DESC
+        """,
+    )
+    suspend fun forItem(serverId: String, userId: String, itemId: String): List<EpisodeEntity>
+
+    /**
+     * The newest episodes not yet finished — what an auto-download rule fetches ahead.
+     *
+     * Newest first, because the whole point of downloading ahead is having the thing
+     * that just came out ready before anyone asks for it.
+     */
+    @Query(
+        """
+        SELECT e.* FROM episode e
+        WHERE e.serverId = :serverId AND e.userId = :userId AND e.libraryItemId = :itemId
+          AND NOT EXISTS (
+            SELECT 1 FROM progress p
+            WHERE p.serverId = e.serverId AND p.userId = e.userId
+              AND p.libraryItemId = e.libraryItemId AND p.episodeKey = e.id
+              AND p.isFinished = 1
+          )
+        ORDER BY e.publishedAtMs DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun latestUnfinished(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        limit: Int,
+    ): List<EpisodeEntity>
 
     @Upsert
     suspend fun upsertAll(episodes: List<EpisodeEntity>)

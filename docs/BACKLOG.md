@@ -45,13 +45,22 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | Item | Note |
 |---|---|
 | **Offline playback has not been proven on hardware** | Downloading has now moved real bytes — a 629 MB book, downloaded and ready to play, 15 Aug. What is still untested is the other half: going offline for long enough to matter and confirming nothing is lost, and that the session replays on reconnect. Until then, "a week in airplane mode loses nothing" is a claim, not a result |
-| **Auto-download rules** | Queue contents, next N in a series, latest N podcast episodes. The manual path and its storage accounting had to be right first, and the series data M2 added is what these rules will read |
 | **Transcoded (HLS) downloads** | A download assumes direct play — one file per track. An item the server will only transcode has no stable file URL to cache, so it cannot be downloaded at all yet, and nothing says so in the UI |
 | **"Remove finished downloads" is ambiguous** | Reads as *finished downloading*. Should say it means books listened to the end, and spell out "After a week" rather than "After 7d" |
 | **Tapping an episode opens the player still showing Play** | Playback does not start on the tap, so the button invites a press that arrives mid-load and cancels it. Should start playback on the tap, with an optimistic Pause covering whatever delay remains. See [FEEDBACK.md](FEEDBACK.md#starting-playback) |
 | **Storage cap is checked, not enforced mid-download** | The estimate is charged against the cap before a download starts. A book much larger than its reported size can still overshoot; nothing aborts a download in flight |
 | **Cache and Room can drift** | The cache is the truth about bytes and Room is the truth about state. `reconcile()` on start repairs the common case, but bytes evicted by the system outside the app would leave a row claiming "completed" |
 | **No download progress in a notification per item** | One foreground notification covers all downloads. Fine for a few, vague for a queue of ten |
+
+## M3 gaps
+
+| Item | Note |
+|---|---|
+| **Nothing in M3 has been near a real head unit** | The browse tree, the custom buttons and voice search are all written against the documented contract and none has been run in the DHU, let alone a car. [qa/auto.md](qa/auto.md) is the procedure; it has never been executed |
+| **Queue is not mirrored to a server playlist** | The plan offers an optional "▶ Up Next" playlist on the server. Deferred rather than half-built: it needs the playlist endpoints, a sync direction decision, and an answer for what happens when the same playlist is edited on the web. The queue is device-local and complete as it is |
+| **Auto-download rules have never run against a real library** | The rules are unit-testable in principle and untested in practice; the worker fires every six hours on unmetered power, which is a slow way to find out it is wrong. Worth forcing once with `adb shell am broadcast` or by temporarily shortening the period |
+| **New-episode detection needs one quiet pass to arm itself** | New is decided by comparing episode ids before and after a refresh, so the first refresh of any podcast establishes the baseline and reports nothing. Correct, but it means the feature looks broken for six hours after being switched on |
+| **Continuation cannot be undone** | If lugu starts the next book on its own, the notice says so and the transport can stop it, but there is no "no, go back" that also removes it from history. Probably wants the same treatment as the jump undo |
 
 ## Known behaviour gaps
 
@@ -66,7 +75,7 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | Item | Note |
 |---|---|
 | **R8 / minification off for release builds** | Media3, Room and Hilt keep-rules are unproven here. Turning it on needs a real regression pass, since the failure mode is a runtime crash in a shipped build |
-| `:core:queue` and `:core:testing` modules not created | `QueueEntity` is in the schema so M3 needs no migration; the modules would be dead weight until then |
+| `:core:queue` and `:core:testing` modules not created | M3 shipped the queue without either. `QueueRepository` lives in `:core:sync` with the other repositories, its DAO in `:core:db` with the other DAOs; a module holding one repository that depends on `:core:sync` anyway would be structure without substance. `QueueEntity` was already in schema v1, so the plan's real requirement — no migration for M3 — held |
 | Speed formatting duplicated | `trimSpeed` in `:feature:player` and `formatSpeed` in `:feature:settings` do the same job. Wants one shared formatter, probably in `:core:model` alongside the other display helpers |
 | `EncryptedSharedPreferences` / `MasterKey` deprecated | Still the practical option for encrypted token storage on Android; needs a replacement decision, not just a version bump |
 | `hiltViewModel` deprecated | Moved to `androidx.hilt.lifecycle.viewmodel.compose`; mechanical import change across the feature modules |
