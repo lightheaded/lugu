@@ -2,7 +2,6 @@ package io.github.lightheaded.lugu.feature.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
@@ -30,8 +29,10 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -63,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.withTimeoutOrNull
 import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
@@ -88,12 +90,50 @@ fun PlayerScreen(
     var showSpeedSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Toast-like, so it never reflows the screen. An inline notice made the whole
-    // player jump as it appeared and vanished.
-    LaunchedEffect(rewindNotice) {
+    /*
+     * Both notices are overlays and neither is inline content, so announcing a
+     * correction never reflows the screen. An inline banner made the cover art and the
+     * whole transport shift down as it appeared and back up as it went — which is a
+     * worse interruption than the thing being announced.
+     *
+     * `Indefinite` plus an explicit timeout rather than a `SnackbarDuration`: the
+     * built-in durations are four and ten seconds and neither is configurable, and a
+     * notice carrying an Undo has to stay up long enough to read a timestamp and decide.
+     * Cancelling the coroutine is what dismisses the snackbar.
+     */
+    val noticeMillis = settings.noticeSeconds.coerceAtLeast(1) * 1000L
+
+    LaunchedEffect(rewindNotice, noticeMillis) {
         rewindNotice?.let {
-            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
+            withTimeoutOrNull(noticeMillis) {
+                snackbarHostState.showSnackbar(
+                    message = it,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
             viewModel.dismissRewindNotice()
+        }
+    }
+
+    /*
+     * A position adopted from another device is announced, never silent. An automatic
+     * correction the listener cannot see is indistinguishable from the app losing their
+     * place — which is the complaint lugu exists to answer. Letting it time out keeps
+     * the new position, which is the same as the old "Keep" button without the
+     * second button.
+     */
+    LaunchedEffect(jump, noticeMillis) {
+        jump?.let { pending ->
+            val result = withTimeoutOrNull(noticeMillis) {
+                snackbarHostState.showSnackbar(
+                    message = "Jumped from ${formatTime(pending.fromSec)} to ${formatTime(pending.toSec)}",
+                    actionLabel = "Undo",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
+            if (result == SnackbarResult.ActionPerformed) viewModel.undoJump() else viewModel.dismissJump()
         }
     }
 
@@ -152,31 +192,6 @@ fun PlayerScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            /*
-             * A position adopted from another device is announced, never silent. An
-             * automatic correction the user cannot see is indistinguishable from the
-             * app losing their place — which is the complaint lugu exists to answer.
-             */
-            jump?.let { pending ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Jumped from ${formatTime(pending.fromSec)} to ${formatTime(pending.toSec)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = viewModel::undoJump) { Text("Undo") }
-                    TextButton(onClick = viewModel::dismissJump) { Text("Keep") }
-                }
-            }
-
             Spacer(Modifier.height(16.dp))
             AsyncImage(
                 model = nowPlaying?.coverUrl,

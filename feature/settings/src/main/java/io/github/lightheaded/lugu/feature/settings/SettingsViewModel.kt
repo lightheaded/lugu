@@ -60,6 +60,8 @@ class SettingsViewModel @Inject constructor(
 
     fun setSkipForward(seconds: Int) = viewModelScope.launch { prefs.setSkipForward(seconds) }
 
+    fun setNoticeSeconds(seconds: Int) = viewModelScope.launch { prefs.setNoticeSeconds(seconds) }
+
     fun togglePlayerButton(button: TransportButton) = viewModelScope.launch {
         val current = state.value.settings.playerButtons
         prefs.setPlayerButtons(if (button in current) current - button else current + button)
