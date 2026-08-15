@@ -14,6 +14,13 @@ local.properties
 .env
 .env.*
 !.env.example
+
+# Only the SOPS-encrypted secrets.enc.yaml belongs in git. Anything that looks like
+# decrypted output, or a private key, does not.
+secrets.yaml
+*.dec.yaml
+*.key
+*.agekey
 .kotlin/
 
 # Session-local Claude Code state
