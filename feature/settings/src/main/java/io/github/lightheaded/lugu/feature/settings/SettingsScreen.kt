@@ -134,6 +134,7 @@ private fun settingEntries(
 ): List<SettingEntry> {
     val settings = state.settings
     val downloads = state.downloads
+    val queue = state.queue
 
     return buildList {
         add(
@@ -371,6 +372,54 @@ private fun settingEntries(
                     selected = downloads.autoDeleteFinishedAfterDays,
                     format = { if (it == 0) "Never" else "After ${it}d" },
                     onSelect = viewModel::setAutoDeleteFinishedAfterDays,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "queue-continue-series",
+                category = "Up next",
+                title = "Carry on with a series",
+                keywords = "queue series next book autoplay continue automatic end",
+            ) {
+                SwitchRow(
+                    title = "Carry on with a series",
+                    subtitle = "When the queue is empty, follow a finished book with the next " +
+                        "unstarted one in its series",
+                    checked = queue.continueSeries,
+                    onChange = viewModel::setContinueSeries,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "queue-continue-podcast",
+                category = "Up next",
+                title = "Carry on with a podcast",
+                keywords = "queue podcast next episode autoplay continue automatic end",
+            ) {
+                SwitchRow(
+                    title = "Carry on with a podcast",
+                    subtitle = "Follow a finished episode with the next one published",
+                    checked = queue.continuePodcast,
+                    onChange = viewModel::setContinuePodcast,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "queue-ask-first",
+                category = "Up next",
+                title = "Ask before starting something new",
+                keywords = "queue confirm ask pause prompt autoplay stop end of book",
+            ) {
+                SwitchRow(
+                    title = "Ask before starting something new",
+                    subtitle = "Only applies to lugu's own suggestions — anything you queued " +
+                        "yourself always plays",
+                    checked = queue.askBeforeSuggestion,
+                    onChange = viewModel::setAskBeforeSuggestion,
                 )
             },
         )

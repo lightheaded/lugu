@@ -18,12 +18,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,7 +42,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -166,6 +173,10 @@ fun ItemDetailScreen(
                             onDownload = { viewModel.download() },
                             onRemove = { viewModel.removeDownload() },
                         )
+                        QueueMenu(
+                            onPlayNext = { viewModel.playNext() },
+                            onAddToQueue = { viewModel.addToQueue() },
+                        )
                     }
                 }
             }
@@ -208,9 +219,56 @@ fun ItemDetailScreen(
                             onRemove = { viewModel.removeDownload(row.episode.id) },
                             compact = true,
                         )
+                        QueueMenu(
+                            onPlayNext = { viewModel.playNext(row.episode.id) },
+                            onAddToQueue = { viewModel.addToQueue(row.episode.id) },
+                            compact = true,
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Play next, or add to the end.
+ *
+ * Behind a menu rather than as two more buttons: queueing is a deliberate act and a
+ * rarer one than playing or downloading, and a row of four equal-weight controls makes
+ * the two that matter harder to hit.
+ */
+@Composable
+internal fun QueueMenu(
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val size = if (compact) 40.dp else 48.dp
+
+    Box(modifier) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(size)) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Play next") },
+                onClick = {
+                    expanded = false
+                    onPlayNext()
+                },
+                leadingIcon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null) },
+            )
+            DropdownMenuItem(
+                text = { Text("Add to queue") },
+                onClick = {
+                    expanded = false
+                    onAddToQueue()
+                },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
+            )
         }
     }
 }

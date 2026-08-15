@@ -10,6 +10,8 @@ import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.QueuePrefs
+import io.github.lightheaded.lugu.core.sync.QueueSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +27,7 @@ data class SettingsUiState(
     val downloads: DownloadSettings = DownloadSettings(),
     val account: ActiveAccount? = null,
     val crashReporting: Boolean = false,
+    val queue: QueueSettings = QueueSettings(),
     val query: String = "",
 )
 
@@ -34,18 +37,25 @@ class SettingsViewModel @Inject constructor(
     private val downloadPrefs: DownloadPrefs,
     private val authRepository: AuthRepository,
     private val crashReportingPrefs: CrashReportingPrefs,
+    private val queuePrefs: QueuePrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
 
-    val state: StateFlow<SettingsUiState> = combine(
+    /** Grouped only because `combine` is typed up to five flows and there are now six. */
+    private val storedSettings = combine(
         prefs.settings,
         downloadPrefs.settings,
+        queuePrefs.settings,
+    ) { player, downloads, queue -> Triple(player, downloads, queue) }
+
+    val state: StateFlow<SettingsUiState> = combine(
+        storedSettings,
         authRepository.observeAccount(),
         crashReportingPrefs.enabled,
         query,
-    ) { settings, downloads, account, crashReporting, text ->
-        SettingsUiState(settings, downloads, account, crashReporting, text)
+    ) { (settings, downloads, queue), account, crashReporting, text ->
+        SettingsUiState(settings, downloads, account, crashReporting, queue, text)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     fun onQueryChange(value: String) = query.update { value }
@@ -103,6 +113,13 @@ class SettingsViewModel @Inject constructor(
      * nothing here — and nothing in this module — needs to know the reporter exists.
      */
     fun setCrashReporting(enabled: Boolean) = crashReportingPrefs.setEnabled(enabled)
+
+    fun setContinueSeries(enabled: Boolean) = viewModelScope.launch { queuePrefs.setContinueSeries(enabled) }
+
+    fun setContinuePodcast(enabled: Boolean) = viewModelScope.launch { queuePrefs.setContinuePodcast(enabled) }
+
+    fun setAskBeforeSuggestion(enabled: Boolean) =
+        viewModelScope.launch { queuePrefs.setAskBeforeSuggestion(enabled) }
 
     fun signOut() = viewModelScope.launch { authRepository.logout() }
 }

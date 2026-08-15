@@ -82,6 +82,7 @@ fun PlayerScreen(
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val jump by viewModel.pendingJump.collectAsStateWithLifecycle()
     val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
+    val continuation by viewModel.continuation.collectAsStateWithLifecycle()
     val sleep by viewModel.sleepTimer.collectAsStateWithLifecycle()
     var showSleepSheet by remember { mutableStateOf(false) }
     var showHistorySheet by remember { mutableStateOf(false) }
@@ -135,6 +136,32 @@ fun PlayerScreen(
             }
             if (result == SnackbarResult.ActionPerformed) viewModel.undoJump() else viewModel.dismissJump()
         }
+    }
+
+    /*
+     * Something the listener did not choose is now loaded, and it says so.
+     *
+     * A cued suggestion carries a Play button, because a book waiting silently with no
+     * explanation is indistinguishable from playback having stopped for a reason nobody
+     * can see. One that started on its own carries only its reason — the transport
+     * already offers the way to stop it.
+     */
+    LaunchedEffect(continuation, noticeMillis) {
+        val notice = continuation ?: return@LaunchedEffect
+        val text = when {
+            notice.cued -> notice.reason?.let { "$it — ready to play" } ?: "Ready to play"
+            else -> notice.reason ?: return@LaunchedEffect
+        }
+        val result = withTimeoutOrNull(noticeMillis) {
+            snackbarHostState.showSnackbar(
+                message = text,
+                actionLabel = if (notice.cued) "Play" else null,
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            )
+        }
+        if (result == SnackbarResult.ActionPerformed) viewModel.togglePlayPause()
+        viewModel.dismissContinuationNotice()
     }
 
     var scrubbing by remember { mutableStateOf<Float?>(null) }
