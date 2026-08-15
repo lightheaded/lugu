@@ -12,6 +12,7 @@ import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.Shelf
 import io.github.lightheaded.lugu.core.sync.ShelfKind
+import io.github.lightheaded.lugu.core.sync.StartTab
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,9 +41,10 @@ data class HomeUiState(
  * be scoped to the selected library while the shelves above it spanned the account, which
  * read as the library picker being broken.
  *
- * The selected library arrives from the shell rather than being owned here. The picker
- * belongs to the Library tab, and there is no shared store for the selection, so the one
- * composable that hosts both tabs is what carries it across.
+ * The selected library is read from `LibraryPrefs`, the same store the browse tab writes
+ * it to, rather than being handed across by the shell. One screen owning the value and
+ * telling the other leaves a frame where the two disagree, which is visible as shelves
+ * that span every library and then snap to one.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -58,6 +60,18 @@ class HomeViewModel @Inject constructor(
 
     private val settings: StateFlow<LibrarySettings> = libraryPrefs.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibrarySettings())
+
+    /**
+     * Which tab the shell opens on, or null while that is still unknown.
+     *
+     * Null rather than the default is the whole point: the store answers asynchronously, so
+     * a non-null placeholder would draw the Home tab for a frame and then throw someone who
+     * asked for Library into it, which reads as the preference being ignored and then
+     * grudgingly obeyed. One empty frame is quieter than a flip.
+     */
+    val startTab: StateFlow<StartTab?> = libraryPrefs.settings
+        .map { it.startTab }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val progressByItem: StateFlow<Map<String, MediaProgress>> = account
         .flatMapLatest { current ->
@@ -78,15 +92,23 @@ class HomeViewModel @Inject constructor(
                     flowOf(emptyList())
                 } else {
                     libraryRepository.observeShelves(
-                        current,
-                        prefs.selectedLibraryId.takeIf { prefs.shelvesFollowLibrary },
+                        account = current,
+                        libraryId = prefs.selectedLibraryId.takeIf { prefs.shelvesFollowLibrary },
+                        // A shelf switched off is not queried at all. Some of these are the
+                        // heaviest queries in the app, and running one to throw the answer
+                        // away is a cost paid on every library change by someone who said
+                        // they did not want it.
+                        hidden = ShelfKind.entries.filter { it.name in prefs.hiddenShelves }.toSet(),
                     )
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val state: StateFlow<HomeUiState> =
         combine(shelves, progressByItem, settings) { shelfList, progress, prefs ->
-            val rows = shelfList.map { shelf ->
+            // Hidden shelves never reach here — the repository is told not to query them —
+            // so this only puts what is left into the order somebody asked for.
+            val visible = prefs.arrangeShelves(shelfList) { it.kind.name }
+            val rows = visible.map { shelf ->
                 ShelfRow(shelf.kind, shelf.items.map { LibraryRow(it, progress[it.id]) })
             }
             HomeUiState(
@@ -94,6 +116,10 @@ class HomeViewModel @Inject constructor(
                 // single most recently played item is the head of that shelf. Working it
                 // out a second time here would be a second definition of "most recent"
                 // to disagree with the first.
+                //
+                // Read from the arranged list, so hiding "Continue listening" takes the
+                // resume card with it. Leaving a card of that name on a screen where the
+                // shelf was explicitly turned off would look like the setting failed.
                 continueRow = rows.firstOrNull { it.kind == ShelfKind.CONTINUE }?.rows?.firstOrNull(),
                 shelves = rows,
                 shelvesSpanEverything = !prefs.shelvesFollowLibrary,

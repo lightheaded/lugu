@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,17 +25,20 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,9 +65,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
+import io.github.lightheaded.lugu.core.model.LibraryItem
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
+import io.github.lightheaded.lugu.core.model.Series
+import io.github.lightheaded.lugu.core.sync.BrowseKind
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -74,6 +82,7 @@ import java.util.Locale
 fun ItemDetailScreen(
     onBack: () -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
+    onBrowseGroup: (kind: String, name: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ItemDetailViewModel = hiltViewModel(),
 ) {
@@ -140,17 +149,10 @@ fun ItemDetailScreen(
                     )
                     Column {
                         Text(item.title, style = MaterialTheme.typography.titleLarge)
-                        item.authorName?.let {
+                        item.subtitle?.takeIf { it.isNotBlank() }?.let {
                             Text(
                                 it,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        item.narratorName?.let {
-                            Text(
-                                "Read by $it",
-                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -161,6 +163,14 @@ fun ItemDetailScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+
+            // Skipped entirely rather than left to render nothing: the list spaces its
+            // items apart, so an empty row still leaves a gap where it was.
+            if (item.hasBrowseLinks) {
+                item {
+                    BrowseGroupLinks(item = item, onBrowseGroup = onBrowseGroup)
                 }
             }
 
@@ -197,9 +207,11 @@ fun ItemDetailScreen(
                             onDownload = { viewModel.download() },
                             onRemove = { viewModel.removeDownload() },
                         )
-                        QueueMenu(
+                        RowActionsMenu(
                             onPlayNext = { viewModel.playNext() },
                             onAddToQueue = { viewModel.addToQueue() },
+                            isFinished = state.isFinished,
+                            onSetFinished = { viewModel.setFinished(it) },
                         )
                     }
                 }
@@ -264,6 +276,7 @@ fun ItemDetailScreen(
                     onRemoveDownload = { viewModel.removeDownload(row.episode.id) },
                     onPlayNext = { viewModel.playNext(row.episode.id) },
                     onAddToQueue = { viewModel.addToQueue(row.episode.id) },
+                    onSetFinished = { viewModel.setFinished(it, row.episode.id) },
                 )
             }
         }
@@ -276,17 +289,27 @@ fun ItemDetailScreen(
  * Remove download is present but disabled unless something in the selection is actually
  * on the phone: hiding it instead would make the bar's contents shift about between
  * selections, and a control that moves is harder to aim at than one that greys out.
+ *
+ * Marking is one button rather than two, because a bar of six equal icons is a bar nobody
+ * reads. Which of the two it offers is decided by [markFinishedTarget].
  */
 @Composable
 private fun EpisodeSelectionBar(state: ItemDetailUiState, viewModel: ItemDetailViewModel) {
     val chosen = state.episodes.filter { it.episode.id in state.selectedIds }
     val any = chosen.isNotEmpty()
+    val finishing = markFinishedTarget(chosen)
 
     SelectionBar(
         selectedCount = chosen.size,
         onClear = viewModel::clearSelection,
         onSelectAll = viewModel::selectAllVisible,
         actions = listOf(
+            SelectionAction(
+                if (finishing) "Mark as finished" else "Mark as not finished",
+                if (finishing) Icons.Default.DoneAll else Icons.Default.RemoveDone,
+                { viewModel.setSelectedFinished(finishing) },
+                any,
+            ),
             SelectionAction("Download", Icons.Default.Download, viewModel::downloadSelected, any),
             SelectionAction(
                 "Add to queue",
@@ -325,6 +348,7 @@ private fun EpisodeRowView(
     onRemoveDownload: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
+    onSetFinished: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val subline = remember(row.episode) { episodeSubline(row.episode) }
@@ -384,28 +408,35 @@ private fun EpisodeRowView(
                 onRemove = onRemoveDownload,
                 compact = true,
             )
-            QueueMenu(
+            RowActionsMenu(
                 onPlayNext = onPlayNext,
                 onAddToQueue = onAddToQueue,
                 compact = true,
+                isFinished = row.isFinished,
+                onSetFinished = onSetFinished,
             )
         }
     }
 }
 
 /**
- * Play next, or add to the end.
+ * Play next, add to the end, and mark the row finished.
  *
- * Behind a menu rather than as two more buttons: queueing is a deliberate act and a
- * rarer one than playing or downloading, and a row of four equal-weight controls makes
+ * Behind a menu rather than as more buttons: queueing and marking are deliberate acts and
+ * rarer ones than playing or downloading, and a row of five equal-weight controls makes
  * the two that matter harder to hit.
+ *
+ * [onSetFinished] is optional so that a row with no progress of its own — anywhere this
+ * menu is reused for something that is not listened to — simply does not offer it.
  */
 @Composable
-internal fun QueueMenu(
+internal fun RowActionsMenu(
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    isFinished: Boolean = false,
+    onSetFinished: ((Boolean) -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val size = if (compact) 40.dp else 48.dp
@@ -431,9 +462,129 @@ internal fun QueueMenu(
                 },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
             )
+            onSetFinished?.let { setFinished ->
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(if (isFinished) "Mark as not finished" else "Mark as finished") },
+                    onClick = {
+                        expanded = false
+                        setFinished(!isFinished)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            if (isFinished) Icons.Default.RemoveDone else Icons.Default.DoneAll,
+                            contentDescription = null,
+                        )
+                    },
+                )
+            }
         }
     }
 }
+
+/** Whether there is anything to link to at all: a podcast often has none of the three. */
+private val LibraryItem.hasBrowseLinks: Boolean
+    get() = listOfNotNull(authorName, narratorName, seriesName).any { it.isNotBlank() }
+
+/**
+ * The author, the narrator and the series, as links to their own pages.
+ *
+ * A block of its own below the cover rather than three lines squeezed beside it: a link
+ * has to be hittable, and there is no room for three forty-eight-dip targets in a column
+ * next to a hundred-and-forty-dip cover. Keeping the three together also makes them look
+ * like what they are — the same kind of thing, leading to the same kind of page.
+ *
+ * The series is linked by its *title*, never by the string the server sends: that string
+ * has the volume number baked into it, so linking with it would lead to a page holding
+ * exactly one book.
+ */
+@Composable
+private fun BrowseGroupLinks(
+    item: LibraryItem,
+    onBrowseGroup: (kind: String, name: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val seriesTitle = remember(item.seriesName) { Series.titleOf(item.seriesName) }
+    val seriesPrefix = remember(item.seriesName) {
+        seriesSequenceLabel(item.seriesName)?.let { "$it of" } ?: "Part of"
+    }
+
+    Column(modifier) {
+        item.authorName?.takeIf { it.isNotBlank() }?.let { author ->
+            BrowseGroupLink(
+                name = author,
+                onClick = { onBrowseGroup(BrowseKind.AUTHORS.id, author) },
+            )
+        }
+        item.narratorName?.takeIf { it.isNotBlank() }?.let { narrator ->
+            BrowseGroupLink(
+                name = narrator,
+                onClick = { onBrowseGroup(BrowseKind.NARRATORS.id, narrator) },
+                prefix = "Read by",
+            )
+        }
+        seriesTitle?.let { series ->
+            BrowseGroupLink(
+                name = series,
+                onClick = { onBrowseGroup(BrowseKind.SERIES.id, series) },
+                prefix = seriesPrefix,
+            )
+        }
+    }
+}
+
+/**
+ * One link out of the item page.
+ *
+ * Coloured with the primary colour and given a full-width row to be tapped in, because a
+ * name that merely responds to a tap is not discoverable: nobody presses text to find out
+ * whether it does anything. The prefix stays in the ordinary colour so that only the part
+ * that leads somewhere looks as though it does.
+ */
+@Composable
+private fun BrowseGroupLink(
+    name: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    prefix: String? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        prefix?.let {
+            Text(
+                "$it ",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Whether the bar's one marking action should finish the picked episodes or un-finish them.
+ *
+ * Finishing is the offer unless every episode picked is already finished, which is the
+ * only selection where it would do nothing at all. Deciding it from the selection rather
+ * than offering both keeps the bar to one button, and means the button is never a no-op.
+ *
+ * An empty selection reads as finishing too. The button is disabled there, and a disabled
+ * button that says "Mark as not finished" invites the wrong guess about what it will do.
+ */
+internal fun markFinishedTarget(rows: List<EpisodeRow>): Boolean =
+    rows.isEmpty() || rows.any { !it.isFinished }
 
 /**
  * One control for the whole download lifecycle.

@@ -500,3 +500,87 @@ runtime and only in a release build. A device pass on a signed release APK is ow
    Android Auto, change a setting.
 3. Run [qa/auto.md](qa/auto.md) in the DHU, then in a car.
 4. The upstream issue review, and whichever of its proposals are accepted.
+
+## 2026-08-16 — the controls, the pages behind the links, and a library you can move through
+
+Three pieces that had been open a long time, none of them new work in the sense of new
+capability — all of them finishing something started earlier and left visibly half-done.
+
+### The transport controls, at last
+
+The oldest item on the feedback list. The notification's side buttons have done the right
+thing for a while — the configured skip, rather than the chapter navigation that once
+moved ten minutes per tap — but they still wore Media3's previous and next icons, in
+Media3's order, because the default notification provider builds previous / play-pause /
+next and offers no seek button to select.
+
+A custom layout replaces the provider's choice outright. The buttons come from the setting,
+in the order set there, with icons matching the configured skip where one exists and the
+generic icon where none does: a button labelled 30 that moves 15 is worse than one with no
+number on it. The layout is pushed to live sessions when the setting changes, which is the
+part the previous attempt got wrong — available commands are read when a controller
+connects, and a notification that only picks up a preference at the next cold start reads
+as a setting that does nothing.
+
+One thing on that list was attempted and withdrawn: a chapter-scoped progress bar in the
+notification (upstream app#239). The bar is not part of the notification — it is drawn
+from the platform media session's playback state, one position and duration read by the
+notification, the player screen, the scrubber and a car's seek bar alike, with no
+per-controller value. Reporting chapter-relative numbers there means a second, disagreeing
+notion of where the book is, in exactly the place `AbsoluteTiming` and `ChapterAwarePlayer`
+exist to keep single — which is how a resumed book starts in the wrong chapter. The setting
+was written, found unshippable, and removed rather than left reading from nothing. The
+chapter title goes in the notification text instead, where it costs nothing.
+
+Headset buttons became configurable at the same time. `MediaButtonClassifier` has existed
+since M1, resolving the pause-then-play glitch that causes phantom rewinds, but nothing
+ever asked what the buttons should *do*. Now next and previous can each be a skip, a
+chapter jump, the next item, or nothing. Never `seekToPrevious()`, which on a single-file
+book seeks to zero — the incident that started this whole line of work.
+
+### Author, series and narrator pages
+
+*Links should be consistent everywhere* was among the first things asked for, and until now
+the author and narrator on an item page were plain text, because linking to a dead end is
+worse than not linking.
+
+All three pages are computed from the local mirror. The server has an author page and a
+series page in its own web client and no API that hands either to a client, so grouping
+locally is both the only option and the faster one — and it means these work with the
+network off, like everything else that reads from Room.
+
+The series page carries the decision worth recording: it groups on the parsed
+`seriesTitle` and orders by the parsed `seriesSequence`, never on the `seriesName` the
+server sends. That string has the number baked into it, so two books in one series do not
+compare equal — grouping by it groups nothing, and ordering by it puts "#10" before "#2".
+Both columns were added in M2 for the "Next in series" shelf; this is the second thing they
+have paid for.
+
+Grouping is on the stored string, which means an author credited two ways is two authors
+here. That is a real limitation and the alternative is guessing at name order for every
+language a library might contain, which is a worse kind of wrong.
+
+### A library that can be moved through
+
+Natural sorting, so "Book 2" comes before "Book 10" — the same rule `seriesSequence`
+already applies, finally applied to plain titles, where there is no column to parse into.
+Selection mode on the library grid, which was the one list that did not have it, now with
+mark-finished among its actions. An A–Z rail for long grids, shown only when the ordering
+is actually alphabetical, because an A–Z rail over a list sorted by date is a lie. And two
+preferences that make the shell somebody's own: which tab opens, and which shelves appear
+and in what order.
+
+The shelf ordering stores names rather than positions, so a shelf added in a later version
+is one the stored order has never heard of and falls back to where its author put it,
+rather than silently taking someone else's place.
+
+### Next
+
+1. **Read the diary after a real stop**, and **a release-build device pass** — both still
+   owed from the previous entry, and neither is something more code can discharge.
+2. Run [qa/auto.md](qa/auto.md) in the DHU, then in a car.
+3. Socket.IO deltas: M0's last unfinished piece, and the reason an edit made on the web
+   takes until the next sync to appear.
+4. Custom HTTP headers, once the release build has been proven on a device — it changes
+   the auth path, and debugging that against an unverified obfuscated build would be two
+   unknowns at once.

@@ -5,7 +5,9 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.view.KeyEvent
 import androidx.annotation.OptIn
+import androidx.core.content.IntentCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -30,12 +32,14 @@ import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.download.DownloadCache
 import io.github.lightheaded.lugu.core.model.Chapters
+import io.github.lightheaded.lugu.core.model.MediaButton
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.HeadsetAction
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
@@ -154,6 +158,10 @@ class LuguPlaybackService : MediaLibraryService() {
         super.onCreate()
         diary.record(PlaybackEvent.SERVICE_CREATED)
 
+        // Installed before any session exists, so the first notification is already built
+        // from the listener's buttons rather than from Media3's previous/next pair.
+        setMediaNotificationProvider(LuguNotificationProvider(this))
+
         // Reads through the download cache first and the network second, so a downloaded
         // book plays from disk on every surface without any of them having to know that
         // downloads exist. Auth headers rather than `?token=` URLs on the way out: a
@@ -237,6 +245,13 @@ class LuguPlaybackService : MediaLibraryService() {
                 currentSettings = settings
                 applyAudioSettings(settings)
                 syncShakeListening()
+                // The notification's layout is read once, when a controller connects, so a
+                // setting that moves afterwards changes nothing unless it is pushed. The
+                // previous attempt at controlling these buttons failed here and nowhere
+                // else. Pushed on every emission rather than on a comparison: Media3 only
+                // notifies controllers when the list has really changed, so an unnecessary
+                // push costs nothing and a missed one costs the whole feature.
+                pushNotificationLayout()
             }
         }
 
@@ -292,8 +307,79 @@ class LuguPlaybackService : MediaLibraryService() {
             Chapters.previousChapterStart(context.chapters, position)
                 ?: (position - currentSettings.skipBackSec)
         }
-        val destination = AbsoluteTiming.toTrack(context.tracks, target.coerceAtLeast(0.0))
-        player.seekTo(destination.trackIndex, destination.positionMs)
+        seekToAbsolute(target)
+    }
+
+    /**
+     * Seeks to a whole-book position, which is the only kind of position anything outside
+     * ExoPlayer deals in.
+     *
+     * The single-track case is separated out rather than left to [AbsoluteTiming.toTrack],
+     * which answers with track 0 offset 0 when it has no track list to work from. A seek to
+     * zero on a forty-hour book is the fault all of this exists to prevent, and it must not
+     * be reachable through a rounding case.
+     */
+    private fun seekToAbsolute(absoluteSec: Double) {
+        val tracks = stateHolder.nowPlaying.value?.tracks.orEmpty()
+        val safe = absoluteSec.coerceAtLeast(0.0)
+        if (tracks.size <= 1) {
+            player.seekTo((safe * 1000).toLong())
+        } else {
+            val destination = AbsoluteTiming.toTrack(tracks, safe)
+            player.seekTo(destination.trackIndex, destination.positionMs)
+        }
+    }
+
+    /** Moves by a signed number of seconds from wherever the book currently is. */
+    private fun seekRelative(deltaSec: Double) {
+        val position = currentAbsoluteSec() ?: return
+        seekToAbsolute(position + deltaSec)
+    }
+
+    /**
+     * Does what the listener asked a headset's side button to do.
+     *
+     * The classifier decides whether the press was real; it is what removes the phantom
+     * rewinds that some headsets cause by emitting a pause and a play in the same
+     * millisecond, and a press it rejects must not act. What a real press *means* is a
+     * setting, and is resolved by [HeadsetActions].
+     */
+    private fun applyHeadsetPress(button: MediaButton) {
+        val classified = buttonClassifier.classify(button, System.currentTimeMillis(), player.isPlaying)
+        val press = HeadsetActions.resolve(classified, currentSettings.headset) ?: run {
+            // Worth a line: "the headphone button did nothing" is a complaint that cannot
+            // be told from a broken headset without knowing the press was seen and dropped.
+            diary.record(HEADSET_BUTTON, "${button.name.lowercase()} dropped as $classified")
+            return
+        }
+        val forward = press.direction == HeadsetDirection.NEXT
+
+        when (press.action) {
+            HeadsetAction.SKIP -> seekRelative(
+                if (forward) {
+                    currentSettings.skipForwardSec.toDouble()
+                } else {
+                    -currentSettings.skipBackSec.toDouble()
+                },
+            )
+
+            HeadsetAction.CHAPTER -> seekChapter(forward)
+
+            // Never `seekToPrevious()`: on a single-file book that seeks to zero, which is
+            // the incident all of this was written for. The queue only runs forwards, so
+            // there is genuinely nothing before the current item to go to.
+            HeadsetAction.ITEM -> if (forward) {
+                persistPosition(reason = "headset-next-item")
+                continueToNext(startedByListener = true)
+            } else {
+                diary.record(HEADSET_BUTTON, playbackDetail("previous item, but the queue has none"))
+            }
+
+            HeadsetAction.NOTHING -> diary.record(
+                HEADSET_BUTTON,
+                "${button.name.lowercase()} ignored, as configured",
+            )
+        }
     }
 
     /**
@@ -799,8 +885,13 @@ class LuguPlaybackService : MediaLibraryService() {
      * Done here rather than in the UI because this is exactly when the UI is least
      * likely to exist: a book finishing in a car, or with the screen off. The resolver
      * decides *what* comes next and whether it may start itself; this only loads it.
+     *
+     * @param startedByListener true when a headset button asked for this rather than a book
+     *   ending. The "ask before a suggestion" setting exists so nothing new begins without
+     *   being asked, and a press is being asked — so an explicit press plays, and the
+     *   notice says it is playing rather than waiting.
      */
-    private fun continueToNext() {
+    private fun continueToNext(startedByListener: Boolean = false) {
         val finished = stateHolder.nowPlaying.value ?: return
         scope.launch {
             val continuation = withContext(Dispatchers.IO) {
@@ -812,6 +903,8 @@ class LuguPlaybackService : MediaLibraryService() {
                 "${continuation.resumption.nowPlaying.title}, started automatically: ${continuation.autoStart}",
             )
 
+            if (startedByListener) stateHolder.setContinuationNotice(continuation.reason, cued = false)
+
             stateHolder.set(continuation.resumption.nowPlaying)
             player.setMediaItems(
                 continuation.resumption.mediaItems,
@@ -821,7 +914,7 @@ class LuguPlaybackService : MediaLibraryService() {
             player.prepare()
             // Cueing without playing is the whole of the "ask first" setting: the next
             // book is loaded and one press away, and nothing started on its own.
-            if (continuation.autoStart) player.play()
+            if (continuation.autoStart || startedByListener) player.play()
         }
     }
 
@@ -834,18 +927,52 @@ class LuguPlaybackService : MediaLibraryService() {
      */
     private val carCommands = listOf(
         CommandButton.Builder(CommandButton.ICON_PREVIOUS)
-            .setSessionCommand(SessionCommand(COMMAND_CHAPTER_PREVIOUS, android.os.Bundle.EMPTY))
+            .setSessionCommand(
+                SessionCommand(NotificationLayout.COMMAND_CHAPTER_PREVIOUS, android.os.Bundle.EMPTY),
+            )
             .setDisplayName("Previous chapter")
+            .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
         CommandButton.Builder(CommandButton.ICON_NEXT)
-            .setSessionCommand(SessionCommand(COMMAND_CHAPTER_NEXT, android.os.Bundle.EMPTY))
+            .setSessionCommand(
+                SessionCommand(NotificationLayout.COMMAND_CHAPTER_NEXT, android.os.Bundle.EMPTY),
+            )
             .setDisplayName("Next chapter")
+            .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
         CommandButton.Builder(CommandButton.ICON_PLAYBACK_SPEED)
             .setSessionCommand(SessionCommand(COMMAND_SPEED_CYCLE, android.os.Bundle.EMPTY))
             .setDisplayName("Speed")
+            .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
     )
+
+    /**
+     * The buttons offered to the notification, the lock screen and the platform session.
+     *
+     * The listener's own choices come first, in their order, because the first two take the
+     * places either side of play-pause. The car's chapter and speed buttons are appended,
+     * but only while a car is actually connected: they reach a car through this list — a
+     * projection host reads the platform session's custom actions, which Media3 builds from
+     * exactly these preferences — and if they were always present, "no buttons" would still
+     * leave three of them in the expanded notification on a phone.
+     */
+    private fun notificationLayout(): List<CommandButton> {
+        val chosen = NotificationLayout.buttonsFor(currentSettings)
+        return if (carControllers.isEmpty()) chosen else chosen + carCommands
+    }
+
+    /**
+     * Hands the current layout to everything already connected.
+     *
+     * Media3 broadcasts this to every controller including the one that owns the
+     * notification, and rebuilds the notification when the list has really changed. Nothing
+     * about the *commands* moves — those are granted in full at connection time — so this
+     * can be called at any moment without a controller having to re-negotiate anything.
+     */
+    private fun pushNotificationLayout(target: MediaSession? = session) {
+        target?.setMediaButtonPreferences(notificationLayout())
+    }
 
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
         override fun onConnect(
@@ -860,14 +987,37 @@ class LuguPlaybackService : MediaLibraryService() {
 
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
             carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+            NotificationLayout.allCommands().forEach { commands.add(it) }
+
+            val result = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands.build())
-                .setCustomLayout(carCommands)
-                .build()
+
+            // The controller behind the notification is given the layout and nothing else.
+            // A custom layout would win over it when the listener has chosen no buttons at
+            // all — Media3 falls back to deriving preferences from the layout when the
+            // preferences are empty — and the promise on the settings screen is that no
+            // buttons means play-pause alone.
+            if (session.isMediaNotificationController(controller)) {
+                result.setMediaButtonPreferences(notificationLayout())
+            } else {
+                result.setCustomLayout(carCommands)
+            }
+            return result.build()
+        }
+
+        /**
+         * A car that has just arrived changes what the layout should contain, and its own
+         * connection result was built before it was known to be a car. Done here rather
+         * than in [onConnect] because a layout pushed to a controller that has not finished
+         * connecting is discarded.
+         */
+        override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
+            pushNotificationLayout(session)
         }
 
         override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
             carControllers -= controller.packageName
+            pushNotificationLayout(session)
         }
 
         override fun onCustomCommand(
@@ -877,12 +1027,59 @@ class LuguPlaybackService : MediaLibraryService() {
             args: android.os.Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
-                COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
-                COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
+                NotificationLayout.COMMAND_SKIP_BACK ->
+                    seekRelative(-currentSettings.skipBackSec.toDouble())
+
+                NotificationLayout.COMMAND_SKIP_FORWARD ->
+                    seekRelative(currentSettings.skipForwardSec.toDouble())
+
+                NotificationLayout.COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
+                NotificationLayout.COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
                 COMMAND_SPEED_CYCLE -> cycleSpeed()
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        /**
+         * The headset's own side buttons, which are not the notification's.
+         *
+         * Intercepted here because Media3's default is to call `seekToNext()` and
+         * `seekToPrevious()` on the player, and the listener may have asked for a chapter,
+         * the next item, or nothing at all. Returning true claims the press so the default
+         * never runs.
+         */
+        override fun onMediaButtonEvent(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            intent: Intent,
+        ): Boolean {
+            if (intent.action != Intent.ACTION_MEDIA_BUTTON) return false
+            val keyEvent = IntentCompat.getParcelableExtra(
+                intent,
+                Intent.EXTRA_KEY_EVENT,
+                KeyEvent::class.java,
+            ) ?: return false
+
+            val button = when (keyEvent.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_NEXT,
+                KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+                -> MediaButton.NEXT
+
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
+                -> MediaButton.PREVIOUS
+
+                else -> return false
+            }
+
+            // Both halves of the press are claimed, and a held button repeats rather than
+            // acting again: a headset that reports the release as well would otherwise skip
+            // twice for one press.
+            if (keyEvent.action != KeyEvent.ACTION_DOWN || keyEvent.repeatCount != 0) return true
+
+            applyHeadsetPress(button)
+            return true
         }
 
         override fun onGetLibraryRoot(
@@ -1064,9 +1261,19 @@ class LuguPlaybackService : MediaLibraryService() {
         /** Float comparison slack, so cycling never sticks on the preset it is already at. */
         const val SPEED_EPSILON = 0.001f
 
-        const val COMMAND_CHAPTER_PREVIOUS = "io.github.lightheaded.lugu.CHAPTER_PREVIOUS"
-        const val COMMAND_CHAPTER_NEXT = "io.github.lightheaded.lugu.CHAPTER_NEXT"
+        /**
+         * The chapter commands live in [NotificationLayout], which the notification and
+         * the car both draw their buttons from. Speed is the car's alone.
+         */
         const val COMMAND_SPEED_CYCLE = "io.github.lightheaded.lugu.SPEED_CYCLE"
+
+        /**
+         * A press of a headset's side button that did something out of the ordinary.
+         *
+         * Named here rather than in `PlaybackEvent` because that lives in another module;
+         * it belongs there once this has proved worth keeping.
+         */
+        const val HEADSET_BUTTON = "headset button"
     }
 }
 

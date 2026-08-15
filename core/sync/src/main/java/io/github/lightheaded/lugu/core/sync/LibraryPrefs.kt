@@ -33,8 +33,33 @@ private val Context.libraryPrefsStore: DataStore<Preferences> by preferencesData
  * ordered by length is a decision, and making them take it again on each return is the
  * sort of small friction that adds up to not using the feature.
  */
+/** Which of the two tabs opens when lugu does. */
+enum class StartTab(val id: String, val label: String) {
+    HOME("home", "Home"),
+    LIBRARY("library", "Library"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): StartTab = entries.firstOrNull { it.id == id } ?: HOME
+    }
+}
+
 data class LibrarySettings(
     val hiddenMediaTypes: Set<MediaType> = emptySet(),
+    val startTab: StartTab = StartTab.HOME,
+    /**
+     * The order shelves appear in, and which of them appear at all.
+     *
+     * Stored as a list of names rather than as positions, so a shelf added in a later
+     * version simply is not in the list and falls back to its declared position instead of
+     * silently taking someone else's. Anything absent from [shelfOrder] keeps the order it
+     * is declared in; anything in [hiddenShelves] is not shown at all.
+     *
+     * Worth the storage because the alternative is scrolling past five rows to reach the
+     * one you always want, every session (upstream app#743).
+     */
+    val shelfOrder: List<String> = emptyList(),
+    val hiddenShelves: Set<String> = emptySet(),
     /**
      * The library in view.
      *
@@ -59,6 +84,20 @@ data class LibrarySettings(
     val episodeFilter: ListFilter = ListFilter.ALL,
 ) {
     fun isVisible(mediaType: MediaType): Boolean = mediaType !in hiddenMediaTypes
+
+    /**
+     * Applies the stored order and the hidden set to shelves as declared.
+     *
+     * Declared order is the fallback for anything the stored list has never heard of, so a
+     * shelf added in a later version appears where its author put it rather than at the
+     * end or, worse, in a position someone else's preference chose for it.
+     */
+    fun <T> arrangeShelves(declared: List<T>, nameOf: (T) -> String): List<T> {
+        val visible = declared.filter { nameOf(it) !in hiddenShelves }
+        if (shelfOrder.isEmpty()) return visible
+        val known = shelfOrder.withIndex().associate { (index, name) -> name to index }
+        return visible.sortedBy { known[nameOf(it)] ?: (shelfOrder.size + declared.indexOf(it)) }
+    }
 }
 
 @Singleton
@@ -83,6 +122,19 @@ class LibraryPrefs @Inject constructor(
             current().hiddenMediaTypes - mediaType
         }
         store.edit { prefs -> prefs[HIDDEN_TYPES] = wanted.joinToString(",") { it.name } }
+    }
+
+    suspend fun setStartTab(tab: StartTab) {
+        store.edit { it[START_TAB] = tab.id }
+    }
+
+    suspend fun setShelfOrder(order: List<String>) {
+        store.edit { prefs -> prefs[SHELF_ORDER] = order.distinct().joinToString(",") }
+    }
+
+    suspend fun setShelfHidden(name: String, hidden: Boolean) {
+        val wanted = if (hidden) current().hiddenShelves + name else current().hiddenShelves - name
+        store.edit { prefs -> prefs[HIDDEN_SHELVES] = wanted.joinToString(",") }
     }
 
     suspend fun setSelectedLibraryId(libraryId: String?) {
@@ -114,6 +166,9 @@ class LibraryPrefs @Inject constructor(
     private fun Preferences.toSettings(): LibrarySettings = LibrarySettings(
         hiddenMediaTypes = this[HIDDEN_TYPES]?.toMediaTypes() ?: emptySet(),
         selectedLibraryId = this[SELECTED_LIBRARY],
+        startTab = StartTab.fromId(this[START_TAB]),
+        shelfOrder = this[SHELF_ORDER]?.toNames().orEmpty(),
+        hiddenShelves = this[HIDDEN_SHELVES]?.toNames()?.toSet().orEmpty(),
         shelvesFollowLibrary = this[SHELVES_FOLLOW_LIBRARY] ?: true,
         itemSort = ItemSort.fromId(this[ITEM_SORT]),
         itemFilter = ListFilter.fromId(this[ITEM_FILTER]),
@@ -121,12 +176,18 @@ class LibraryPrefs @Inject constructor(
         episodeFilter = ListFilter.fromId(this[EPISODE_FILTER]),
     )
 
+    private fun String.toNames(): List<String> =
+        split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
     private fun String.toMediaTypes(): Set<MediaType> =
         split(',').mapNotNull { name -> MediaType.entries.firstOrNull { it.name == name.trim() } }.toSet()
 
     private companion object {
         val HIDDEN_TYPES = stringPreferencesKey("hidden_media_types")
         val SELECTED_LIBRARY = stringPreferencesKey("selected_library_id")
+        val START_TAB = stringPreferencesKey("start_tab")
+        val SHELF_ORDER = stringPreferencesKey("shelf_order")
+        val HIDDEN_SHELVES = stringPreferencesKey("hidden_shelves")
         val SHELVES_FOLLOW_LIBRARY = booleanPreferencesKey("shelves_follow_library")
         val ITEM_SORT = stringPreferencesKey("item_sort")
         val ITEM_FILTER = stringPreferencesKey("item_filter")

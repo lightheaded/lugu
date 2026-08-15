@@ -219,6 +219,42 @@ class ProgressRepository @Inject constructor(
         }
     }
 
+    /**
+     * Marks something finished, or not.
+     *
+     * An explicit act, so it goes out with `force`: [record] treats finished as sticky
+     * precisely so that a stray position update near the end cannot un-finish a book, and
+     * the only thing that should be able to is somebody saying so.
+     *
+     * Un-finishing resets the position to the start, which is what the server's own web
+     * client does and what the act means — nobody marks a book unfinished in order to stay
+     * at the last second of it. Nothing is lost that was not already lost: a finished book
+     * is at its end, so there is no place to keep.
+     *
+     * [fallbackDurationSec] is used only when no progress row exists yet, since marking an
+     * untouched book finished is a normal thing to do and there is no stored duration to
+     * read in that case.
+     */
+    suspend fun setFinished(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        isFinished: Boolean,
+        fallbackDurationSec: Double = 0.0,
+    ) {
+        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+        val duration = existing?.durationSec?.takeIf { it > 0 } ?: fallbackDurationSec
+        record(
+            account = account,
+            itemId = itemId,
+            episodeId = episodeId,
+            positionSec = if (isFinished) duration else 0.0,
+            durationSec = duration,
+            isFinished = isFinished,
+            force = true,
+        )
+    }
+
     private suspend fun enqueuePush(account: ActiveAccount, local: MediaProgress, knownServer: MediaProgress?) {
         if (ProgressConflictResolver.mayPushAutomatically(local, knownServer)) enqueue(account, local)
     }

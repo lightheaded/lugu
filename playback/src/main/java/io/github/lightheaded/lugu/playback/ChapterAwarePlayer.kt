@@ -110,9 +110,14 @@ class ChapterAwarePlayer(
      * all — which is how the notification ended up still doing chapter-sized jumps.
      *
      * Keeping the commands stable and switching their behaviour is deterministic, and
-     * needs no cooperation from the notification provider. Giving those two slots proper
-     * seek *icons*, and controlling their order, needs a Media3 custom layout — see
-     * docs/BACKLOG.md.
+     * needs no cooperation from the notification provider.
+     *
+     * The notification no longer relies on any of this: it has its own buttons, with their
+     * own icons and order, through [NotificationLayout] and [LuguNotificationProvider], and
+     * a headset's side buttons are intercepted before they reach a player command at all.
+     * What remains here is the last line of defence for any surface that still issues the
+     * stock transport commands — Android Auto's own controls among them — where
+     * `seekToPrevious()` would otherwise seek a single-file book to zero.
      */
     override fun getAvailableCommands(): Player.Commands =
         super.getAvailableCommands().buildUpon()

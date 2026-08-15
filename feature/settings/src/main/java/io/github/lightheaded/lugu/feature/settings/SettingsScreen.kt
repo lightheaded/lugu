@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -40,8 +42,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.AudioSettings
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
+import io.github.lightheaded.lugu.core.sync.HeadsetAction
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.SleepSettings
+import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 
@@ -225,13 +230,52 @@ private fun settingEntries(
                 id = "buttons-notification",
                 category = "Buttons",
                 title = "Buttons in the notification",
-                keywords = "notification lock screen controls headphones bluetooth chapter show hide",
+                keywords = "notification lock screen controls headphones bluetooth chapter show " +
+                    "hide order arrange icons position",
             ) {
-                ButtonPicker(
+                OrderedButtonPicker(
                     title = "In the notification",
-                    subtitle = "Space is tight here; fewer is usually better",
+                    subtitle = "Tap in the order you want them. Space is tight here; fewer is " +
+                        "usually better.",
                     selected = settings.notificationButtons,
                     onToggle = viewModel::toggleNotificationButton,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "headset-next",
+                category = "Headset buttons",
+                title = "What the next button does",
+                keywords = "headphones headset bluetooth remote watch next forward button press " +
+                    "avrcp car controls",
+            ) {
+                ChoiceRow(
+                    title = "What the next button does",
+                    subtitle = "A book has no tracks, so \"next\" has to mean something chosen",
+                    options = HeadsetAction.entries,
+                    selected = settings.headset.nextAction,
+                    format = { it.label },
+                    onSelect = viewModel::setHeadsetNextAction,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "headset-previous",
+                category = "Headset buttons",
+                title = "What the previous button does",
+                keywords = "headphones headset bluetooth remote watch previous back button press " +
+                    "avrcp car controls rewind",
+            ) {
+                ChoiceRow(
+                    title = "What the previous button does",
+                    subtitle = "Android's own default here seeks to zero on a single-file book, " +
+                        "which is how a forty-hour book loses its place to one press",
+                    options = HeadsetAction.entries,
+                    selected = settings.headset.previousAction,
+                    format = { it.label },
+                    onSelect = viewModel::setHeadsetPreviousAction,
                 )
             },
         )
@@ -505,6 +549,39 @@ private fun settingEntries(
                 MediaTypePicker(
                     hidden = library.hiddenMediaTypes,
                     onToggle = { type, hidden -> viewModel.setMediaTypeHidden(type, hidden) },
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-start-tab",
+                category = "Library",
+                title = "Which tab opens first",
+                keywords = "start home library default tab open launch first screen",
+            ) {
+                ChoiceRow(
+                    title = "Which tab opens first",
+                    subtitle = "Home is the shelves and one-tap resume; Library is the whole grid",
+                    options = StartTab.entries,
+                    selected = library.startTab,
+                    format = { it.label },
+                    onSelect = viewModel::setStartTab,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-shelves",
+                category = "Library",
+                title = "Shelves on Home",
+                keywords = "shelves home order reorder hide show continue downloaded series " +
+                    "arrange move rows",
+            ) {
+                ShelfEditor(
+                    order = library.arrangeShelves(ShelfKind.entries) { it.name },
+                    hidden = library.hiddenShelves,
+                    onToggle = { kind, hidden -> viewModel.setShelfHidden(kind.name, hidden) },
+                    onMove = { kind, up -> viewModel.moveShelf(kind.name, up) },
                 )
             },
         )
@@ -905,6 +982,136 @@ private fun ButtonPicker(
                 )
             }
         }
+    }
+}
+
+/**
+ * The notification's buttons, and the order they sit in.
+ *
+ * The tap order *is* the order, with the position shown on each chip. A separate reorder
+ * control would be a second interaction for a list of four things, and a drag handle on a
+ * chip is a gesture nobody discovers — this way the setting answers both questions with
+ * one gesture, at the cost of having to remove and re-add to reshuffle.
+ */
+@Composable
+private fun OrderedButtonPicker(
+    title: String,
+    subtitle: String?,
+    selected: List<TransportButton>,
+    onToggle: (TransportButton) -> Unit,
+) {
+    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        subtitle?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TransportButton.entries.forEach { button ->
+                val position = selected.indexOf(button)
+                FilterChip(
+                    selected = position >= 0,
+                    onClick = { onToggle(button) },
+                    label = {
+                        val label = if (position >= 0) "${position + 1}. ${button.label}" else button.label
+                        Text(label, maxLines = 1, softWrap = false)
+                    },
+                )
+            }
+        }
+        if (selected.isEmpty()) {
+            Text(
+                "With none chosen the notification keeps play and pause only.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Which shelves appear on Home, and in what order.
+ *
+ * Up and down rather than drag: this list is six rows long and lives inside a scrolling
+ * settings page, where a drag gesture fights the scroll it is nested in.
+ */
+@Composable
+private fun ShelfEditor(
+    order: List<ShelfKind>,
+    hidden: Set<String>,
+    onToggle: (ShelfKind, Boolean) -> Unit,
+    onMove: (ShelfKind, Boolean) -> Unit,
+) {
+    // Hidden shelves are dropped by arrangeShelves, so they are listed after the visible
+    // ones rather than vanishing — a switch you cannot find again is not a switch.
+    val hiddenKinds = ShelfKind.entries.filter { it.name in hidden }
+
+    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Text("Shelves on Home", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "In the order they appear. Switch off the ones you never use.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        order.forEachIndexed { index, kind ->
+            ShelfRow(
+                kind = kind,
+                visible = true,
+                canMoveUp = index > 0,
+                canMoveDown = index < order.lastIndex,
+                onToggle = onToggle,
+                onMove = onMove,
+            )
+        }
+        hiddenKinds.forEach { kind ->
+            ShelfRow(
+                kind = kind,
+                visible = false,
+                canMoveUp = false,
+                canMoveDown = false,
+                onToggle = onToggle,
+                onMove = onMove,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShelfRow(
+    kind: ShelfKind,
+    visible: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onToggle: (ShelfKind, Boolean) -> Unit,
+    onMove: (ShelfKind, Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            kind.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (visible) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = { onMove(kind, true) }, enabled = canMoveUp) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move ${kind.label} up")
+        }
+        IconButton(onClick = { onMove(kind, false) }, enabled = canMoveDown) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move ${kind.label} down")
+        }
+        Switch(checked = visible, onCheckedChange = { onToggle(kind, !it) })
     }
 }
 

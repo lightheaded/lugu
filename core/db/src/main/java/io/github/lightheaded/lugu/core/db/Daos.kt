@@ -384,6 +384,85 @@ interface LibraryItemDao {
     )
     suspend fun bySeries(serverId: String, userId: String, seriesTitle: String): List<LibraryItemEntity>
 
+    /**
+     * Everyone who wrote something, with how much of it there is.
+     *
+     * Grouped on the stored string, which is what the server sends. A book credited to
+     * "Corven, James T. R." and one credited to "James T. R. Corven" are therefore two
+     * authors here — a real limitation, and the alternative is guessing at name order for
+     * every language the library might contain, which is a worse kind of wrong. Splitting
+     * a multi-author credit has the same problem and is left alone for the same reason.
+     */
+    @Query(
+        """
+        SELECT authorName AS name, COUNT(*) AS itemCount FROM library_item
+        WHERE serverId = :serverId AND userId = :userId
+          AND (:libraryId IS NULL OR libraryId = :libraryId)
+          AND authorName IS NOT NULL AND TRIM(authorName) != ''
+        GROUP BY authorName
+        ORDER BY authorName COLLATE NOCASE
+        """,
+    )
+    fun observeAuthors(serverId: String, userId: String, libraryId: String? = null): Flow<List<BrowseGroup>>
+
+    @Query(
+        """
+        SELECT narratorName AS name, COUNT(*) AS itemCount FROM library_item
+        WHERE serverId = :serverId AND userId = :userId
+          AND (:libraryId IS NULL OR libraryId = :libraryId)
+          AND narratorName IS NOT NULL AND TRIM(narratorName) != ''
+        GROUP BY narratorName
+        ORDER BY narratorName COLLATE NOCASE
+        """,
+    )
+    fun observeNarrators(serverId: String, userId: String, libraryId: String? = null): Flow<List<BrowseGroup>>
+
+    /**
+     * Series by [LibraryItemEntity.seriesTitle], never by `seriesName` — the latter has
+     * the number baked into it, so two books in one series do not compare equal and
+     * grouping by it groups nothing.
+     */
+    @Query(
+        """
+        SELECT seriesTitle AS name, COUNT(*) AS itemCount FROM library_item
+        WHERE serverId = :serverId AND userId = :userId
+          AND (:libraryId IS NULL OR libraryId = :libraryId)
+          AND seriesTitle IS NOT NULL AND TRIM(seriesTitle) != ''
+        GROUP BY seriesTitle
+        ORDER BY seriesTitle COLLATE NOCASE
+        """,
+    )
+    fun observeSeries(serverId: String, userId: String, libraryId: String? = null): Flow<List<BrowseGroup>>
+
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND authorName = :name
+        ORDER BY seriesTitle IS NULL, seriesTitle COLLATE NOCASE,
+                 seriesSequence IS NULL, seriesSequence, title COLLATE NOCASE
+        """,
+    )
+    fun observeByAuthor(serverId: String, userId: String, name: String): Flow<List<LibraryItemEntity>>
+
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND narratorName = :name
+        ORDER BY title COLLATE NOCASE
+        """,
+    )
+    fun observeByNarrator(serverId: String, userId: String, name: String): Flow<List<LibraryItemEntity>>
+
+    /** Reading order, so a series page is a queue rather than an alphabetical list. */
+    @Query(
+        """
+        SELECT * FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND seriesTitle = :name
+        ORDER BY seriesSequence IS NULL, seriesSequence, title COLLATE NOCASE
+        """,
+    )
+    fun observeBySeries(serverId: String, userId: String, name: String): Flow<List<LibraryItemEntity>>
+
     @Query(
         """
         SELECT * FROM library_item
@@ -815,6 +894,15 @@ interface OutboxDao {
  * every time the UI wanted one more field. The join is against the mirror, so this works
  * with the network off.
  */
+/**
+ * One author, series or narrator, with how much of the library is theirs.
+ *
+ * The count is what makes the list usable: a library with four hundred authors is a wall
+ * of names, and "12 books" is the difference between a name worth opening and one that is
+ * a single misfiled item.
+ */
+data class BrowseGroup(val name: String, val itemCount: Int)
+
 data class QueueRow(
     val libraryItemId: String,
     val episodeKey: String,

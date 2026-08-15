@@ -113,10 +113,55 @@ object ListControls {
             facts.secondary?.lowercase()?.contains(needle) == true
     }
 
+    /**
+     * Compares titles the way a person reads them, so "Book 2" comes before "Book 10".
+     *
+     * Lexicographic ordering puts "10" before "2" because it compares one character at a
+     * time, which is exactly how a series ends up listed in the wrong order. Runs of digits
+     * are therefore compared as numbers and everything else as text. The same reasoning
+     * already drove `seriesSequence` being parsed into its own column; this is that rule
+     * applied to plain titles, where there is no column to parse into.
+     *
+     * Digit runs are compared by length only after leading zeros are ignored, so "07" and
+     * "7" are equal and "0007" does not sort before "1".
+     */
+    fun naturalCompare(left: String, right: String): Int {
+        var i = 0
+        var j = 0
+        while (i < left.length && j < right.length) {
+            val a = left[i]
+            val b = right[j]
+            if (a.isDigit() && b.isDigit()) {
+                var endI = i
+                while (endI < left.length && left[endI].isDigit()) endI++
+                var endJ = j
+                while (endJ < right.length && right[endJ].isDigit()) endJ++
+
+                val numA = left.substring(i, endI).trimStart('0')
+                val numB = right.substring(j, endJ).trimStart('0')
+                if (numA.length != numB.length) return numA.length - numB.length
+                val digits = numA.compareTo(numB)
+                if (digits != 0) return digits
+
+                i = endI
+                j = endJ
+            } else {
+                val letters = a.lowercaseChar().compareTo(b.lowercaseChar())
+                if (letters != 0) return letters
+                i++
+                j++
+            }
+        }
+        return (left.length - i) - (right.length - j)
+    }
+
     fun <T> sortItems(rows: List<T>, sort: ItemSort, facts: (T) -> ListFacts): List<T> = when (sort) {
-        ItemSort.TITLE -> rows.sortedBy { facts(it).title.lowercase() }
+        ItemSort.TITLE -> rows.sortedWith { a, b -> naturalCompare(facts(a).title, facts(b).title) }
         ItemSort.AUTHOR -> rows.sortedWith(
-            compareBy({ facts(it).secondary?.lowercase() ?: "￿" }, { facts(it).title.lowercase() }),
+            // Unattributed last: a missing author is not a name that sorts before every
+            // other one, and putting the blanks at the top buries everything else.
+            compareBy<T> { facts(it).secondary?.lowercase() ?: "￿" }
+                .thenComparator { a, b -> naturalCompare(facts(a).title, facts(b).title) },
         )
         ItemSort.ADDED -> rows.sortedByDescending { facts(it).addedAtMs }
         ItemSort.DURATION -> rows.sortedByDescending { facts(it).durationSec }
@@ -131,6 +176,6 @@ object ListControls {
         EpisodeSort.OLDEST -> rows.sortedBy { facts(it).publishedAtMs }
         EpisodeSort.LONGEST -> rows.sortedByDescending { facts(it).durationSec }
         EpisodeSort.SHORTEST -> rows.sortedBy { facts(it).durationSec }
-        EpisodeSort.TITLE -> rows.sortedBy { facts(it).title.lowercase() }
+        EpisodeSort.TITLE -> rows.sortedWith { a, b -> naturalCompare(facts(a).title, facts(b).title) }
     }
 }
