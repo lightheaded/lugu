@@ -49,8 +49,8 @@ Phase 0–2 of [EXECUTION-PLAN.md](EXECUTION-PLAN.md) implemented and building.
 ## 2026-08-14 (evening) — M0 confirmed working on hardware
 
 Tom signed in and played from his phone. The login failure was two stacked network
-faults, neither in the app: a DNS misconfiguration for a service wired only to the
-internal proxy entrypoint, and then lugu not being in the VPN configuration.
+faults, neither in the app — both misconfigurations on the network path between the
+phone and the server, both since fixed.
 
 One real crash came out of first contact and is fixed: **podcasts crashed the
 continue-listening shelf**. The query joined items to progress on `libraryItemId`
@@ -68,9 +68,8 @@ bug**, because the UI keys lists by id. The repository now dedupes on the way ou
 Tom installed 0.1.0 and could not sign in. The server turned out to be fine; the
 diagnosis and the two defects it exposed are worth recording.
 
-- **Not our bug, but our fault how it read.** The dev server had a DNS misconfiguration
-  while the proxy configuration only listed the internal entrypoints, so the public
-  proxy answered every path with a plain `404 page not found`. lugu printed that body
+- **Not our bug, but our fault how it read.** A proxy in front of the dev server
+  answered every path with a plain `404 page not found`, and lugu printed that body
   on the sign-in screen. Two fixes: sign-in now probes `/status` first so a wrong
   address can never present as wrong credentials, and the probe checks
   `app == "audiobookshelf"` rather than merely parsing — every field of
@@ -160,8 +159,9 @@ written on:
    which would have surfaced as a stretch of wrong audio partway through, with every
    later offset shifted. Fixed before it shipped.
 2. **`metadata.series` is empty; the only series information is a string.** Series
-   membership arrives as `"Example Series #10"` and nothing else. Measured
-   over the real library: about a third have a series name and about two-thirds of those carry a parseable number.
+   membership arrives as `"Example Series #10"` and nothing else. Measured over the
+   real library: about a third of items have a series name and two-thirds of those
+   carry a parseable number.
 
 Both are written up in [research/05-api-live-notes.md](research/05-api-live-notes.md).
 The capture script also had to be fixed first — it was redacting `contentUrl`, the single
@@ -201,12 +201,12 @@ against a real account and an abandoned session shows up as a book someone never
 
 ### A design error the tests caught
 
-"Next in series" grouped items by `seriesName` — which is `"Riverton #2"`, *including the
+"Next in series" grouped items by `seriesName` — which is `"Example Series #2"`, *including the
 number*, so two books in one series never compared equal and the shelf was always empty.
 The fix is a separate `seriesTitle` column alongside `seriesSequence`: one identifies
 the series, the other orders it. Ordering by the name string would have been worse than
-empty — this library contains "Example Series #19", "#21" and "#29", and text ordering puts
-"#10" before "#2", so the shelf would have confidently recommended the wrong volume.
+empty — a real library holds "#19", "#21" and "#29" in one long series, and text ordering
+puts "#10" before "#2", so the shelf would have confidently recommended the wrong volume.
 
 Items whose sequence will not parse are **left out rather than guessed at**. That is
 about a third of the series entries here, and the alternative is a spoiler.

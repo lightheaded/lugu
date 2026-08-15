@@ -136,19 +136,18 @@ Also observed:
 
 `metadata.series` came back **empty on every item** in the list payload; the only series
 information an item carries is `metadata.seriesName`, a single string of the form
-`"Example Series #10"`. `GET /api/libraries/:id/series` lists the series
-themselves but the per-item sequence still only exists inside that
-string.
+`"Example Series #10"`. `GET /api/libraries/:id/series` lists the series themselves,
+but the per-item sequence still only exists inside that string.
 
-Measured across the library: about a third have a `seriesName`, and **about two-thirds of those carry a parseable
-`#N`**. The rest are genuine series with no volume number ("The Tidelands",
-"The Silt Roads") or metadata noise ("Unabridged").
+Measured across the library: about a third of items have a `seriesName`, and **roughly
+two-thirds of those carry a parseable `#N`**. The rest are genuine series with no
+volume number, or metadata noise ("Unabridged").
 
 Two consequences, both now in the code:
 
 - The sequence has to be parsed out of the name (`core/model/Series.kt`) and stored as a
-  number. This library contains "Example Series #19", "#21", "#29" and "Example
-  Series #10", so ordering a series by its name string would put #10 before #2 and
+  number. A long-running series here holds "#19", "#21" and "#29" alongside a "#10", so
+  ordering a series by its name string would put #10 before #2 and
   recommend the wrong book — not a hypothetical.
 - Items whose sequence will not parse are left out of "next in series" rather than
   guessed at. That is roughly a third of series items here, and the alternative is
