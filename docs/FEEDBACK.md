@@ -5,6 +5,9 @@ the reasoning is what should survive — the specific fix may change.
 
 Status: `todo` · `doing` · `done` · `deferred`
 
+Anything still open here is also collected in [BACKLOG.md](BACKLOG.md), alongside the
+rest of the project's unfinished work.
+
 ## Transport controls — priority order
 
 Actual usage, most to least frequent:
@@ -20,7 +23,8 @@ layout treats chapter skip as a peer of seek, which over-serves the rarest actio
 |---|---|
 | Seek back/forward as the primary pair either side of play/pause | done |
 | Chapter skip present but visually secondary | done |
-| Notification ordered the same way, seek before chapter | done |
+| Notification shows seek and hides chapter skip unless asked for | done |
+| Notification button *ordering* explicitly configurable | todo — needs Media3 custom layouts; see [BACKLOG.md](BACKLOG.md) |
 | Skip durations configurable, not hardcoded 10/30 | done |
 
 ## Settings
@@ -33,9 +37,9 @@ and **searchable**.
 | Skip-back and skip-forward durations | done |
 | Which buttons appear in the player UI | done |
 | Which buttons appear in the notification | done |
-| What headphone/headset buttons do | todo |
+| What headphone/headset buttons do | todo — classifier logic exists, not surfaced |
 | Categorised settings screen | done |
-| Searchable settings | todo |
+| Searchable settings | todo — categories are the index search will use |
 
 ## Speed
 

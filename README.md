@@ -38,9 +38,10 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
 
 ## Not yet
 
-Downloads and offline playback, Android Auto, queue and auto-continuation, chapters UI,
-sleep timer, smart rewind, bookmarks, Chromecast, widgets, per-book speed memory. See
-[docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) for the order these land in.
+Downloads and offline playback, Android Auto, queue and auto-continuation, bookmarks,
+Chromecast, widgets, full-text search. [docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md)
+has the order these land in, and [docs/BACKLOG.md](docs/BACKLOG.md) lists everything
+knowingly unfinished, with the reason.
 
 ## Install
 
