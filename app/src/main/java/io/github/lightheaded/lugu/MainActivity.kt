@@ -22,6 +22,7 @@ import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
+import io.github.lightheaded.lugu.ui.LicensesScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 
@@ -46,6 +47,7 @@ private object Routes {
     const val PLAYER = "player"
     const val SETTINGS = "settings"
     const val DOWNLOADS = "downloads"
+    const val LICENSES = "licenses"
 
     fun item(itemId: String) = "item/$itemId"
 }
@@ -123,7 +125,12 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                         popUpTo(0) { inclusive = true }
                     }
                 },
+                onOpenLicenses = { navController.navigate(Routes.LICENSES) },
             )
+        }
+
+        composable(Routes.LICENSES) {
+            LicensesScreen(onBack = { navController.popBackStack() })
         }
     }
 }

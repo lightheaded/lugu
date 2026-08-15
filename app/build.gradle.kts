@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    // Collects every dependency's license at build time and generates the raw resource
+    // the licenses screen renders. Applied here because only the app module sees the
+    // whole dependency graph.
+    alias(libs.plugins.aboutlibraries.android)
 }
 
 // Dev-only convenience: prefill the login screen from a gitignored local.properties.
@@ -76,7 +80,11 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // pickFirst rather than exclude: several dependencies bundle the same-named
+            // license files, which collide — but Apache-2.0 wants its text distributed
+            // with the binary, so one copy stays in the APK.
+            pickFirsts += "/META-INF/AL2.0"
+            pickFirsts += "/META-INF/LGPL2.1"
         }
     }
 }
@@ -115,6 +123,7 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.aboutlibraries.compose.m3)
 
     implementation(libs.hilt.android)
     implementation(libs.hilt.navigation.compose)
