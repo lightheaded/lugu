@@ -1,0 +1,25 @@
+name: Feature request
+description: Something lugu should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [docs/PLAN.md](../blob/main/docs/PLAN.md) and
+        [docs/BACKLOG.md](../blob/main/docs/BACKLOG.md) first — much is already
+        planned, and the backlog says why a thing is not done yet.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The listening situation, not the UI you imagine for it. "I finish a book on a
+        drive and want the next one to start" beats "add an autoplay toggle".
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do today instead
+    validations:
+      required: false

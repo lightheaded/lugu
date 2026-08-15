@@ -8,6 +8,9 @@ episodes, keep your position, and download for offline listening. Everything els
 
 *lugu* is Estonian for "story".
 
+lugu is an independent project. It is not affiliated with, nor endorsed by,
+[Audiobookshelf](https://www.audiobookshelf.org/).
+
 ## Why
 
 The self-hosted audiobook community has an excellent server and no excellent Android
@@ -104,4 +107,7 @@ Audiobookshelf server you point it at.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+Copyright (C) 2026 lightheaded.
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). Licenses of the libraries lugu ships with
+are listed in the app under Settings → Open source licenses.
