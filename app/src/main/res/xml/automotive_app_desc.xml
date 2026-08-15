@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What lugu tells Android Auto it is.
+
+  `media` is the whole declaration: a media app browsed and controlled through the car's
+  own UI. There is no lugu screen in the car and there should not be — the car draws the
+  list, which is what makes it consistent with everything else in the vehicle and what
+  keeps the driver-distraction rules someone else has already thought about.
+-->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

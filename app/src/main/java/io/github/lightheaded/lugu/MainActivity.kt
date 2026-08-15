@@ -1,6 +1,9 @@
 package io.github.lightheaded.lugu
 
+import android.app.SearchManager
+import android.content.Intent
 import android.os.Bundle
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,21 +26,43 @@ import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
+import io.github.lightheaded.lugu.playback.PlaybackConnection
 import io.github.lightheaded.lugu.ui.LicensesScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    /**
+     * The connection rather than a view model, because a spoken request has to be
+     * honoured whether or not the player screen is ever composed.
+     */
+    @Inject lateinit var playback: PlaybackConnection
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        handleSearchIntent(intent)
         setContent {
             LuguTheme {
                 RequestNotificationPermission()
                 LuguApp()
             }
         }
+    }
+
+    /** `singleTop`, so a second spoken request arrives here rather than in a new activity. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSearchIntent(intent)
+    }
+
+    private fun handleSearchIntent(intent: Intent?) {
+        if (intent?.action != MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) return
+        val query = intent.getStringExtra(SearchManager.QUERY)?.takeIf { it.isNotBlank() } ?: return
+        playback.playFromSearch(query)
     }
 }
 
