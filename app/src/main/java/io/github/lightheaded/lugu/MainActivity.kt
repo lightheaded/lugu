@@ -20,6 +20,7 @@ import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
+import io.github.lightheaded.lugu.feature.settings.SettingsScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 
@@ -42,6 +43,7 @@ private object Routes {
     const val LIBRARY = "library"
     const val ITEM = "item/{itemId}"
     const val PLAYER = "player"
+    const val SETTINGS = "settings"
 
     fun item(itemId: String) = "item/$itemId"
 }
@@ -76,6 +78,7 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
         composable(Routes.LIBRARY) {
             LibraryScreen(
                 onOpenItem = { navController.navigate(Routes.item(it)) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
             )
         }
@@ -95,7 +98,22 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
         }
 
         composable(Routes.PLAYER) {
-            PlayerScreen(onBack = { navController.popBackStack() })
+            PlayerScreen(
+                onBack = { navController.popBackStack() },
+                // Consistent navigation: the title is a link to the item wherever it appears.
+                onOpenItem = { navController.navigate(Routes.item(it)) },
+            )
+        }
+
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onSignedOut = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+            )
         }
     }
 }
