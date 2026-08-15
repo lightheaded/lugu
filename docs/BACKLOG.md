@@ -154,10 +154,15 @@ is the path of most resistance rather than the supported one.
 
 Steps:
 
-1. `ci.yml`: keep the rolling `latest` release as the stable download link, and
-   *additionally* `gh release create "v${VERSION}+${GITHUB_RUN_NUMBER}"` so a
-   uniquely-tagged release exists per build. This restores Obtainium's default,
-   best-supported path.
+1. **Done 2026-08-15.** `ci.yml` publishes exactly one release per build, tagged
+   `v<versionName>` and marked `--latest`; the rolling `latest` release is gone, and
+   the stable link is now `/releases/latest/download/lugu-latest.apk`. `versionName`
+   carries the CI run number so the tag and the installed version agree — with a
+   static `versionName` a changing tag only trades "never updates" for "reinstalls
+   forever". Releases are no longer marked `--prerelease`, because a repo where every
+   release is a prerelease has no Latest for that link to resolve to. Confirmed
+   beforehand on hardware: against the rolling tag Obtainium reported *"a
+   pseudo-version is in use"* and `latest Installed / Latest`.
 2. Bump `versionCode` per build. Not strictly required — Android only rejects
    *downgrades*, so an equal-`versionCode` same-signature reinstall is accepted — but
    it guards against shipping an out-of-order build and becomes mandatory if Play is

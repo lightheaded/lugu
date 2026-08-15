@@ -20,6 +20,26 @@ val localProps = Properties().apply {
 
 fun devProp(key: String): String = localProps.getProperty(key).orEmpty()
 
+// CI stamps a monotonic build number so every build is a distinct version; local
+// builds keep the bare base version. Obtainium compares the installed versionName
+// against the version it reads from the release tag, and when the two cannot be
+// reconciled it stops detecting versions and reinstalls on every check — so the tag
+// CI publishes must be exactly "v$versionBase.$buildNumber".
+val versionBase = "0.2.0-alpha01"
+val buildNumber: Int? = System.getenv("LUGU_BUILD_NUMBER")?.toIntOrNull()
+
+// Sentry ingest key. Canonical copy is the SOPS-encrypted secrets.enc.yaml; CI passes
+// it in, and a local release build can set lugu.sentry.dsn in local.properties. Empty
+// is the normal case and means crash reporting cannot start at all — the SDK is never
+// initialised without a DSN, which is also what keeps a fork's builds from reporting
+// into this project's Sentry.
+//
+// Note this ends up inside the APK, so it is recoverable by anyone with a build. It is
+// kept out of the source to keep the org id out of a public repo, not as an anti-abuse
+// measure — that is a rate limit and spike protection on the Sentry side.
+val sentryDsn: String = System.getenv("LUGU_SENTRY_DSN")
+    ?: localProps.getProperty("lugu.sentry.dsn").orEmpty()
+
 android {
     namespace = "io.github.lightheaded.lugu"
     compileSdk = 37
@@ -28,8 +48,9 @@ android {
         applicationId = "io.github.lightheaded.lugu"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0-alpha01"
+        versionCode = 2 + (buildNumber ?: 0)
+        versionName = buildNumber?.let { "$versionBase.$it" } ?: versionBase
+        buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
     }
 
     signingConfigs {
