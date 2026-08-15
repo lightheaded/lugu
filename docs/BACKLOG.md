@@ -16,7 +16,7 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | Item | Why not yet |
 |---|---|
 | **Configurable headphone/headset buttons** | The classification logic exists (`MediaButtonClassifier`) but is not surfaced as choices. Needs a mapping of button gesture → action, and the classifier reading it |
-| **Notification button *ordering*** | Only *visibility* is configurable today. Explicit ordering needs Media3 custom layouts (`CommandButton` + `setCustomLayout` + `onCustomCommand`), which is a chunkier change than advertising commands |
+| **Notification button icons and ordering** | The two side buttons now *do* the configured skip, but still carry previous/next icons, and their order is Media3's. Both need custom layouts (`CommandButton` + `setCustomLayout` + `onCustomCommand`) — the default provider builds previous / play-pause / next and offers no seek button to select |
 | **Author / series / narrator links** | Those pages still do not exist, and linking to a dead end is worse than not linking. M2 got halfway: `seriesTitle` and `seriesSequence` are parsed and stored, so a series page now has something to render. Author and narrator have no equivalent yet |
 
 ## Player and playback — M1 remainder
@@ -77,7 +77,6 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 |---|---|
 | No instrumented tests at all | The plan wants process-death and resumption tests as first-class CI citizens; there is no emulator matrix in CI yet |
 | No screenshot tests | Roborazzi was planned from M1 |
-| `ChapterAwarePlayer` untested | The class that stops the notification destroying a position has no test. It needs a fake `Player` to drive `seekToPrevious()` and assert it never lands at zero — worth doing given what it prevents |
 | Sleep timer service integration untested | The arithmetic is well covered; the wiring that pauses and restores volume is not |
 | `DownloadEngine` aggregation untested | The fold from per-file Media3 events to one item row — including the duration-weighted percentage used before file sizes are known — has no test. It needs a fake `DownloadIndex` |
 | The offline resolution path is untested end to end | `ManifestBuilder` and the shelf and search queries are covered; `MediaResolver.resolveFromDownload` is not, because it needs the repository, the ledger and Room together |

@@ -16,6 +16,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -48,4 +54,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.truth)
     testImplementation(libs.kotlinx.coroutines.test)
+    // SimpleBasePlayer needs a Looper to construct, so the player tests run on Robolectric.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.junit)
 }

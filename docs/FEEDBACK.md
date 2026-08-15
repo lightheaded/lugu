@@ -23,9 +23,25 @@ layout treats chapter skip as a peer of seek, which over-serves the rarest actio
 |---|---|
 | Seek back/forward as the primary pair either side of play/pause | done |
 | Chapter skip present but visually secondary | done |
-| Notification shows seek and hides chapter skip unless asked for | done |
-| Notification button *ordering* explicitly configurable | todo — needs Media3 custom layouts; see [BACKLOG.md](BACKLOG.md) |
+| Notification's two side buttons skip by the configured seconds by default | done — see below |
+| Notification button *icons* and *ordering* | todo — needs Media3 custom layouts; see [BACKLOG.md](BACKLOG.md) |
 | Skip durations configurable, not hardcoded 10/30 | done |
+
+**The notification jumped by ten minutes** (found by Tom, 15 Aug). Its side buttons were
+remapped to chapter navigation unconditionally, and a book with no real chapters gets
+*synthetic* ten-minute chapters — so one tap moved ten minutes. On a multi-file book the
+step was a whole file, which is no better.
+
+They now skip by the configured seconds unless chapter buttons are explicitly asked for.
+The earlier attempt to control this by *withdrawing* the previous/next commands did not
+work: Media3's default notification builds its layout from previous / play-pause / next
+and has no seek button to fall back to, so withdrawing them removes the buttons rather
+than changing them — and available commands are read when a controller connects, with
+nothing firing a change when a setting moves. Switching behaviour while leaving the
+commands advertised is deterministic and needs no cooperation from the notification.
+
+The buttons still carry previous/next *icons*. Fixing that, and the ordering, needs a
+Media3 custom layout — the same piece of work, still outstanding.
 
 ## Settings
 
