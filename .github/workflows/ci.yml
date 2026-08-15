@@ -73,6 +73,11 @@ jobs:
           LUGU_KEYSTORE_PASSWORD: ${{ secrets.LUGU_KEYSTORE_PASSWORD }}
           LUGU_KEY_ALIAS: lugu
           LUGU_KEY_PASSWORD: ${{ secrets.LUGU_KEYSTORE_PASSWORD }}
+          # Stamps versionName/versionCode; the release tag below must match.
+          LUGU_BUILD_NUMBER: ${{ github.run_number }}
+          # Canonical copy lives SOPS-encrypted in secrets.enc.yaml; this is the
+          # decrypted mirror. Absent secret → empty → crash reporting cannot start.
+          LUGU_SENTRY_DSN: ${{ secrets.LUGU_SENTRY_DSN }}
         run: |
           if [ ! -f "$LUGU_KEYSTORE_PATH" ]; then
             echo "No keystore; skipping." >&2
@@ -88,19 +93,41 @@ jobs:
           path: lugu-latest.apk
           if-no-files-found: warn
 
-      # Rolling "latest" release, so the download link never changes between builds.
-      - name: Publish rolling alpha release
+      # Exactly one release per build, tagged with the version the APK actually
+      # reports, and marked as the repository's Latest.
+      #
+      # This replaced a rolling `latest` tag whose asset was clobbered in place. That
+      # scheme gave an update tracker nothing that ever changed, and Obtainium fell
+      # back to a "pseudo-version" — it could neither tell builds apart nor stop
+      # offering the same one. The tag must equal "v" + the installed versionName, or
+      # Obtainium cannot reconcile the two and reinstalls on every check.
+      #
+      # The unchanging download link survives as the release-independent
+      # /releases/latest/download/lugu-latest.apk, which --latest keeps pointing here.
+      # Releases are deliberately NOT marked --prerelease: a repo whose every release
+      # is a prerelease has no Latest at all, which breaks both that link and the
+      # tracker's default behaviour. The version string already says alpha.
+      - name: Publish alpha release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           [ -f lugu-latest.apk ] || exit 0
-          VERSION=$(grep -m1 'versionName = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
-          NOTES="lugu $VERSION — rolling alpha build from \`${GITHUB_SHA::7}\`.
+
+          # Must agree with app/build.gradle.kts, where versionName is
+          # "$versionBase.$LUGU_BUILD_NUMBER". Fail loudly rather than publishing a
+          # release tagged ".$RUN" if the variable is ever renamed.
+          BASE=$(grep -m1 'val versionBase = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$BASE" ]; then
+            echo "Could not read versionBase from app/build.gradle.kts" >&2
+            exit 1
+          fi
+          VERSION="$BASE.${GITHUB_RUN_NUMBER}"
+
+          NOTES="lugu $VERSION — alpha build from \`${GITHUB_SHA::7}\`.
+
           Install over any previous lugu build; the signing key is stable.
+          Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk
           Pre-alpha: see the README for what works and what does not."
-          # Upload in place rather than delete-and-recreate: a run cancelled between
-          # the two would leave the download link pointing at nothing.
-          gh release view latest >/dev/null 2>&1 || \
-            gh release create latest --title "lugu $VERSION (latest)" --notes "$NOTES" --prerelease
-          gh release upload latest lugu-latest.apk --clobber
-          gh release edit latest --title "lugu $VERSION (latest)" --notes "$NOTES" --prerelease
+
+          gh release create "v$VERSION" lugu-latest.apk \
+            --title "lugu $VERSION" --notes "$NOTES" --latest
