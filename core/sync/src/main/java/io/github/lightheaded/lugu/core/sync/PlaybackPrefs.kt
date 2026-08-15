@@ -51,6 +51,10 @@ class PlaybackPrefs @Inject constructor(
         store.edit { it[SKIP_FORWARD] = seconds.coerceIn(1, 300) }
     }
 
+    suspend fun setNoticeSeconds(seconds: Int) {
+        store.edit { it[NOTICE_SECONDS] = seconds.coerceIn(2, 120) }
+    }
+
     suspend fun setPlayerButtons(buttons: Set<TransportButton>) {
         store.edit { prefs -> prefs[PLAYER_BUTTONS] = buttons.joinToString(",") { it.id } }
     }
@@ -134,6 +138,7 @@ class PlaybackPrefs @Inject constructor(
         skipForwardSec = this[SKIP_FORWARD] ?: DEFAULTS.skipForwardSec,
         playerButtons = this[PLAYER_BUTTONS]?.toButtons() ?: DEFAULTS.playerButtons,
         notificationButtons = this[NOTIFICATION_BUTTONS]?.toButtons() ?: DEFAULTS.notificationButtons,
+        noticeSeconds = this[NOTICE_SECONDS] ?: DEFAULTS.noticeSeconds,
         speed = SpeedSettings(
             defaultSpeed = this[DEFAULT_SPEED] ?: 1.0f,
             separatePodcastSpeed = this[SEPARATE_PODCAST_SPEED] ?: false,
@@ -166,6 +171,7 @@ class PlaybackPrefs @Inject constructor(
 
         val SKIP_BACK = intPreferencesKey("skip_back_sec")
         val SKIP_FORWARD = intPreferencesKey("skip_forward_sec")
+        val NOTICE_SECONDS = intPreferencesKey("notice_seconds")
         val PLAYER_BUTTONS = stringPreferencesKey("player_buttons")
         val NOTIFICATION_BUTTONS = stringPreferencesKey("notification_buttons")
         val DEFAULT_SPEED = floatPreferencesKey("default_speed")

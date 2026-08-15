@@ -170,6 +170,24 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "notice-duration",
+                category = "Notices",
+                title = "How long a notice stays up",
+                keywords = "toast snackbar popup message rewound jumped undo timeout dismiss duration",
+            ) {
+                ChoiceRow(
+                    title = "How long a notice stays up",
+                    subtitle = "Applies to the rewound and jumped notices, which carry an Undo",
+                    options = PlayerSettings.NOTICE_CHOICES,
+                    selected = settings.noticeSeconds,
+                    format = { "${it}s" },
+                    onSelect = viewModel::setNoticeSeconds,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "buttons-player",
                 category = "Buttons",
                 title = "Buttons in the player",

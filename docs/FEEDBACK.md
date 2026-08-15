@@ -87,15 +87,28 @@ Links should be consistent **everywhere**, not just on one screen:
 | Now-playing title links to the item page | done |
 | Author/series/narrator links | todo — still no author or series *page* to link to. M2 added series awareness (a parsed series title and number, and a "Next in series" shelf), so the data now exists; the pages do not |
 
-## Rewind notice
+## Notices (rewound, jumped)
 
-The smart-rewind notice is wanted, but the current inline implementation **makes the UI
-jump** as it appears and disappears. It should be a toast-like overlay that does not
-affect layout.
+Automatic corrections must be announced — a silent one is indistinguishable from the app
+losing your place. But the notice must not **make the UI jump**, and it must go away on
+its own.
 
 | Item | Status |
 |---|---|
-| Rewind notice as a snackbar rather than inline content | done |
+| Rewind notice as an overlay rather than inline content | done |
+| "Jumped" notice as an overlay too | done — this one was still inline and still reflowing the screen (reported 15 Aug) |
+| Notices disappear on their own | done — 10s by default |
+| Timeout configurable | done — 4/7/10/15/30s, under Settings → Notices |
+
+The "jumped" notice was missed the first time round: only the *rewound* notice was moved
+to a snackbar, while the jump banner stayed inline `Column` content and went on pushing
+the cover art and transport down as it appeared and back up as it went.
+
+Both now use `SnackbarDuration.Indefinite` with an explicit timeout rather than a
+built-in duration, because Material offers only four and ten seconds and neither is
+configurable — and a notice carrying an Undo has to stay up long enough to read a
+timestamp and decide. Letting it time out keeps the new position, which is what the old
+"Keep" button did, so that button is gone.
 
 ## Earlier findings
 

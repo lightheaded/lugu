@@ -61,6 +61,16 @@ data class PlayerSettings(
         TransportButton.SKIP_FORWARD,
     ),
     val speed: SpeedSettings = SpeedSettings(),
+    /**
+     * How long an automatic-correction notice stays up.
+     *
+     * These notices exist because a silent correction is indistinguishable from the app
+     * losing someone's place — but they also carry an Undo, so they have to stay long
+     * enough to be read and acted on. Ten seconds is the default; Material's own "long"
+     * duration is the same, and four seconds is not enough to read a timestamp and
+     * decide.
+     */
+    val noticeSeconds: Int = 10,
 ) {
     val showsChapterButtonsInPlayer: Boolean
         get() = TransportButton.PREVIOUS_CHAPTER in playerButtons ||
@@ -73,5 +83,7 @@ data class PlayerSettings(
     companion object {
         /** Offered as one-tap choices; any value in range can still be set. */
         val SKIP_CHOICES = listOf(5, 10, 15, 20, 30, 45, 60, 90)
+
+        val NOTICE_CHOICES = listOf(4, 7, 10, 15, 30)
     }
 }
