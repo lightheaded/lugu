@@ -138,8 +138,8 @@ after the user has already installed over a working version. That test compares 
 column and index metadata rather than raw CREATE text, because SQLite ignores
 whitespace and a textual comparison fails on formatting while passing real faults.
 
-Still outstanding for M1: bookmarks, silence skipping, volume boost, BT-disconnect
-pause, polished notification actions.
+Still outstanding for M1 and everywhere else: see [BACKLOG.md](BACKLOG.md), which
+collects every deliberately-unfinished item with the reason it was left.
 
 ### Next
 
