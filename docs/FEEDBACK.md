@@ -169,8 +169,8 @@ the tracks *in the manifest being downloaded* (which is already built, and alrea
 about `exclude` and about single episodes) rather than a whole-item field, and the refusal
 must state the actual numbers — "needs 12 GB, 8 GB allowed, 0 GB used" — because a refusal
 that shows its arithmetic reports its own bug, while this one just looks like a setting the
-listener chose badly. Verifying against the live server was not possible; it was not
-reachable when this was written.
+listener chose badly. The live server was not reachable when this was written, so the
+suspects above are unverified.
 
 **The auto-delete wording**: "Remove finished downloads" is ambiguous in the one way that
 matters, since *finished* can mean finished downloading — which would read as "delete
@@ -184,6 +184,6 @@ to the end of, and the choices should say "After a week" rather than "After 7d".
   single-file book), and schema v2 records position history so any jump can be undone.
 - **Podcasts crashed the continue-listening shelf** through a fan-out join producing
   duplicate Compose keys. Fixed and covered by Room tests.
-- **Login failure** was never the app: a DNS misconfiguration for an internally-routed
-  service, then lugu missing from the VPN configuration. The app now reports a
-  wrong address as such instead of echoing a proxy's raw 404.
+- **Login failure** was never the app: two stacked network misconfigurations between
+  the phone and the server, both since fixed. The app now reports a wrong address as
+  such instead of echoing a proxy's raw 404.
