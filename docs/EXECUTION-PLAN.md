@@ -23,7 +23,7 @@ Greenfield open-source Android client for Audiobookshelf, replacing the official
 | Source of truth | Local Room DB; server is a sync target |
 | Scope | Audiobooks + podcasts from day one; Android-first, iOS only if cheap later |
 | Repo | this repo → GitHub `lightheaded/lugu` (public; confirm with Tom before first push) |
-| Privacy | Zero telemetry. No personal hostnames/secrets in repo, issues, commits, or docs — ever |
+| Privacy | No analytics, ever. **Opt-in crash reporting, off by default** (amended 2026-08-15; was "zero telemetry" — see [BACKLOG.md](BACKLOG.md#1-crash-reporting--sentry-opt-in-off-by-default)). No personal hostnames/secrets in repo, issues, commits, or docs — ever |
 | Commits | All signed (1Password SSH signing, global git config; verify with `git log --show-signature`); conventional commits |
 
 ### Dev server access
@@ -124,5 +124,5 @@ Key dependencies: media3 (exoplayer, session, ui-compose, datasource-okhttp; cas
 - Read `docs/research/*` and `docs/PLAN.md` first — they carry the endpoint details, known server bugs (chapter ordering, `limit=0` footgun, sync races) and Media3 pitfall issue numbers this plan assumes.
 - Never commit secrets or personal hostnames; `local.properties` only. Verify the first commit is signed before proceeding; conventional commit messages throughout.
 - lowercase `lugu` everywhere (repo, package, UI wordmark); "lugu for Audiobookshelf" only in store-listing contexts.
-- No telemetry/analytics dependencies, ever.
+- No analytics dependencies, ever. Crash reporting is the one exception, and only on the terms in [BACKLOG.md](BACKLOG.md#1-crash-reporting--sentry-opt-in-off-by-default): opt-in, off by default, nothing initialised before consent. A default-on reporter contradicts a claim the README makes against the official app.
 - When ABS server behavior is ambiguous, verify against the live dev server and record findings in `docs/research/05-api-live-notes.md`.

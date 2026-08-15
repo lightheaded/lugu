@@ -74,6 +74,145 @@ See [FEEDBACK.md](FEEDBACK.md) for the full reasoning behind each.
 | `MediaSession.ConnectionResult.AcceptedResultBuilder` deprecated | Mechanical, in `LuguPlaybackService` |
 | Time formatting duplicated | `formatTime` in `:feature:player` and `formatDuration` in `:feature:library` overlap |
 
+## Dev-process infrastructure — planned
+
+Three pieces that exist to shorten the loop between a bug happening and it being
+fixed. Researched 2026-08-15; the decisions below are made, the work is not done.
+They are ordered by dependency: 2 is independent, 3 depends on 1.
+
+### 1. Crash reporting — Sentry, opt-in, off by default
+
+**Why.** The app crashes after playing for a while (Tom, 15 Aug) and nothing survives
+to say what happened. A long-session Media3 failure is most likely an ANR or an OOM,
+and neither is something a `try`/`catch` ever sees — which is the argument for a real
+reporter rather than more logging.
+
+**Why Sentry.** It is the only free option that can attach a user's comment to a
+*specific* crash event (`associatedEventId`), which is what makes item 3 below work.
+EU (Germany) data storage is confirmed available on the free Developer plan.
+
+Steps:
+
+1. Create the Sentry org **with EU data storage selected at creation**. The region
+   appears to be fixed once the org exists — Sentry's help-centre articles on this are
+   login-walled and could not be read directly, so treat it as a one-way door and
+   choose deliberately rather than planning to migrate.
+2. Add `sentry-android` + the Sentry Gradle plugin to `libs.versions.toml`. Costs
+   roughly 2 MB of APK. The plugin's mapping upload is moot until R8 is turned on.
+3. `AndroidManifest.xml`: `io.sentry.auto-init` = `false`. **Do not** reach for
+   `enabled = false` instead — Sentry's own docs say it "doesn't prevent all overhead
+   from Sentry instrumentation", and whether the SDK still opens connections in that
+   state is unconfirmed. Deferred init is the only documented way to ship a genuine
+   nothing-until-consent guarantee.
+4. Consent toggle in `:feature:settings`, DataStore-backed, default false, with search
+   synonyms ("crash", "diagnostics", "privacy"). `SentryAndroid.init()` runs only once
+   it is true.
+5. Options at init: `sendDefaultPii = false` (already the default), `attachScreenshot`
+   and `attachViewHierarchy` false (already the default), and
+   **`autoSessionTracking = false` explicitly** — it defaults to `true` and sends
+   session pings with no crash involved, which would quietly break the claim in 7.
+6. `beforeSend`: when `event.isCrashed`, persist `event.eventId` to prefs. That
+   callback runs in the crashing process before it dies, and it is the only way to
+   recover the id later — see item 3.
+7. Amend the README Privacy section: "No telemetry, no analytics, no crash reporting"
+   → no analytics, opt-in crash reporting off by default. The locked decision and the
+   executing-agent guardrail in [EXECUTION-PLAN.md](EXECUTION-PLAN.md) are already
+   amended to match.
+8. Once the repo is public, apply for the Sentry open-source grant (5M errors/month,
+   no term limit). **Caveat:** the stated guidance is "a friendly license like Apache
+   or MIT", and whether **GPL-3.0 copyleft qualifies is unstated by Sentry either
+   way** — ask in the application rather than assuming, and do not make the plan
+   depend on the grant. The free Developer plan (5k errors/month) is already far
+   beyond what this app will produce.
+
+**Accepted cost:** a crash occurring before consent is given is lost. Documented and
+unavoidable — "the SDK can catch errors and crashes only after you've initialized it".
+
+**Reversible later:** GlitchTip or Bugsink self-hosted use the same SDK with a
+different DSN. One catch — GlitchTip silently drops the feedback API, which would cost
+the crash↔comment link in item 3.
+
+**Rejected.** *Firebase Crashlytics*: cannot attach a user comment to the crash being
+sent — the value lands on the *next* report (firebase-ios-sdk#6431) — and it would
+block F-Droid permanently. *ACRA*: fully FLOSS and has a comment dialog built in, but
+captures Java/Kotlin exceptions only, so it would miss the ANR and native cases that
+are the leading suspects here.
+
+### 2. Update channel — Obtainium, plus a per-build tagged release
+
+**Why.** Every build currently ends in downloading an APK from Releases by hand and
+tapping through an install. Turnaround is the whole point of daily-driving a pre-alpha.
+
+**The blocker is in our own CI, not in Obtainium.** Obtainium takes the tracked
+version from the **git tag name**. `ci.yml` pins the tag to `latest` forever, and
+`versionName` is hardcoded `0.2.0-alpha01` in `app/build.gradle.kts` — so *both*
+possible version sources are static and Obtainium would never see an update. The
+documented escape hatch (`releaseTitleAsVersion` + `versionExtractionRegEx`) fails for
+the same reason, since the release title interpolates that same static `versionName`;
+and the maintainer declined to add richer parsing (Obtainium#1296), so regex detection
+is the path of most resistance rather than the supported one.
+
+Steps:
+
+1. `ci.yml`: keep the rolling `latest` release as the stable download link, and
+   *additionally* `gh release create "v${VERSION}+${GITHUB_RUN_NUMBER}"` so a
+   uniquely-tagged release exists per build. This restores Obtainium's default,
+   best-supported path.
+2. Bump `versionCode` per build. Not strictly required — Android only rejects
+   *downgrades*, so an equal-`versionCode` same-signature reinstall is accepted — but
+   it guards against shipping an out-of-order build and becomes mandatory if Play is
+   ever used.
+3. Install Obtainium, add the repo, pair Shizuku once for unattended silent installs.
+
+**Constraint:** the repo must be public. Private-repo tracking is an open, unresolved
+403 (Obtainium#2694, #2764); the PAT field is documented for rate limits, not private
+access.
+
+**Invariant:** the release signing key must never change, or in-place upgrade breaks
+for every existing install.
+
+**Fallback if the repo ever goes private again:** a self-hosted F-Droid repo published
+from a separate public APK-only repo. More setup and a second key (the repo index
+key), but F-Droid client ≥1.19 gives fully unattended background updates on Android
+12+ with no Shizuku at all.
+
+**Horizon:** Google's mandatory developer verification reaches sideloading in Sept 2026
+(BR/ID/SG/TH) and globally in 2027. A free hobbyist tier covers up to 20 devices. Does
+not affect this now; will eventually affect every channel except Play.
+
+### 3. In-app feedback, including a post-crash prompt
+
+**Why.** [FEEDBACK.md](FEEDBACK.md) is currently Tom typing up recollections after the
+fact. Catching the detail at the moment of the failure is strictly better evidence, and
+a crash the user can annotate ("it was the podcast, in the car, over Bluetooth") is
+worth several that they cannot.
+
+One `FeedbackScreen(prefill: CrashContext? = null)` with two entry points:
+
+- **Settings → Send feedback**, `prefill = null`.
+- **On launch**, when `Sentry.isCrashedLastRun()` is true — a banner: *lugu crashed
+  last time. Want me to look into it?*
+
+Both funnel into a single call —
+`Sentry.feedback().capture(Feedback(comment).apply { associatedEventId = prefill?.eventId })`
+— where a null id simply makes it standalone feedback.
+
+**The gap to code around.** Android has no `crashedLastRunEventId`; the request has
+been open since Feb 2023 with no PR (sentry-java#2560), though iOS has it. Hence the
+`beforeSend` persistence in item 1 — roughly ten lines to bridge it.
+
+Details that matter:
+
+- Auto-attach app version, device and Android version, **whether playback was active
+  and the player state** (the useful one for this app specifically), and the last N log
+  lines.
+- Put an expandable "exactly what gets sent" section above the Send button. That
+  section is what makes the opt-in claim credible rather than decorative.
+- Store an "already asked about this crash" flag keyed on the event id, so a crash
+  loop does not nag on every launch.
+
+Depends on item 1. Roughly half a day on top of it, most of it the Compose screen.
+
 ## Testing gaps
 
 | Item | Note |
