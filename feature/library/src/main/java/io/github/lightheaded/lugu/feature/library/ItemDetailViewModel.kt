@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.lightheaded.lugu.core.db.CollectionSummary
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
@@ -15,6 +16,7 @@ import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.CollectionRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
@@ -116,8 +118,13 @@ data class ItemDetailUiState(
     val coverUrl: String? = null,
     /** The item-level download; podcasts carry theirs per episode instead. */
     val download: DownloadStatus? = null,
+    /** The collections of this item's library, each saying whether it holds this item. */
+    val collections: List<CollectionChoice> = emptyList(),
     val message: String? = null,
 )
+
+/** One collection, and whether this item is in it. */
+data class CollectionChoice(val id: String, val name: String, val contains: Boolean)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -128,6 +135,7 @@ class ItemDetailViewModel @Inject constructor(
     private val progressRepository: ProgressRepository,
     private val downloadRepository: DownloadRepository,
     private val queueRepository: QueueRepository,
+    private val collectionRepository: CollectionRepository,
     private val libraryPrefs: LibraryPrefs,
 ) : ViewModel() {
 
@@ -176,32 +184,62 @@ class ItemDetailViewModel @Inject constructor(
         }
 
     /**
+     * The collections this item could be in, and which of them it is in.
+     *
+     * Scoped to the item's own library, because the server refuses a book offered to a
+     * collection in another one — a choice that cannot work is worse than no choice.
+     */
+    private val collectionChoices: Flow<List<CollectionChoice>> = account
+        .flatMapLatest { current ->
+            if (current == null) {
+                flowOf(emptyList())
+            } else {
+                libraryRepository.observeItem(current, itemId).flatMapLatest { item ->
+                    if (item == null) {
+                        flowOf(emptyList())
+                    } else {
+                        combine(
+                            collectionRepository.observeCollections(current, item.libraryId),
+                            collectionRepository.observeMembership(current, itemId),
+                        ) { collections, membership -> collectionChoices(collections, membership) }
+                    }
+                }
+            }
+        }
+
+    /**
      * The list is narrowed here rather than in the screen.
      *
      * A composable that filters recomputes the answer on every recomposition and has
      * nowhere to put the count, and the selection has to be reconciled against the
      * surviving rows anyway — which is a data question, not a drawing one.
      */
-    val state: StateFlow<ItemDetailUiState> =
-        combine(content, query, libraryPrefs.settings, selection) { base, search, settings, picked ->
-            val visible = ListControls.sortEpisodes(
-                base.episodes.filter {
-                    ListControls.matches(it.facts, settings.episodeFilter) &&
-                        ListControls.matches(it.facts, search)
-                },
-                settings.episodeSort,
-            ) { it.facts }
-            val onScreen = picked.retaining(visible.map { it.episode.id })
-            base.copy(
-                episodes = visible,
-                episodeCount = base.episodes.size,
-                query = search,
-                episodeSort = settings.episodeSort,
-                episodeFilter = settings.episodeFilter,
-                selectionActive = onScreen.active,
-                selectedIds = onScreen.ids,
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
+    val state: StateFlow<ItemDetailUiState> = combine(
+        content,
+        query,
+        libraryPrefs.settings,
+        selection,
+        collectionChoices,
+    ) { base, search, settings, picked, choices ->
+        val visible = ListControls.sortEpisodes(
+            base.episodes.filter {
+                ListControls.matches(it.facts, settings.episodeFilter) &&
+                    ListControls.matches(it.facts, search)
+            },
+            settings.episodeSort,
+        ) { it.facts }
+        val onScreen = picked.retaining(visible.map { it.episode.id })
+        base.copy(
+            episodes = visible,
+            episodeCount = base.episodes.size,
+            query = search,
+            episodeSort = settings.episodeSort,
+            episodeFilter = settings.episodeFilter,
+            selectionActive = onScreen.active,
+            selectedIds = onScreen.ids,
+            collections = choices,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
 
     fun setQuery(value: String) {
         query.value = value
@@ -394,6 +432,44 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Re-mirrors the collections behind the membership list.
+     *
+     * Called when the list is opened rather than when the page is, because the pull is the
+     * heaviest request in the app and almost nobody who opens a book page wants it. A
+     * failure says nothing: the list still renders from Room, and an edit attempted on stale
+     * membership reports its own refusal in words.
+     */
+    fun refreshCollections() {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            collectionRepository.sync(current)
+        }
+    }
+
+    /**
+     * Puts this item into a collection, or takes it out again.
+     *
+     * Both directions go to the server and are believed only once it answers. Nothing is
+     * applied optimistically: a collection is shared, and a tick that appeared locally and
+     * then quietly failed would be a lie about a list other people are reading.
+     */
+    fun setInCollection(collectionId: String, inCollection: Boolean) {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            val name = state.value.collections.firstOrNull { it.id == collectionId }?.name
+            val result = if (inCollection) {
+                collectionRepository.add(current, collectionId, itemId)
+            } else {
+                collectionRepository.remove(current, collectionId, itemId)
+            }
+            message.value = result.fold(
+                onSuccess = { collectionChangeLine(name, inCollection) },
+                onFailure = { it.message ?: "Could not change the collection" },
+            )
+        }
+    }
+
     fun dismissMessage() {
         message.value = null
     }
@@ -412,4 +488,31 @@ class ItemDetailViewModel @Inject constructor(
             libraryRepository.syncItemDetail(current, itemId)
         }
     }
+}
+
+/**
+ * The collections of a library, each marked with whether it holds this item.
+ *
+ * Ordered by name and never by whether the box is ticked. Sorting the ticked ones to the
+ * top would rearrange the list underneath the finger that has just ticked one, and the row
+ * that moves into the vacated place is the row that gets tapped by mistake.
+ */
+internal fun collectionChoices(
+    collections: List<CollectionSummary>,
+    membership: Set<String>,
+): List<CollectionChoice> = collections
+    .map { CollectionChoice(id = it.id, name = it.name, contains = it.id in membership) }
+    .sortedWith { a, b -> ListControls.naturalCompare(a.name, b.name) }
+
+/**
+ * What just happened, named.
+ *
+ * The collection is named rather than called "the collection", because this is the one
+ * action on the page whose effect is invisible from it: nothing on the book's own page
+ * changes, and the confirmation is all there is to go on. A collection the mirror has no
+ * name for is described in general terms rather than as a blank.
+ */
+internal fun collectionChangeLine(name: String?, added: Boolean): String {
+    val target = name?.takeIf { it.isNotBlank() } ?: "the collection"
+    return if (added) "Added to $target" else "Removed from $target"
 }

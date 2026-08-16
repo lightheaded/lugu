@@ -11,6 +11,19 @@ sealed interface SleepMode {
      * the official app's #780/#2835 class of bug.
      */
     data object EndOfChapter : SleepMode
+
+    /**
+     * Stop after this many chapter ends.
+     *
+     * A different question from a duration, and the one people actually ask: "two more
+     * chapters" is a decision about the book, while "forty minutes" is a decision about
+     * the clock and needs the chapters to be a known length to mean anything.
+     *
+     * Like [EndOfChapter] this is resolved from the current position on every tick, so
+     * skipping a chapter shortens the count rather than shifting the target — which is the
+     * behaviour someone skipping ahead is asking for.
+     */
+    data class Chapters(val count: Int) : SleepMode
 }
 
 /** The timer as the UI and the playback service both see it. */
@@ -54,6 +67,25 @@ object SleepTimer {
 
         SleepMode.EndOfChapter ->
             Chapters.at(chapters, positionSec)?.endSec ?: Chapters.nextChapterStart(chapters, positionSec)
+
+        is SleepMode.Chapters -> {
+            // Counted from where the timer was armed, and fixed from that moment.
+            //
+            // Resolving it from the *current* position instead — which is what
+            // EndOfChapter does, and what this originally did — makes the target recede at
+            // exactly the speed it is approached: playing into the next chapter pushes the
+            // end of the (count - 1)th chapter along with it, and a two-chapter timer comes
+            // due only when the book runs out of chapters to recede into. A timer that
+            // silently never fires is the one failure this feature cannot have.
+            val index = Chapters.indexAt(chapters, armedAtPositionSec)
+            if (index < 0) {
+                null
+            } else {
+                // Clamped to the last chapter: asking for five more near the end of a book
+                // means "to the end", not "nowhere".
+                chapters.getOrNull((index + mode.count - 1).coerceAtMost(chapters.lastIndex))?.endSec
+            }
+        }
     }
 
     /** Playback seconds remaining, floored at zero. Null when the timer is off. */
@@ -102,4 +134,7 @@ object SleepTimer {
 
     /** Offered as one-tap options. */
     val PRESET_MINUTES = listOf(5, 10, 15, 30, 45, 60, 90)
+
+    /** Chapter counts worth a one-tap option; more than a few is a duration in disguise. */
+    val PRESET_CHAPTERS = listOf(1, 2, 3, 5)
 }

@@ -17,6 +17,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
+import io.github.lightheaded.lugu.core.sync.QueuePrefs
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
@@ -47,6 +48,7 @@ class BrowseTree @Inject constructor(
     private val queueDao: QueueDao,
     private val downloadDao: DownloadDao,
     private val libraryPrefs: LibraryPrefs,
+    private val queuePrefs: QueuePrefs,
 ) {
     /**
      * The root, which must exist even when signed out.
@@ -112,6 +114,8 @@ class BrowseTree @Inject constructor(
                     .map { browsable(BrowseNode.Podcast(it.id), it.title, coverUrl(account, it.id)) }
             }
 
+            BrowseNode.LatestEpisodes -> latestEpisodes(account, library)
+
             BrowseNode.Libraries -> libraryDao.observeAll(server, user).first()
                 .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
                 .map { browsable(BrowseNode.Library(it.id), it.name) }
@@ -123,8 +127,12 @@ class BrowseTree @Inject constructor(
             is BrowseNode.Podcast -> if (!library.isVisible(MediaType.PODCAST)) {
                 emptyList()
             } else {
-                episodeDao.observeForItem(server, user, node.itemId).first()
-                    .map { it.toMediaItem(node.itemId, account) }
+                // The stored order is newest first. A serial is listened to the other way
+                // round, and in a car the first row is the one that gets pressed, so the
+                // podcast's own answer decides which end of the archive that row is at.
+                val episodes = episodeDao.observeForItem(server, user, node.itemId).first()
+                val ordered = if (queuePrefs.podcastOldestFirst(node.itemId)) episodes.reversed() else episodes
+                ordered.map { it.toMediaItem(node.itemId, account) }
             }
 
             is BrowseNode.Library -> itemDao.byLibrary(server, user, node.libraryId)
@@ -183,6 +191,30 @@ class BrowseTree @Inject constructor(
         }
     }
 
+    /**
+     * The newest unplayed episodes across every podcast being followed, newest first.
+     *
+     * The one node that crosses podcasts, and the reason it is worth having: a podcast
+     * listener with a dozen subscriptions otherwise has to open each one in turn to find
+     * what has arrived, which is a dozen glances at a screen while driving. Publication
+     * order rather than podcast order, because "what is new" is a question about time
+     * (upstream app#679 and server#1516).
+     *
+     * Always newest first, whatever a podcast's own reading order says: this node is
+     * the answer to what has just come out, and a per-podcast reading order is a statement
+     * about how one show is worked through, not about what is new across all of them.
+     */
+    private suspend fun latestEpisodes(account: ActiveAccount, library: LibrarySettings): List<MediaItem> {
+        if (!library.isVisible(MediaType.PODCAST)) return emptyList()
+        val server = account.serverId
+        val user = account.userId
+        return itemDao.followedPodcasts(server, user)
+            .flatMap { episodeDao.latestUnfinished(server, user, it.id, PER_PODCAST_LIMIT) }
+            .sortedByDescending { it.publishedAtMs }
+            .take(LATEST_EPISODES_LIMIT)
+            .map { it.toMediaItem(it.libraryItemId, account) }
+    }
+
     private suspend fun rootChildren(account: ActiveAccount, library: LibrarySettings): List<MediaItem> {
         val server = account.serverId
         val user = account.userId
@@ -197,10 +229,20 @@ class BrowseTree @Inject constructor(
         val hasSeries = library.isVisible(MediaType.BOOK) && itemDao.seriesTitles(server, user).isNotEmpty()
         val hasPodcasts = library.isVisible(MediaType.PODCAST) &&
             itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE, limit = 1).isNotEmpty()
+        // Asked one podcast at a time and stopping at the first hit, rather than by
+        // building the whole list to count it: at the root the only question is whether
+        // the row is worth showing, and the answer is usually the first podcast asked.
+        val hasLatestEpisodes = library.isVisible(MediaType.PODCAST) &&
+            itemDao.followedPodcasts(server, user).any {
+                episodeDao.latestUnfinished(server, user, it.id, limit = 1).isNotEmpty()
+            }
 
         return buildList {
             add(browsable(BrowseNode.Continue, "Continue"))
             if (hasQueue) add(browsable(BrowseNode.UpNext, "Up next"))
+            // Above Downloaded because for a podcast listener this is the row that gets
+            // pressed, and a car's first screen is only a few rows tall.
+            if (hasLatestEpisodes) add(browsable(BrowseNode.LatestEpisodes, "Latest episodes"))
             if (hasDownloads) add(browsable(BrowseNode.Downloaded, "Downloaded"))
             if (hasSeries) add(browsable(BrowseNode.AllSeries, "Series"))
             if (hasPodcasts) add(browsable(BrowseNode.AllPodcasts, "Podcasts"))
@@ -288,5 +330,16 @@ class BrowseTree @Inject constructor(
         const val PODCAST_MEDIA_TYPE = "PODCAST"
 
         const val SEARCH_LIMIT = 50
+
+        /**
+         * How far back into one podcast the latest-episodes node reaches.
+         *
+         * Small on purpose. Somebody with a hundred unplayed episodes of one show wants
+         * that show's own node, not a list where it drowns out everything else.
+         */
+        const val PER_PODCAST_LIMIT = 3
+
+        /** A car list nobody will scroll to the end of; enough to cover a week of feeds. */
+        const val LATEST_EPISODES_LIMIT = 50
     }
 }

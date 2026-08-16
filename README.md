@@ -64,13 +64,18 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
 - Durable outbox: progress changes are written locally first and drained by WorkManager
   with backoff, so being offline loses nothing
 - Every large position change is recorded, so an accidental jump can always be undone
+- **Live updates over Socket.IO**, so an edit made on the web appears rather than waiting
+  for the next sync
+- **Behind a proxy**: custom headers on every request (for Cloudflare Access and the like),
+  a client certificate for mTLS, and a second address used when your own network answers
+- **Collections**, browsable and editable
+- **Automation intents** for Tasker and anything else that can send a broadcast — see
+  [docs/automation.md](docs/automation.md)
 - **A local record of why playback stopped** — see Privacy below
 
 ## Not yet
 
-Chromecast, widgets, Wear OS, Android TV, OIDC sign-in, multi-server, custom HTTP headers
-for reverse proxies, and live updates over Socket.IO — an edit made on the web currently
-takes until the next sync to appear.
+Chromecast, widgets, Wear OS, Android TV, OIDC sign-in and multi-server.
 
 [docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) has the order these land in, and
 [docs/BACKLOG.md](docs/BACKLOG.md) lists everything knowingly unfinished, with the

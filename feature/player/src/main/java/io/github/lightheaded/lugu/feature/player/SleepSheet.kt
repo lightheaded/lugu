@@ -17,9 +17,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.SleepMode
+import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SleepTimerState
 import io.github.lightheaded.lugu.core.sync.SleepSettings
+import kotlin.math.abs
 import kotlin.math.ceil
 
 /**
@@ -44,11 +49,59 @@ internal fun sleepExplanation(sleep: SleepSettings): String {
 }
 
 /**
+ * What a pause does to an armed timer, or null when there is nothing surprising to say.
+ *
+ * Kept apart from [sleepExplanation] because it answers a different question — that one is
+ * about what happens when the timer runs out, this one about what happens before it does.
+ * It is worth saying at all because a timer that outlives a pause is startling the first
+ * time it happens: the book was stopped for twenty minutes and the timer ran anyway.
+ */
+internal fun sleepPauseExplanation(sleep: SleepSettings): String? =
+    if (sleep.survivesPause) "Stays armed if you pause" else null
+
+/**
+ * Whether a chapter list is the book's own rather than one lugu invented for it.
+ *
+ * `Chapters.synthesise` fills in evenly spaced parts for an item the server has no
+ * chapters for, and those arrive at the player looking exactly like real ones — there is
+ * no flag on the list saying which it is. Counting them would turn "2 chapters" into
+ * "twenty minutes" under a label that says something else, which is a duration wearing the
+ * wrong name.
+ *
+ * So the list is judged by the synthesiser's own fingerprint: every part but the last is
+ * exactly the same length, and every title is "Part n" in order. Either test alone would
+ * catch a real book — a novel of even chapters, or one whose parts are genuinely named
+ * Part 1 and Part 2 — so both must hold before a list is dismissed. A list of one is no
+ * use here either way, since counting chapters needs more than one to count.
+ */
+internal fun hasRealChapters(chapters: List<Chapter>): Boolean =
+    chapters.size > 1 && !looksSynthesised(chapters)
+
+private fun looksSynthesised(chapters: List<Chapter>): Boolean {
+    val named = chapters.withIndex().all { (index, chapter) -> chapter.title == "Part ${index + 1}" }
+    if (!named) return false
+    // The last one is short by whatever the book does not divide into, so it is excluded.
+    val lengths = chapters.dropLast(1).map { it.endSec - it.startSec }
+    val first = lengths.firstOrNull() ?: return false
+    return lengths.all { abs(it - first) < 1.0 }
+}
+
+/**
  * Arming, extending and cancelling the sleep timer.
  *
  * Everything the timer will do is stated here rather than left in Settings, including the
- * shake gesture: a feature nobody has been told about is a feature that does not exist,
- * and this sheet is the only moment when a listener is thinking about sleep.
+ * shake gesture and what a pause does to it: a feature nobody has been told about is a
+ * feature that does not exist, and this sheet is the only moment when a listener is
+ * thinking about sleep.
+ *
+ * Three ways of saying when to stop are offered, and they are three different questions
+ * rather than one question in three units. A duration is a decision about the evening; end
+ * of chapter is a decision about the next few minutes; a chapter count is a decision about
+ * the book, and it is the one people actually make when they say "two more chapters".
+ *
+ * [chapters] defaults to the item the player is holding, because the count offer must not
+ * appear for a list lugu synthesised — see [hasRealChapters] — and that can only be judged
+ * from the list itself. A caller may pass its own, which is what a test does.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +111,9 @@ internal fun SleepTimerSheet(
     timer: SleepTimerState,
     settings: SleepSettings,
     speed: Float,
+    chapters: List<Chapter> = hiltViewModel<PlayerViewModel>()
+        .nowPlaying.collectAsStateWithLifecycle().value?.chapters.orEmpty(),
+    chapterPresets: List<Int> = SleepTimer.PRESET_CHAPTERS,
     onPick: (SleepMode?) -> Unit,
     onExtend: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -71,6 +127,13 @@ internal fun SleepTimerSheet(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            sleepPauseExplanation(settings)?.let { pause ->
+                Text(
+                    pause,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (settings.shakeToExtend) {
                 Text(
                     "Shake the phone to add ${settings.extendMinutes} minutes without " +
@@ -119,6 +182,29 @@ internal fun SleepTimerSheet(
                 )
                 Text(
                     "Follows you if you skip a chapter",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // Counts start at two. One chapter stops in exactly the same place as the End
+            // of chapter chip above, and the same stop offered twice under two names only
+            // makes a listener wonder what the difference is. A count longer than the book
+            // is left out for the same reason: it would be the end of the book by another
+            // name.
+            val counts = chapterPresets.filter { it in 2..chapters.size }
+            if (hasRealChapters(chapters) && counts.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    counts.forEach { count ->
+                        AssistChip(
+                            onClick = { onPick(SleepMode.Chapters(count)) },
+                            label = { Text("$count chapters") },
+                        )
+                    }
+                }
+                Text(
+                    "Counted from where you are now, so skipping ahead leaves one fewer",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

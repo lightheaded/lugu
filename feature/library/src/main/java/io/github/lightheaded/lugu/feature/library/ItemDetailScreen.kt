@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.RemoveDone
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +49,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -89,6 +92,14 @@ fun ItemDetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val item = state.item
     val snackbarHostState = remember { SnackbarHostState() }
+    var showCollections by remember { mutableStateOf(false) }
+
+    // The collections pull is the heaviest request the app makes, so it is tied to opening
+    // the list rather than to opening the page: almost nobody who reads a book's page wants
+    // to know which collections hold it.
+    LaunchedEffect(showCollections) {
+        if (showCollections) viewModel.refreshCollections()
+    }
 
     // A refusal is shown as an overlay, not as inline content: making the page jump to
     // report a failed button press is worse than the failure.
@@ -212,6 +223,7 @@ fun ItemDetailScreen(
                             onAddToQueue = { viewModel.addToQueue() },
                             isFinished = state.isFinished,
                             onSetFinished = { viewModel.setFinished(it) },
+                            onOpenCollections = { showCollections = true },
                         )
                     }
                 }
@@ -280,7 +292,78 @@ fun ItemDetailScreen(
                 )
             }
         }
+
+        if (showCollections) {
+            CollectionMembershipDialog(
+                collections = state.collections,
+                onToggle = viewModel::setInCollection,
+                onDismiss = { showCollections = false },
+            )
+        }
     }
+}
+
+/**
+ * Which collections hold this book, and a tick to change that.
+ *
+ * A dialog rather than a second layer of the menu it is opened from. There can be dozens of
+ * collections on a server, and a dropdown nested inside a dropdown is both hard to scroll
+ * and easy to dismiss by accident — which here would mean dismissing it mid-edit.
+ *
+ * It stays open after a tick, because adding a book to two collections is one errand rather
+ * than two, and each tick is committed to the server on its own as it is made. Nothing is
+ * shown optimistically: the box moves when the server has agreed, and if it will not agree
+ * — offline, most often — the reason arrives as a message underneath.
+ */
+@Composable
+private fun CollectionMembershipDialog(
+    collections: List<CollectionChoice>,
+    onToggle: (collectionId: String, inCollection: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AlertDialog(
+        modifier = modifier,
+        onDismissRequest = onDismiss,
+        title = { Text("Collections") },
+        text = {
+            if (collections.isEmpty()) {
+                // This app can put a book into a collection but cannot make one, so an
+                // empty list has to say where collections come from. "None" on its own
+                // reads as a failure to load.
+                Text(
+                    "No collections in this library yet. They are made on the server.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                return@AlertDialog
+            }
+            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                items(collections, key = { it.id }) { choice ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            // The whole row toggles, so a tap that lands beside the box
+                            // does the same thing as one that lands on it.
+                            .clickable { onToggle(choice.id, !choice.contains) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = choice.contains, onCheckedChange = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            choice.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
 }
 
 /**
@@ -420,14 +503,16 @@ private fun EpisodeRowView(
 }
 
 /**
- * Play next, add to the end, and mark the row finished.
+ * Play next, add to the end, mark the row finished, and change which collections hold it.
  *
- * Behind a menu rather than as more buttons: queueing and marking are deliberate acts and
- * rarer ones than playing or downloading, and a row of five equal-weight controls makes
- * the two that matter harder to hit.
+ * Behind a menu rather than as more buttons: queueing, marking and filing are deliberate
+ * acts and rarer ones than playing or downloading, and a row of five equal-weight controls
+ * makes the two that matter harder to hit.
  *
- * [onSetFinished] is optional so that a row with no progress of its own — anywhere this
- * menu is reused for something that is not listened to — simply does not offer it.
+ * [onSetFinished] and [onOpenCollections] are both optional so that a row they mean nothing
+ * for simply does not offer them. A podcast episode is neither: it has its own finished
+ * mark, but collections hold library items rather than episodes, so it gets the first and
+ * not the second.
  */
 @Composable
 internal fun RowActionsMenu(
@@ -437,6 +522,7 @@ internal fun RowActionsMenu(
     compact: Boolean = false,
     isFinished: Boolean = false,
     onSetFinished: ((Boolean) -> Unit)? = null,
+    onOpenCollections: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val size = if (compact) 40.dp else 48.dp
@@ -462,6 +548,17 @@ internal fun RowActionsMenu(
                 },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
             )
+            onOpenCollections?.let { open ->
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Collections") },
+                    onClick = {
+                        expanded = false
+                        open()
+                    },
+                    leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) },
+                )
+            }
             onSetFinished?.let { setFinished ->
                 HorizontalDivider()
                 DropdownMenuItem(

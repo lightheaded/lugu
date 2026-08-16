@@ -1,6 +1,8 @@
 package io.github.lightheaded.lugu
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil3.ImageLoader
@@ -16,7 +18,10 @@ import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.download.DownloadScheduler
+import io.github.lightheaded.lugu.core.sync.Realtime
+import io.github.lightheaded.lugu.core.sync.RealtimeSync
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
+import io.github.lightheaded.lugu.playback.PlaybackStateHolder
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +45,12 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
     @Inject lateinit var crashReporting: CrashReporting
 
     @Inject lateinit var crashReportingPrefs: CrashReportingPrefs
+
+    @Inject lateinit var realtime: Realtime
+
+    @Inject lateinit var realtimeSync: RealtimeSync
+
+    @Inject lateinit var playbackStateHolder: PlaybackStateHolder
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -80,6 +91,31 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
         scope.launch {
             crashReportingPrefs.enabled.collect { crashReporting.applyConsent(it) }
         }
+
+        // Live updates from the server. Everything they do is also done by the periodic
+        // sync, so nothing here is allowed to matter: it exists to make an edit or a
+        // position from another device arrive in seconds rather than hours.
+        realtime.start(scope)
+        realtimeSync.start(scope)
+
+        // The socket is held while the app is on screen. ProcessLifecycleOwner is the
+        // usual way to say that, but androidx.lifecycle:lifecycle-process is not a
+        // declared dependency of this module, and a socket is not a good reason to add
+        // one — counting started activities is the same answer from an API that is
+        // already here. Realtime waits out a short grace period before disconnecting, so
+        // a rotation or a glance at another app does not churn the connection.
+        registerActivityLifecycleCallbacks(ForegroundWatcher(realtime::setForeground))
+
+        // And while something is loaded in the player, on screen or not: a position
+        // changed on another device matters most in exactly that case. The same signal
+        // tells RealtimeSync which item to leave alone, since progress for whatever is
+        // playing may only move through the jump machinery a session start owns.
+        scope.launch {
+            playbackStateHolder.nowPlaying.collect { nowPlaying ->
+                realtime.setPlaybackActive(nowPlaying != null)
+                realtimeSync.setNowPlaying(nowPlaying?.libraryItemId, nowPlaying?.episodeId)
+            }
+        }
     }
 
     /**
@@ -98,4 +134,36 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
             }
             .crossfade(true)
             .build()
+}
+
+/**
+ * Whether any activity is started, which is this app's definition of "on screen".
+ *
+ * Started rather than resumed: a paused-but-visible activity — a permission dialog on
+ * top, or the app beside another in split screen — is still somebody looking at it.
+ */
+private class ForegroundWatcher(
+    private val onChanged: (Boolean) -> Unit,
+) : Application.ActivityLifecycleCallbacks {
+    private var started = 0
+
+    override fun onActivityStarted(activity: Activity) {
+        started += 1
+        if (started == 1) onChanged(true)
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        started = (started - 1).coerceAtLeast(0)
+        if (started == 0) onChanged(false)
+    }
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+
+    override fun onActivityResumed(activity: Activity) = Unit
+
+    override fun onActivityPaused(activity: Activity) = Unit
+
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+
+    override fun onActivityDestroyed(activity: Activity) = Unit
 }

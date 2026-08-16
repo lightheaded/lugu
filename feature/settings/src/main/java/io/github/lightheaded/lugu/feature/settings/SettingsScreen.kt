@@ -69,6 +69,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     onOpenPlaybackRecord: () -> Unit = {},
     onOpenFeedback: () -> Unit = {},
+    onOpenConnection: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -79,6 +80,7 @@ fun SettingsScreen(
         onOpenLicenses = onOpenLicenses,
         onOpenPlaybackRecord = onOpenPlaybackRecord,
         onOpenFeedback = onOpenFeedback,
+        onOpenConnection = onOpenConnection,
     )
     val visible = SettingsIndex.filter(entries, state.query)
 
@@ -150,6 +152,7 @@ private fun settingEntries(
     onOpenLicenses: () -> Unit,
     onOpenPlaybackRecord: () -> Unit,
     onOpenFeedback: () -> Unit,
+    onOpenConnection: () -> Unit,
 ): List<SettingEntry> {
     val settings = state.settings
     val downloads = state.downloads
@@ -405,6 +408,38 @@ private fun settingEntries(
             },
         )
 
+        add(
+            SettingEntry(
+                id = "duck-on-interruption",
+                category = "Sound",
+                title = "Lower the volume for interruptions",
+                keywords = "duck ducking interruption notification navigation satnav lower quieter pause",
+            ) {
+                SwitchRow(
+                    title = "Lower the volume for interruptions",
+                    subtitle = "A navigation prompt lowers the book rather than cutting it. " +
+                        "Off, anything short pauses instead.",
+                    checked = settings.audio.duckOnInterruption,
+                    onChange = viewModel::setDuckOnInterruption,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "sleep-survives-pause",
+                category = "Sleep timer",
+                title = "Keep the timer through a pause",
+                keywords = "sleep timer pause cancel keep armed resume interruption",
+            ) {
+                SwitchRow(
+                    title = "Keep the timer through a pause",
+                    subtitle = "A pause is usually an interruption, not a decision to stay awake",
+                    checked = settings.sleep.survivesPause,
+                    onChange = viewModel::setSleepSurvivesPause,
+                )
+            },
+        )
         add(
             SettingEntry(
                 id = "sleep-fade",
@@ -769,6 +804,25 @@ private fun settingEntries(
         )
         add(
             SettingEntry(
+                id = "podcast-order",
+                category = "Up next",
+                title = "Which way a podcast runs",
+                keywords = "podcast order oldest newest first serial chronological episodes " +
+                    "autoplay sequence",
+            ) {
+                ChoiceRow(
+                    title = "Which way a podcast runs",
+                    subtitle = "Newest suits a news show, oldest a serial. Any podcast can be " +
+                        "set differently from its own page.",
+                    options = listOf(false, true),
+                    selected = queue.podcastOldestFirst,
+                    format = { oldest -> if (oldest) "Oldest first" else "Newest first" },
+                    onSelect = viewModel::setPodcastOldestFirst,
+                )
+            },
+        )
+        add(
+            SettingEntry(
                 id = "queue-ask-first",
                 category = "Up next",
                 title = "Ask before starting something new",
@@ -801,6 +855,12 @@ private fun settingEntries(
                         )
                     }
                 }
+                LinkRow(
+                    title = "Connection",
+                    subtitle = "A second address for your own network, custom headers for a " +
+                        "proxy, and a client certificate",
+                    onClick = onOpenConnection,
+                )
                 TextButton(
                     onClick = {
                         viewModel.signOut()

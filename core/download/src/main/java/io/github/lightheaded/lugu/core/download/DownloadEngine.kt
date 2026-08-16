@@ -2,7 +2,6 @@ package io.github.lightheaded.lugu.core.download
 
 import android.content.Context
 import androidx.annotation.OptIn
-import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
@@ -154,48 +153,34 @@ class DownloadEngine @Inject constructor(
             AbsJson.decodeFromString(DownloadManifest.serializer(), row.tracksJson)
         }.getOrNull() ?: return
 
+        // Media3's own Download objects stop at this line; everything past it works on
+        // plain values, so the fold can be exercised without a DownloadManager.
         val index = downloadManager.downloadIndex
         val files = manifest.tracks.map { track ->
-            track to runCatching { index.getDownload(track.cacheKey) }.getOrNull()
+            val download = runCatching { index.getDownload(track.cacheKey) }.getOrNull()
+            track to download?.let {
+                FileProgress(
+                    state = it.state,
+                    bytesDownloaded = it.bytesDownloaded,
+                    contentLength = it.contentLength,
+                    percentDownloaded = it.percentDownloaded,
+                )
+            }
         }
 
-        val bytesDownloaded = files.sumOf { (_, download) -> download?.bytesDownloaded ?: 0L }
-        val contentLengths = files.map { (_, download) -> download?.contentLength ?: C.LENGTH_UNSET.toLong() }
-        val bytesTotal = if (contentLengths.all { it > 0 }) contentLengths.sum() else row.bytesTotal
-
-        // Falling back to a duration-weighted average matters for the first seconds of a
-        // multi-file book, when most files have not been opened and their sizes are
-        // still unknown — a naive bytes/total would read 0% for a while and look stuck.
-        val percent = if (bytesTotal > 0 && contentLengths.all { it > 0 }) {
-            (bytesDownloaded.toDouble() / bytesTotal).toFloat()
-        } else {
-            val weight = files.sumOf { (track, _) -> track.durationSec }.takeIf { it > 0 } ?: 1.0
-            files.sumOf { (track, download) ->
-                val fraction = download?.percentDownloaded?.takeIf { it >= 0f }?.div(100f) ?: 0f
-                track.durationSec * fraction
-            }.div(weight).toFloat()
-        }.coerceIn(0f, 1f)
-
-        val states = files.map { (_, download) -> download?.state }
-        val state = when {
-            states.all { it == Download.STATE_COMPLETED } -> DownloadState.COMPLETED
-            states.any { it == Download.STATE_FAILED } -> DownloadState.FAILED
-            states.any { it == Download.STATE_DOWNLOADING } -> DownloadState.DOWNLOADING
-            states.all { it == null } -> DownloadState.FAILED
-            else -> DownloadState.QUEUED
-        }
+        val folded = DownloadAggregation.fold(files, row.bytesTotal)
 
         downloadDao.updateState(
             serverId = row.serverId,
             userId = row.userId,
             itemId = row.libraryItemId,
             episodeKey = row.episodeKey,
-            state = state,
-            bytesDownloaded = bytesDownloaded,
-            bytesTotal = bytesTotal,
-            percent = percent,
-            completedAtMs = if (state == DownloadState.COMPLETED) clock.nowMs() else row.completedAtMs,
-            error = if (state == DownloadState.FAILED) error ?: row.error else null,
+            state = folded.state,
+            bytesDownloaded = folded.bytesDownloaded,
+            bytesTotal = folded.bytesTotal,
+            percent = folded.percent,
+            completedAtMs = if (folded.state == DownloadState.COMPLETED) clock.nowMs() else row.completedAtMs,
+            error = if (folded.state == DownloadState.FAILED) error ?: row.error else null,
         )
     }
 

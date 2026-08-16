@@ -26,6 +26,12 @@ robolectric = "4.16.1"
 androidxTestJunit = "1.3.0"
 aboutlibraries = "15.0.4"
 sentry = "8.53.0"
+socketio = "2.1.2"
+roborazzi = "1.46.1"
+androidxTest = "1.7.0"
+androidxTestRules = "1.7.0"
+uiautomator = "2.3.0"
+espresso = "3.7.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -92,6 +98,22 @@ androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "andro
 
 sentry-android = { module = "io.sentry:sentry-android", version.ref = "sentry" }
 
+# Audiobookshelf pushes library and progress changes over Socket.IO v4. The client brings
+# its own OkHttp; the app pins a newer one, so the transitive copy is excluded rather than
+# left to resolution luck.
+socketio-client = { module = "io.socket:socket.io-client", version.ref = "socketio" }
+
+roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+roborazzi-junit-rule = { module = "io.github.takahirom.roborazzi:roborazzi-junit-rule", version.ref = "roborazzi" }
+
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTest" }
+androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
+androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "uiautomator" }
+androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "espresso" }
+compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
@@ -103,3 +125,4 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 room = { id = "androidx.room", version.ref = "room" }
 aboutlibraries-android = { id = "com.mikepenz.aboutlibraries.plugin.android", version.ref = "aboutlibraries" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }

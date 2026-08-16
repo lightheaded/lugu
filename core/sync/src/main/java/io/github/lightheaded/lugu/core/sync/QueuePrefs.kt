@@ -38,6 +38,15 @@ data class QueueSettings(
      * is a suggestion nobody hears.
      */
     val askBeforeSuggestion: Boolean = false,
+    /**
+     * Which way round a podcast runs, when nothing has been said about that podcast.
+     *
+     * Newest first is right for a news show and wrong for a serial, and no client can tell
+     * the two apart from the feed. So there is a default, and a per-podcast override for
+     * the ones it gets wrong — which is what upstream's two open threads on this ask for
+     * (app#473 and server#1321, 43 votes between them).
+     */
+    val podcastOldestFirst: Boolean = false,
 )
 
 @Singleton
@@ -62,11 +71,46 @@ class QueuePrefs @Inject constructor(
         store.edit { it[ASK_FIRST] = enabled }
     }
 
+    suspend fun setPodcastOldestFirst(enabled: Boolean) {
+        store.edit { it[PODCAST_OLDEST_FIRST] = enabled }
+    }
+
+    /**
+     * Which way this particular podcast runs: its own answer if it has one, else the
+     * default.
+     */
+    suspend fun podcastOldestFirst(itemId: String): Boolean {
+        val prefs = store.data.first()
+        return prefs[podcastOrderKey(itemId)] ?: prefs.toSettings().podcastOldestFirst
+    }
+
+    fun observePodcastOldestFirst(itemId: String): Flow<Boolean> = store.data.map { prefs ->
+        prefs[podcastOrderKey(itemId)] ?: prefs.toSettings().podcastOldestFirst
+    }
+
+    /**
+     * Setting a podcast back to the current default forgets the override, so it follows
+     * the default again rather than pinning itself to a value that stops tracking it.
+     */
+    suspend fun setPodcastOldestFirst(itemId: String, oldestFirst: Boolean) {
+        val default = current().podcastOldestFirst
+        store.edit { prefs ->
+            if (oldestFirst == default) {
+                prefs.remove(podcastOrderKey(itemId))
+            } else {
+                prefs[podcastOrderKey(itemId)] = oldestFirst
+            }
+        }
+    }
+
     private fun Preferences.toSettings() = QueueSettings(
         continueSeries = this[CONTINUE_SERIES] ?: DEFAULTS.continueSeries,
         continuePodcast = this[CONTINUE_PODCAST] ?: DEFAULTS.continuePodcast,
         askBeforeSuggestion = this[ASK_FIRST] ?: DEFAULTS.askBeforeSuggestion,
+        podcastOldestFirst = this[PODCAST_OLDEST_FIRST] ?: DEFAULTS.podcastOldestFirst,
     )
+
+    private fun podcastOrderKey(itemId: String) = booleanPreferencesKey("podcast_oldest_first_$itemId")
 
     private companion object {
         val DEFAULTS = QueueSettings()
@@ -74,5 +118,6 @@ class QueuePrefs @Inject constructor(
         val CONTINUE_SERIES = booleanPreferencesKey("continue_series")
         val CONTINUE_PODCAST = booleanPreferencesKey("continue_podcast")
         val ASK_FIRST = booleanPreferencesKey("ask_before_suggestion")
+        val PODCAST_OLDEST_FIRST = booleanPreferencesKey("podcast_oldest_first")
     }
 }

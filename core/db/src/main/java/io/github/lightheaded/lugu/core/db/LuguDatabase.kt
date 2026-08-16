@@ -22,8 +22,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DownloadEntity::class,
         LibraryItemFtsEntity::class,
         BookmarkEntity::class,
+        CollectionEntity::class,
+        CollectionItemEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class LuguDatabase : RoomDatabase() {
@@ -52,6 +54,8 @@ abstract class LuguDatabase : RoomDatabase() {
     abstract fun libraryItemFtsDao(): LibraryItemFtsDao
 
     abstract fun bookmarkDao(): BookmarkDao
+
+    abstract fun collectionDao(): CollectionDao
 
     companion object {
         const val NAME = "lugu.db"
@@ -196,9 +200,62 @@ abstract class LuguDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds collections, and a second address for the server.
+         *
+         * Additive like the rest. The address column is nullable and defaults to null,
+         * which is exactly "no second address configured", so an upgraded install behaves
+         * as it did until somebody sets one.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("server", "lanBaseUrl")) {
+                    db.execSQL("ALTER TABLE `server` ADD COLUMN `lanBaseUrl` TEXT DEFAULT NULL")
+                }
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `collection` (
+                        `serverId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `id` TEXT NOT NULL,
+                        `libraryId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `description` TEXT,
+                        `updatedAtMs` INTEGER NOT NULL,
+                        `syncedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`serverId`, `userId`, `id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collection_serverId_userId_libraryId` " +
+                        "ON `collection` (`serverId`, `userId`, `libraryId`)",
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `collection_item` (
+                        `serverId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `collectionId` TEXT NOT NULL,
+                        `libraryItemId` TEXT NOT NULL,
+                        `position` INTEGER NOT NULL,
+                        PRIMARY KEY(`serverId`, `userId`, `collectionId`, `libraryItemId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS " +
+                        "`index_collection_item_serverId_userId_libraryItemId` " +
+                        "ON `collection_item` (`serverId`, `userId`, `libraryItemId`)",
+                )
+            }
+        }
+
         fun build(context: Context): LuguDatabase =
             Room.databaseBuilder(context.applicationContext, LuguDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

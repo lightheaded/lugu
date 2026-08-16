@@ -20,6 +20,8 @@ import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.feature.library.BrowseGroupScreen
 import io.github.lightheaded.lugu.feature.library.BrowseScreen
+import io.github.lightheaded.lugu.feature.library.CollectionScreen
+import io.github.lightheaded.lugu.feature.library.CollectionsScreen
 import io.github.lightheaded.lugu.feature.library.DownloadsScreen
 import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
@@ -27,6 +29,7 @@ import io.github.lightheaded.lugu.feature.library.QueueScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
+import io.github.lightheaded.lugu.feature.settings.ConnectionScreen
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
 import io.github.lightheaded.lugu.playback.PlaybackConnection
@@ -90,6 +93,9 @@ private object Routes {
     const val LICENSES = "licenses"
     const val PLAYBACK_RECORD = "playback-record"
     const val FEEDBACK = "feedback"
+    const val CONNECTION = "connection"
+    const val COLLECTIONS = "collections"
+    const val COLLECTION = "collections/{collectionId}"
 
     /** Authors, series or narrators — the three groupings the item page links to. */
     const val BROWSE = "browse/{kind}"
@@ -98,6 +104,8 @@ private object Routes {
     fun item(itemId: String) = "item/$itemId"
 
     fun browse(kind: String) = "browse/$kind"
+
+    fun collection(collectionId: String) = "collections/$collectionId"
 
     /**
      * A name can be anything the server holds — a slash, a question mark, a hash, an
@@ -160,6 +168,7 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                 onOpenQueue = { navController.navigate(Routes.QUEUE) },
                 onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
+                onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
                 // A shelf tap on something already in progress means "carry on", so it
                 // plays rather than opening a page and asking again.
                 onPlay = { itemId, episodeId ->
@@ -253,6 +262,28 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                 onOpenLicenses = { navController.navigate(Routes.LICENSES) },
                 onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
                 onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
+                onOpenConnection = { navController.navigate(Routes.CONNECTION) },
+            )
+        }
+
+        composable(Routes.CONNECTION) {
+            ConnectionScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.COLLECTIONS) {
+            CollectionsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenCollection = { navController.navigate(Routes.collection(it)) },
+            )
+        }
+
+        composable(
+            route = Routes.COLLECTION,
+            arguments = listOf(navArgument("collectionId") { type = NavType.StringType }),
+        ) {
+            CollectionScreen(
+                onBack = { navController.popBackStack() },
+                onOpenItem = { navController.navigate(Routes.item(it)) },
             )
         }
 

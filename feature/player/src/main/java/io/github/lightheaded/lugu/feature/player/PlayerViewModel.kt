@@ -120,6 +120,15 @@ class PlayerViewModel @Inject constructor(
     val sleepPresets = io.github.lightheaded.lugu.core.model.SleepTimer.PRESET_MINUTES
 
     /**
+     * Chapter counts offered as one-tap options.
+     *
+     * Separate from [sleepPresets] rather than folded into it because the two are not the
+     * same measurement: five here is five chapters of this book, which is a different
+     * amount of evening in every book.
+     */
+    val sleepChapterPresets = io.github.lightheaded.lugu.core.model.SleepTimer.PRESET_CHAPTERS
+
+    /**
      * Marks the current position.
      *
      * The title is left blank on purpose: the repository names an unnamed bookmark after

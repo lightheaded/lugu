@@ -35,6 +35,7 @@ import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.model.MediaButton
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
 import io.github.lightheaded.lugu.core.model.MediaType
+import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
@@ -143,6 +144,29 @@ class LuguPlaybackService : MediaLibraryService() {
     /** How far to rewind on the next play, set when the sleep timer stopped playback. */
     private var pendingSleepRewindSec: Double? = null
 
+    /** Whether the timer is being held for a car, so the hold can be taken off again. */
+    private var sleepSuspendedForCar = false
+
+    /**
+     * The mode last seen armed, so a newly armed timer starts with a clean record.
+     *
+     * Only used to notice that the timer has been re-armed; the mode itself is the state
+     * holder's.
+     */
+    private var lastSleepMode: SleepMode? = null
+
+    /** Set once a timer has been reported as unable to come due, so it is said once. */
+    private var unfireableTimerRecorded = false
+
+    /** What the ducking setting was last applied as; null until the first settings arrive. */
+    private var duckingInForce: Boolean? = null
+
+    /** The item and track whose metadata carries [metadataChapterIndex]. */
+    private var metadataItemKey: String? = null
+
+    /** The chapter last written into the session metadata, so only real changes are written. */
+    private var metadataChapterIndex = -1
+
     /** Controllers that identify themselves as a car, by package name. */
     private val carControllers = mutableSetOf<String>()
 
@@ -171,13 +195,9 @@ class LuguPlaybackService : MediaLibraryService() {
         player = ExoPlayer.Builder(this)
             .setRenderersFactory(DefaultRenderersFactory(this))
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
-                    .build(),
-                /* handleAudioFocus = */ true,
-            )
+            // Speech to begin with, which is what tells Media3 to pause rather than duck;
+            // [applyDucking] replaces it with whatever the setting says.
+            .setAudioAttributes(audioAttributes(duck = false), /* handleAudioFocus = */ true)
             // The starting value only; the route setting takes over as soon as the first
             // settings emission arrives, and pausing on disconnect is its default.
             .setHandleAudioBecomingNoisy(true)
@@ -258,7 +278,17 @@ class LuguPlaybackService : MediaLibraryService() {
         // The accelerometer follows the timer rather than the app: a sensor registered
         // for the whole life of the service is a battery cost nothing on screen explains.
         scope.launch {
-            stateHolder.sleepTimer.collect { syncShakeListening() }
+            stateHolder.sleepTimer.collect { timer ->
+                // A newly armed timer starts with a clean record: whatever was said about
+                // the last one — that it could not come due, that it was held for a car —
+                // was about that one.
+                if (timer.mode != lastSleepMode) {
+                    lastSleepMode = timer.mode
+                    unfireableTimerRecorded = false
+                    if (timer.mode == null) sleepSuspendedForCar = false
+                }
+                syncShakeListening()
+            }
         }
 
         startPositionTicker()
@@ -275,7 +305,42 @@ class LuguPlaybackService : MediaLibraryService() {
         player.skipSilenceEnabled = settings.audio.skipSilence
         player.setHandleAudioBecomingNoisy(settings.route.pauseOnDisconnect)
         loudnessBoost?.apply(audioSessionId, settings.audio.volumeBoostDb)
+        applyDucking(settings.audio.duckOnInterruption)
     }
+
+    /**
+     * Whether a short interruption lowers the book or stops it.
+     *
+     * Media3 offers no switch for this. What its focus manager reads is the *content type*
+     * of the audio attributes, and it pauses rather than ducks for exactly one of them:
+     * speech. It also passes that decision on to the platform, which then sends a full
+     * transient loss instead of a duck request and does no ducking of its own. lugu declared
+     * speech from the first line it ever ran, so the behaviour up to now was to pause for
+     * every navigation prompt, and no setting could have changed it.
+     *
+     * So the setting is honoured by choosing the content type. Nothing else about the
+     * attributes moves — the usage stays media, which is what decides which volume slider
+     * applies and which kind of focus is requested. What is given up when ducking is on is
+     * the platform's knowledge that this is speech, which some devices use for
+     * post-processing; that is the price of the interruption being audible over the book
+     * rather than replacing it.
+     */
+    private fun applyDucking(duck: Boolean) {
+        if (duckingInForce == duck) return
+        duckingInForce = duck
+        player.setAudioAttributes(audioAttributes(duck), /* handleAudioFocus = */ true)
+        // Written down because a duck itself produces no callback at all: the record of why
+        // the book went quiet for a moment is this line and the absence of a suppression.
+        diary.record(
+            AUDIO_FOCUS,
+            if (duck) "a short interruption will lower the book" else "a short interruption will pause it",
+        )
+    }
+
+    private fun audioAttributes(duck: Boolean) = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(if (duck) C.AUDIO_CONTENT_TYPE_MUSIC else C.AUDIO_CONTENT_TYPE_SPEECH)
+        .build()
 
     /**
      * Whether this phone is currently in a car.
@@ -439,40 +504,62 @@ class LuguPlaybackService : MediaLibraryService() {
         scope.launch {
             while (true) {
                 delay(SLEEP_TICK_MS)
+                applyCarSleepRule()
                 evaluateSleepTimer()
+                refreshChapterMetadata()
             }
         }
     }
 
     private fun evaluateSleepTimer() {
         val mode = stateHolder.sleepTimer.value.mode ?: return
+        if (sleepSuspendedForCar) return
         if (!player.isPlaying) return
 
         val context = stateHolder.nowPlaying.value ?: return
         val position = currentAbsoluteSec() ?: return
 
-        val remaining = SleepTimer.remainingSec(
+        val speed = player.playbackParameters.speed
+        // [SleepCountdown] rather than the arithmetic directly: a chapter count has to be
+        // resolved from where the timer was armed, and a chapter boundary has to be caught
+        // by a loop that only sees the position every half second.
+        val remaining = SleepCountdown.remainingSec(
             mode = mode,
             chapters = context.chapters,
             positionSec = position,
             armedAtPositionSec = stateHolder.sleepArmedAtPositionSec,
-            speed = player.playbackParameters.speed,
+            speed = speed,
         )
+
+        if (remaining == null) {
+            // A chapter-based timer on something with no chapters can never come due. It is
+            // left armed rather than cancelled — the next item may well have chapters — but
+            // it is said once, because "the timer did not fire" is otherwise a bug report
+            // with nothing in it.
+            if (!unfireableTimerRecorded) {
+                unfireableTimerRecorded = true
+                diary.record(SLEEP_TIMER_WAITING, playbackDetail("no chapters to count"))
+            }
+            return
+        }
 
         val volume = SleepFade.volumeFor(remaining, currentSettings.sleep.fadeSeconds)
         stateHolder.updateSleepTimer(remaining, isFading = volume < 1.0f)
         player.volume = volume
 
-        if (remaining != null && remaining <= 0.0) {
+        if (SleepCountdown.isDue(remaining, SLEEP_TICK_MS, speed)) {
             // Declared before the pause, so the stop that follows is attributed to the
             // timer rather than recorded as one nobody asked for.
             stopAttributor.declare(StopAttributor.REASON_SLEEP_TIMER, System.currentTimeMillis())
             diary.record(PlaybackEvent.SLEEP_TIMER_FIRED, playbackDetail())
+            // Cleared before the pause rather than after it: the pause callback can arrive
+            // inside `pause()`, and it now decides whether a pause ends the timer. A timer
+            // still armed at that moment would be reported as cancelled by the listener.
+            stateHolder.clearSleepTimer()
             player.pause()
             // Restore the volume so the next play is not silent — the commonest way a
             // fade-out implementation leaves the app apparently broken.
             player.volume = 1.0f
-            stateHolder.clearSleepTimer()
             // Whatever played through the fade was not really heard, so the next play
             // starts before it rather than where the ear gave up.
             pendingSleepRewindSec = currentSettings.sleep.rewindOnWakeSec.toDouble().takeIf { it > 0 }
@@ -482,16 +569,122 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     /**
+     * Holds the sleep timer while a car is connected, and gives it back afterwards.
+     *
+     * The rule and its reasoning are in [CarSleepRule]; this is the part that has a player
+     * to act on. Evaluated on the tick as well as on connect and disconnect, because a car
+     * can also be entered through the system's own car UI mode, which sends nobody a
+     * callback — and the timer state is read first so a phone with no timer set never asks
+     * the system anything.
+     */
+    private fun applyCarSleepRule() {
+        val armed = stateHolder.sleepTimer.value.isArmed
+        if (!armed && !sleepSuspendedForCar) return
+
+        when (CarSleepRule.actionFor(isCarMode(), armed = armed, suspended = sleepSuspendedForCar)) {
+            SleepTimerCarAction.NOTHING -> Unit
+
+            SleepTimerCarAction.SUSPEND -> {
+                sleepSuspendedForCar = true
+                // A fade already under way would otherwise leave the book quiet for the
+                // rest of the journey with nothing to explain it.
+                player.volume = 1.0f
+                diary.record(SLEEP_TIMER_HELD, playbackDetail("a car is connected"))
+                syncShakeListening()
+            }
+
+            SleepTimerCarAction.RELEASE -> {
+                sleepSuspendedForCar = false
+                // Re-armed from here rather than resumed: a timer that spent the journey
+                // suspended is long overdue, and resuming it would stop the audio the
+                // moment the car was left.
+                currentAbsoluteSec()?.let { position ->
+                    stateHolder.armSleepTimer(stateHolder.sleepTimer.value.mode, position)
+                }
+                diary.record(SLEEP_TIMER_HELD, playbackDetail("released, the car has gone"))
+                syncShakeListening()
+            }
+        }
+    }
+
+    /**
+     * A pause either leaves the timer armed or ends it, as the setting says.
+     *
+     * Surviving is the default and needs nothing done to it: remaining time is measured in
+     * playback seconds, so a pause simply stops spending it. What had to be written is the
+     * other half — that somebody who wants a pause to cancel the timer gets it cancelled —
+     * and, either way, a line saying which happened. The complaint upstream has open as
+     * app#1317 is not that the wrong thing happens but that nothing says what did.
+     */
+    private fun applySleepTimerPauseRule() {
+        if (!stateHolder.sleepTimer.value.isArmed) return
+        if (currentSettings.sleep.survivesPause) {
+            diary.record(SLEEP_TIMER_HELD, "still armed through the pause")
+            return
+        }
+        stateHolder.clearSleepTimer()
+        sleepSuspendedForCar = false
+        // The fade may have started before the pause, and a timer that is gone must not
+        // leave the next play quiet.
+        player.volume = 1.0f
+        diary.record(SLEEP_TIMER_CANCELLED, "the pause ended it, as configured")
+    }
+
+    /**
+     * Keeps the chapter title in the session's metadata current.
+     *
+     * Written as both the subtitle and the display description because hosts differ in
+     * which of the two they draw, and each maps to its own key on the platform session, so
+     * saying it twice costs a string and reaches both. The reasoning, and why the *position*
+     * cannot be told the same story, is in [NowPlayingMetadata] and
+     * [LuguNotificationProvider].
+     *
+     * The item is replaced in place rather than the playlist rebuilt: with the URI and the
+     * cache key unchanged Media3 updates the metadata without touching the media source, so
+     * nothing rebuffers, no position moves and no track transition is reported. Only a real
+     * change is written, because every write reaches every connected controller.
+     */
+    private fun refreshChapterMetadata() {
+        val context = stateHolder.nowPlaying.value ?: return
+        val current = player.currentMediaItem ?: return
+        val trackIndex = player.currentMediaItemIndex
+        val position = currentAbsoluteSec() ?: return
+
+        val itemKey = "${context.ledgerId}#$trackIndex"
+        val chapterIndex = NowPlayingMetadata.chapterIndexAt(context.chapters, position)
+        if (itemKey == metadataItemKey && chapterIndex == metadataChapterIndex) return
+        metadataItemKey = itemKey
+        metadataChapterIndex = chapterIndex
+
+        val subtitle = NowPlayingMetadata.subtitleFor(context.chapters, chapterIndex, context.author)
+        player.replaceMediaItem(
+            trackIndex,
+            current.buildUpon()
+                .setMediaMetadata(
+                    current.mediaMetadata.buildUpon()
+                        .setSubtitle(subtitle)
+                        .setDescription(subtitle)
+                        .build(),
+                )
+                .build(),
+        )
+    }
+
+    /**
      * Registers or drops the accelerometer to match the timer.
      *
      * Listening is worth its battery only while the timer is armed, the setting is on,
      * and something is actually playing — outside that the answer to a shake would be to
-     * do nothing, and a sensor registered to do nothing is a bug the user cannot see.
+     * do nothing, and a sensor registered to do nothing is a bug the user cannot see. A
+     * timer held for a car is the same case: there is nothing to extend.
      */
     private fun syncShakeListening() {
         val sleep = currentSettings.sleep
         val wanted = sleep.shakeSensitivity.takeIf {
-            sleep.shakeToExtend && stateHolder.sleepTimer.value.isArmed && player.isPlaying
+            sleep.shakeToExtend &&
+                stateHolder.sleepTimer.value.isArmed &&
+                !sleepSuspendedForCar &&
+                player.isPlaying
         }
         if (wanted == shakeListeningAt) return
         shakeListeningAt = wanted
@@ -675,6 +868,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 lastTickWallClockMs = 0L
                 pausedAtWallClockMs = now
                 persistPosition(reason = "pause")
+                applySleepTimerPauseRule()
                 SyncScheduler.flushNow(this@LuguPlaybackService)
             } else {
                 applyRewindOnResume()
@@ -799,6 +993,12 @@ class LuguPlaybackService : MediaLibraryService() {
          * The callback that tells "something else took the audio" apart from every other
          * kind of stop. A phone call, a navigation prompt, a car head unit taking the
          * output — all of them arrive here and nowhere else.
+         *
+         * Except a duck. When the book is lowered rather than stopped there is no callback
+         * at all: Media3 applies a volume multiplier inside the renderers and reports
+         * nothing, and the player goes on saying it is playing, which it is. So a quiet
+         * moment with no line here is the record of a duck, and the line that says which of
+         * the two was going to happen is written by [applyDucking].
          */
         override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
             if (playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE) {
@@ -1013,11 +1213,16 @@ class LuguPlaybackService : MediaLibraryService() {
          */
         override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
             pushNotificationLayout(session)
+            // A car arriving is also the moment an armed sleep timer has to be held, and
+            // waiting for the next tick to notice would leave half a second in which it
+            // could still fire.
+            applyCarSleepRule()
         }
 
         override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
             carControllers -= controller.packageName
             pushNotificationLayout(session)
+            applyCarSleepRule()
         }
 
         override fun onCustomCommand(
@@ -1274,6 +1479,23 @@ class LuguPlaybackService : MediaLibraryService() {
          * it belongs there once this has proved worth keeping.
          */
         const val HEADSET_BUTTON = "headset button"
+
+        /**
+         * The sleep timer is armed and something has happened to it short of firing: it was
+         * held for a car, given back, carried through a pause, or found nothing to count.
+         *
+         * All of them answer the same question — *why did the timer not fire* — which is
+         * asked as often as the other one, and which nothing else in the record answers.
+         */
+        const val SLEEP_TIMER_HELD = "sleep timer held"
+        const val SLEEP_TIMER_WAITING = "sleep timer cannot come due"
+        const val SLEEP_TIMER_CANCELLED = "sleep timer cancelled"
+
+        /**
+         * What a short interruption will do to the book. Written when the policy changes,
+         * because a duck itself is silent in every record the platform keeps.
+         */
+        const val AUDIO_FOCUS = "audio focus policy"
     }
 }
 

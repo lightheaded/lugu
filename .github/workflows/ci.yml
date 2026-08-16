@@ -32,8 +32,138 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      # Screenshot tests are ordinary JVM unit tests here — Roborazzi renders Compose
+      # through Robolectric — so `build` already verifies every baseline against the
+      # committed images. There is no separate task and no emulator involved; see
+      # docs/qa/screenshots.md for how to re-record after an intentional change.
       - name: Build, test and lint
         run: ./gradlew build --stacktrace
+
+      # A screenshot failure is a picture, and the assertion message is not one. Without
+      # this the only way to see what changed is to reproduce it locally, which is the
+      # point at which a screenshot suite starts being deleted rather than updated.
+      - name: Upload screenshot differences
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshot-diffs
+          path: '**/build/outputs/roborazzi/**'
+          if-no-files-found: ignore
+
+      - name: Upload unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-reports
+          path: '**/build/reports/tests/**'
+          if-no-files-found: ignore
+
+  # The tests that need Android to be Android: a process that can be reclaimed, a media
+  # button with nothing running, and the SQLite build a phone actually ships.
+  #
+  # This job does NOT gate the release, and that is a deliberate trade rather than a
+  # quiet one. The emulator runner is flaky in ways this repository cannot control —
+  # AVD boot timeouts and KVM contention on hosted runners — and a release blocked by an
+  # emulator that failed to boot is a release nobody publishes. So `release` needs only
+  # `build`.
+  #
+  # What it is NOT is `continue-on-error`. A failure here turns the whole run red and has
+  # to be looked at; it simply does not stop an alpha going out. If these start failing
+  # for real rather than flaking, the fix is to add `instrumented` to `release`'s
+  # `needs:` — not to stop looking.
+  instrumented:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two levels that can actually break. 26 is minSdk: it is the oldest Android
+        # lugu claims to run on, it is where the background-execution limits the playback
+        # service is built around first landed, and its SQLite is the oldest one the
+        # migrations have to open on. 36 is current: it is where the newest
+        # foreground-service and notification restrictions are, which is where a media
+        # session stops being allowed to start itself.
+        #
+        # Nothing in between is tested, on purpose. The interesting failures are at the
+        # ends, and every extra level is another AVD boot on every run.
+        #
+        # The image differs because the catalogue does. API 26 has a plain `default`
+        # x86_64 image; the newer levels are published as `google_apis`, and the Play
+        # Services in it are closer to a real phone for a media session anyway.
+        include:
+          - api-level: 26
+            target: default
+          - api-level: 36
+            target: google_apis
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: gradle/actions/wrapper-validation@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v4
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # Hosted runners have KVM but not enabled for the runner user by default, and
+      # without it the emulator falls back to software rendering and times out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Booting an AVD from cold is several minutes. Without this cache the emulator
+      # job dominates every run and the whole thing gets turned off.
+      - name: Cache the AVD
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+
+      - name: Create the AVD and cache a booted snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Booted once so the snapshot can be cached."
+
+      - name: Run the instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Animations make Compose's idling resource wait forever on a transition.
+          disable-animations: true
+          script: ./gradlew connectedDebugAndroidTest --stacktrace
+
+      # There is no server configured in CI, so the tests that need one skip. The report
+      # is uploaded even on a green run, because "skipped" and "passed" are different
+      # answers and the log does not distinguish them at a glance.
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: instrumented-reports-api${{ matrix.api-level }}
+          path: |
+            **/build/reports/androidTests/connected/**
+            **/build/outputs/androidTest-results/connected/**
+          if-no-files-found: ignore
 
   # A testable APK is the point of every green run: an alpha nobody can install
   # is not evidence of anything.
@@ -86,11 +216,36 @@ jobs:
           ./gradlew :app:assembleRelease --stacktrace
           mv app/build/outputs/apk/release/app-release.apk lugu-latest.apk
 
+          # R8 is on for release, so every stack trace from this build is obfuscated and
+          # is unreadable without the mapping file that produced it. The mapping is
+          # specific to this one build: keeping only the newest, or the one in the build
+          # directory of whoever last built locally, deobfuscates nothing. It is
+          # published alongside the APK it belongs to, named with the same version.
+          #
+          # It is a release asset rather than a Sentry upload deliberately. The Sentry
+          # Gradle plugin fails the build outright when it has no auth token, which
+          # would mean nobody could build lugu without one.
+          #
+          # A mapping file is not a secret: it names classes and methods that are already
+          # in the APK. It says nothing about the server, the account or the library.
+          if [ -f app/build/outputs/mapping/release/mapping.txt ]; then
+            cp app/build/outputs/mapping/release/mapping.txt lugu-mapping.txt
+          else
+            echo "No mapping.txt — was R8 turned off?" >&2
+          fi
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: lugu-apk
           path: lugu-latest.apk
+          if-no-files-found: warn
+
+      - name: Upload mapping artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lugu-mapping
+          path: lugu-mapping.txt
           if-no-files-found: warn
 
       # Exactly one release per build, tagged with the version the APK actually
@@ -127,7 +282,20 @@ jobs:
 
           Install over any previous lugu build; the signing key is stable.
           Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk
-          Pre-alpha: see the README for what works and what does not."
+          Pre-alpha: see the README for what works and what does not.
 
-          gh release create "v$VERSION" lugu-latest.apk \
+          \`lugu-mapping-$VERSION.txt\` is the R8 mapping for this exact build. A stack
+          trace from it is obfuscated and means nothing without it:
+          \`retrace lugu-mapping-$VERSION.txt trace.txt\`."
+
+          # Named with the version so that a mapping downloaded next to a crash report
+          # cannot be mistaken for the one from a different build. Uploaded in the same
+          # command as the APK, so a release never exists without its mapping.
+          ASSETS="lugu-latest.apk"
+          if [ -f lugu-mapping.txt ]; then
+            cp lugu-mapping.txt "lugu-mapping-$VERSION.txt"
+            ASSETS="$ASSETS lugu-mapping-$VERSION.txt"
+          fi
+
+          gh release create "v$VERSION" $ASSETS \
             --title "lugu $VERSION" --notes "$NOTES" --latest

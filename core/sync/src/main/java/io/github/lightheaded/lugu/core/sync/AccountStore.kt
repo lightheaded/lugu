@@ -5,6 +5,9 @@ import android.content.SharedPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import io.github.lightheaded.lugu.core.api.ConnectionProfile
+import io.github.lightheaded.lugu.core.api.ConnectionProfileSource
+import io.github.lightheaded.lugu.core.api.ConnectionRace
 import io.github.lightheaded.lugu.core.api.ServerUrlProvider
 import io.github.lightheaded.lugu.core.api.TokenStore
 import io.github.lightheaded.lugu.core.db.ServerDao
@@ -85,10 +88,58 @@ class EncryptedTokenStore @Inject constructor(
     }
 }
 
-/** Points the HTTP client at whichever server is currently active. */
+/**
+ * Points the HTTP client at whichever server is currently active, and tells it what has
+ * to be sent with every request to that server.
+ *
+ * One class for both because both callers — [io.github.lightheaded.lugu.core.api.AbsClient]
+ * and the OkHttp interceptor — already hold this, and neither is constructed anywhere this
+ * code can reach to add a second dependency.
+ *
+ * When a second address is configured, [baseUrl] is whichever of the two answered a probe
+ * most recently. That is safe here for a reason worth stating: progress is keyed by server
+ * id and user id, and the server id is derived once, at sign-in, from the address that was
+ * typed — [AuthRepository.login] builds it and nothing else ever does. Upstream keys
+ * progress by connection, which is why the same feature there splits one book's history in
+ * two when the address changes (audiobookshelf-app#1401). Racing addresses would be
+ * dangerous under that design and is not under this one.
+ */
 @Singleton
 class ActiveServerUrlProvider @Inject constructor(
     private val serverDao: ServerDao,
-) : ServerUrlProvider {
-    override suspend fun baseUrl(): String? = serverDao.active()?.baseUrl
+    private val connectionPrefs: ConnectionPrefs,
+    private val race: ConnectionRace,
+) : ServerUrlProvider, ConnectionProfileSource {
+
+    override suspend fun baseUrl(): String? {
+        val server = serverDao.active() ?: return null
+        return race.preferred(
+            primary = server.baseUrl,
+            lan = server.lanBaseUrl,
+            headers = connectionPrefs.headers(server.baseUrl),
+        )
+    }
+
+    override suspend fun profileFor(url: String): ConnectionProfile? {
+        val server = serverDao.active()
+        if (server != null) {
+            // Both addresses count as this server. A cover or media URL may have been built
+            // from either — a download manifest keeps the address that was current when it
+            // was queued — and matching only the one in force would quietly drop the token
+            // and the headers from requests built from the other.
+            val addresses = listOfNotNull(
+                server.baseUrl,
+                server.lanBaseUrl?.takeIf { it.isNotBlank() && it != server.baseUrl },
+            )
+            if (addresses.any { url.startsWith(it) }) {
+                return ConnectionProfile(addresses, connectionPrefs.headers(server.baseUrl))
+            }
+        }
+        // Before the first sign-in there is no server row at all, and that is exactly when
+        // somebody behind an identity-aware proxy needs their headers most.
+        return connectionPrefs.profileFor(url)
+    }
+
+    /** Called when the addresses change, so the next request decides again rather than recalls. */
+    fun forgetAddressDecision() = race.forget()
 }

@@ -34,6 +34,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,6 +78,7 @@ fun HomeScreen(
     onOpenDownloads: () -> Unit,
     onOpenQueue: () -> Unit,
     onBrowse: (kind: String) -> Unit,
+    onOpenCollections: () -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     bottomContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -161,6 +163,7 @@ fun HomeScreen(
             HomeTab.LIBRARY -> LibraryScreen(
                 onOpenItem = onOpenItem,
                 onBrowse = onBrowse,
+                onOpenCollections = onOpenCollections,
                 modifier = Modifier.fillMaxSize().padding(padding),
                 viewModel = libraryViewModel,
             )

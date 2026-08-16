@@ -30,6 +30,10 @@ Read on 15 August 2026 across `advplyr/audiobookshelf-app` (404 open) and
 `advplyr/audiobookshelf` (968 open), filtered to what an independent Android client can
 deliver against today's public API. Counts are thumbs-up on the opening post.
 
+**Most of this shipped on 16 August.** Rows below marked *done* are kept rather than
+deleted, because the demand figure is the argument for why they were worth doing and the
+next person will want it. What is still open is marked as such.
+
 Two things the review settled that are worth keeping. The four highest-demand mobile asks
 — a play queue (99, open since 2022), auto-downloading episodes (45), deleting finished
 downloads (41) and multi-select (27) — are already built, so the direction is right. And
@@ -47,10 +51,10 @@ than anything the server has to agree to.
 
 | Item | Note |
 |---|---|
-| **Custom headers on every request** | app#254, 38 👍 and 78 comments — the single best value-to-effort item in the review. Cloudflare Access service tokens (`CF-Access-Client-Id` / `-Secret`) and every header-auth reverse proxy are simply unusable without it. Headers belong with the account, not the app, since they are per-server; and they are credentials, so they go where the tokens go and never into a log, a crash report or the playback record |
-| **A LAN address as well as a WAN one** | app#209, 34 👍. A reverse proxy is materially slower than a direct connection, so people want a second address used when on known networks. Only safe because progress here is keyed by server and user id rather than by connection — the bug that makes this dangerous upstream (app#1401) is one lugu does not have |
-| **Client certificates (mTLS)** | app#1419, 14 👍. The connection fails outright with no way to supply one. Needs a key-store picker and an OkHttp `SSLSocketFactory`, and the certificate is a credential like any other |
-| **Never gate a request on our own guess about connectivity** | app#1702. Upstream's reachability check reports offline over Tailscale and WireGuard, silently disabling sync for VPN users. lugu should try the request and let it fail rather than deciding in advance — worth an explicit audit that nothing does the latter |
+| **Custom headers on every request** — done 16 Aug | app#254, 38 👍 and 78 comments — the single best value-to-effort item in the review. Cloudflare Access service tokens (`CF-Access-Client-Id` / `-Secret`) and every header-auth reverse proxy are simply unusable without it. Headers belong with the account, not the app, since they are per-server; and they are credentials, so they go where the tokens go and never into a log, a crash report or the playback record |
+| **A LAN address as well as a WAN one** — done 16 Aug | app#209, 34 👍. A reverse proxy is materially slower than a direct connection, so people want a second address used when on known networks. Only safe because progress here is keyed by server and user id rather than by connection — the bug that makes this dangerous upstream (app#1401) is one lugu does not have |
+| **Client certificates (mTLS)** — done 16 Aug | app#1419, 14 👍. The connection fails outright with no way to supply one. Needs a key-store picker and an OkHttp `SSLSocketFactory`, and the certificate is a credential like any other |
+| **Never gate a request on our own guess about connectivity** — audited 16 Aug, nothing found | app#1702. Upstream's reachability check reports offline over Tailscale and WireGuard, silently disabling sync for VPN users. lugu should try the request and let it fail rather than deciding in advance — worth an explicit audit that nothing does the latter |
 
 ### The car
 
@@ -60,11 +64,11 @@ dominant context, even though it is not our platform.
 
 | Item | Note |
 |---|---|
-| **Oldest-first episode order, per podcast** | app#473 and server#1321, 43 👍 together. Continuation always takes the newest unplayed episode, which is right for a news show and wrong for a serial. The choice belongs to the podcast, not to a global setting |
-| **The current chapter in the car** | app#489, 8 👍. There is empty space in the Auto player where the chapter title should be, and the chapter is the only "where am I" a driver can use |
-| **A latest-episodes node spanning every podcast** | app#679 and server#1516. There is no cross-feed view of what is new, in the car or on the phone. lugu already refreshes followed podcasts, so the data is local |
-| **Chapters as the car's queue** | app#1673. Populating the head unit's playlist with chapters makes tap-to-jump work with the controls a car already has |
-| **No sleep timer while driving** | app#1478. A timer that fires mid-journey is a bug wearing a feature's clothes. One rule, given that car mode is already detected |
+| **Oldest-first episode order, per podcast** — done 16 Aug | app#473 and server#1321, 43 👍 together. Continuation always takes the newest unplayed episode, which is right for a news show and wrong for a serial. The choice belongs to the podcast, not to a global setting |
+| **The current chapter in the car** — done 16 Aug | app#489, 8 👍. There is empty space in the Auto player where the chapter title should be, and the chapter is the only "where am I" a driver can use |
+| **A latest-episodes node spanning every podcast** — done 16 Aug | app#679 and server#1516. There is no cross-feed view of what is new, in the car or on the phone. lugu already refreshes followed podcasts, so the data is local |
+| **Chapters as the car's queue** — declined 16 Aug | app#1673. Media3 builds the platform queue from the *player's timeline*, one entry per media item, and turns "skip to queue item" back into a seek on that timeline. A book already occupies that timeline, and every recorded, synced and resumed position is mapped through it — so chapters-as-queue means making the timeline a list of chapters, which is the same lie the notification's progress bar refuses, and worse, because a queue takes seeks back in. Chapter commands stay reachable from the car and the chapter is now named in the metadata; what is lost is jumping to an arbitrary chapter from the head unit's own list. Reasoning is in `CarNowPlaying.kt` |
+| **No sleep timer while driving** — done 16 Aug, suspended rather than cancelled | app#1478. A timer that fires mid-journey is a bug wearing a feature's clothes. One rule, given that car mode is already detected |
 | **The Auto bugs upstream keeps re-opening** | app#1570 (Continue tab missing), app#1482 (wrong total length), app#1491 (only downloads visible unless the app is running). The browse tree is served from Room, so the last should be impossible here — but that is a claim until a head unit says otherwise. Fold into [qa/auto.md](qa/auto.md) |
 
 ### Playback and media controls
@@ -74,9 +78,9 @@ dominant context, even though it is not our platform.
 | **A paused notification that survives** | app#1800 and app#1571, 21 comments. Upstream's disappears a couple of minutes after pausing, so resuming means reopening the app. Already listed under *Why playback stops* as a risk here too; the fix is a foreground-service lifecycle decision, and the diary will say whether we have the problem |
 | **A configurable rewind-after-pause curve** | app#205, 20 comments of people disagreeing about the right number — which is itself the argument for making it a setting rather than picking one |
 | **Skip intro and outro** | app#749, 7 👍. Per-podcast trim offsets, remembered, so a fifteen-second sting is not heard three hundred times |
-| **Duck rather than cut for other audio** | app#1259. A navigation prompt should lower the book, not interrupt it |
+| **Duck rather than cut for other audio** — done 16 Aug | app#1259. A navigation prompt should lower the book, not interrupt it |
 | **xHE-AAC** | server#4236, 15 👍 and 38 comments, the most-discussed server enhancement of the year. Android 9 and later decode it natively, so a native client can play files the web player cannot — a real differentiator, provided the server serves the bytes rather than refusing to probe them |
-| **Tasker-compatible intents** | app#858, 21 👍. Exported play/pause intents. Small, and it wins the automation audience outright |
+| **Tasker-compatible intents** — done 16 Aug, see [automation.md](automation.md) | app#858, 21 👍. Exported play/pause intents. Small, and it wins the automation audience outright |
 | **Media buttons on watches and remotes** | app#352 (17 comments, open since 2022, `help wanted`) and app#1048, where the headphone pause button rewinds instead of pausing. `MediaButtonClassifier` exists precisely to prevent the second; neither has been tested against real hardware. Belongs with the headset test matrix above |
 | **Battery drain as a standing requirement** | app#1446 is the most-discussed Android bug ever filed against the official app, at 81 comments. Not a ticket to close — a thing to measure before each release, alongside the sensor and wake-lock rules already followed here |
 
@@ -85,10 +89,10 @@ dominant context, even though it is not our platform.
 | Item | Note |
 |---|---|
 | **A–Z rail on the browse pages too** | The grid has one; the author, series and narrator lists do not, and a library with four hundred authors needs it just as much. They have a search box in the meantime |
-| **Edit collections from the phone** | app#207, 6 👍. Read-only on mobile upstream, though the API allows writing |
+| **Edit collections from the phone** — done 16 Aug | app#207, 6 👍. Read-only on mobile upstream, though the API allows writing |
 | **Confirm covers are cached to disk** | app#907, 7 👍. Coil caches by default, but "by default" is an assumption, and a library that re-fetches every cover feels slow in exactly the way people describe |
-| **Sleep after N chapters** | app#202, 6 👍. Chapter count rather than clock time, which is how people actually decide when to stop |
-| **The sleep timer must survive a pause** | app#1317. Pausing silently cancels it upstream. A rule worth writing down before it gets written wrong |
+| **Sleep after N chapters** — done 16 Aug | app#202, 6 👍. Chapter count rather than clock time, which is how people actually decide when to stop |
+| **The sleep timer must survive a pause** — done 16 Aug | app#1317. Pausing silently cancels it upstream. A rule worth writing down before it gets written wrong |
 | **F-Droid** | app#58, 45 👍, open since December 2021 and never delivered. A large cohort will not install from Play. Needs reproducible builds, which a Kotlin build gets nearly for free — upstream is blocked by a Nuxt toolchain that emits non-deterministic filenames (app#1388), which is exactly the kind of problem this project does not have |
 
 ### Considered and declined
@@ -106,6 +110,20 @@ Recorded so the same question is not re-litigated in six months.
 
 Android TV (app#606) and Wear OS (app#676) are already M4 spikes and are not repeated here.
 
+## Left behind by the 16 August work
+
+Each of these is a consequence of something that landed, and each is written down because
+the person who finds it will otherwise think it an oversight.
+
+| Item | Note |
+|---|---|
+| **`SleepMode.EndOfChapter` can be stepped over** | It resolves the boundary from the *current* position on every tick, which is deliberate — skipping a chapter should re-arm against the new one. The cost is that the position only moves in tick-sized steps, so at 1.5× the loop can see 599.7 and then 600.2, by which time the target is the next chapter's end. `SleepCountdown` in `:playback` compensates with a one-tick tolerance; the model itself still has the sharp edge, and anything else that reads it will hit the same thing. `SleepMode.Chapters` had the far worse version of this — a target that receded exactly as fast as it was approached, so it could never come due — and that one is fixed at the source |
+| **Downloaded manifests and car artwork do not follow the LAN address** | Both use the account's primary address, baked in at queue time or built for the browse tree. They still carry headers and the token, so they work; they just do not get the faster route. Streamed audio and player artwork do follow it |
+| **No `io.socket` code has ever run against a live server** | See the M0 row above. R8 keep rules are now in place, which is the failure that would have been hardest to attribute |
+| **Collections cannot be edited offline, by design** | A collection is shared state with an order the server owns, and there is no right merge of two offline reorderings — a replayed "add" would silently undo somebody else's removal. An edit made offline fails immediately with a reason rather than being queued |
+| **Adding to a collection is not in the grid's multi-select bar** | Only on the item page. The server has `/batch/add` and `/batch/remove` endpoints if this is wanted |
+| **Collection listings are heavy and rate-limited to five minutes** | The server's library-collections endpoint is always fully expanded — `minified` is documented but never read by the handler — and runs to several megabytes on an ordinary library. So it is tied to deliberate acts rather than to opening a book page |
+
 ## Player and playback — M1 remainder
 
 | Item | Note |
@@ -119,7 +137,7 @@ Android TV (app#606) and Wear OS (app#676) are already M4 spikes and are not rep
 
 | Item | Note |
 |---|---|
-| **Socket.IO delta updates** | The mirror is poll-and-sweep only. Edits and deletions made elsewhere take until the next sync to appear. Was M0 task 4 |
+| **Socket.IO deltas are written but unproven** | Built 16 Aug against the server source rather than its docs, which say of themselves that they are unmaintained. Every event name was read out of `SocketAuthority.js` and the controllers. What no test can reach: that engine.io-client works against OkHttp 5 at runtime, that the handshake succeeds and `init` arrives, that the socket path is right through a reverse proxy, and that re-emitting `auth` every fifteen minutes keeps events flowing once the token behind them has rotated. A live server settles all four in a minute |
 | **Process-death and reboot resumption never verified on hardware** | This is M0's central promise and the one path never exercised on a real device: kill the app mid-book, then press play on a headset |
 | **M0 QA checklist never run** | [qa/m0.md](qa/m0.md) is written but unexecuted |
 
@@ -128,7 +146,8 @@ Android TV (app#606) and Wear OS (app#676) are already M4 spikes and are not rep
 | Item | Note |
 |---|---|
 | **Offline playback has not been proven on hardware** | Downloading has now moved real bytes — a 629 MB book, downloaded and ready to play, 15 Aug. What is still untested is the other half: going offline for long enough to matter and confirming nothing is lost, and that the session replays on reconnect. Until then, "a week in airplane mode loses nothing" is a claim, not a result |
-| **Transcoded (HLS) downloads** | A download assumes direct play — one file per track. An item the server will only transcode has no stable file URL to cache, so it cannot be downloaded at all yet, and nothing says so in the UI |
+| **Transcoded items still cannot be downloaded — now deliberately** | Resolved 16 Aug as a refusal that explains itself rather than as a feature. Three independent reasons, any one sufficient: an HLS playlist is minted against a play session that expires and takes its segment URLs with it, so the download could not be keyed by item and track the way every other one is; a transcode has no size until it exists, so a truncated download is indistinguishable from a complete one and the failure surfaces in a tunnel; and it would be a re-encode, at a bitrate the server chose, of a file the server already holds intact. The productive direction was the other one — widening the supported mime types so fewer items transcode at all. Reasoning is on `DownloadRefusal.TranscodeOnly` |
+| **`audio/x-aiff` is claimed but unverified** | It is in the supported-mime list and no AIFF extractor could be confirmed in Media3's published formats. Pre-existing, and the opposite mistake from the one just fixed: overselling makes the server hand over a file nothing can decode. Worth one test against a real AIFF file |
 | **Storage cap is checked, not enforced mid-download** | The estimate is charged against the cap before a download starts. A book much larger than its reported size can still overshoot; nothing aborts a download in flight |
 | **A streamed listen does not fill the download cache** | Streaming and downloading already share one cache, but a book listened to over the network is not retained, so listening ahead does not pre-warm anything. Upstream calls the split between the two concepts the root cause of much of its download trouble (app#1371) |
 | **Cache and Room can drift** | The cache is the truth about bytes and Room is the truth about state. `reconcile()` on start repairs the common case, but bytes evicted by the system outside the app would leave a row claiming "completed" |
@@ -296,8 +315,9 @@ Depends on item 1. Roughly half a day on top of it, most of it the Compose scree
 
 | Item | Note |
 |---|---|
-| No instrumented tests at all | The plan wants process-death and resumption tests as first-class CI citizens; there is no emulator matrix in CI yet |
-| No screenshot tests | Roborazzi was planned from M1 |
+| **Process death itself is still not covered** | Instrumented tests now exist and run on an API 26/36 emulator matrix, but instrumentation runs *inside* the process under test, so `am force-stop` on this package kills the test runner. The resumption test destroys the playback *service* instead — which is what Android actually does when reclaiming memory — and reaches `onPlaybackResumption` from Room as a cold start would. A real kill needs a second process: a `com.android.test` module with its own application id. The adb recipe for doing it by hand is in [qa/instrumented.md](qa/instrumented.md) |
+| **Screenshot baselines cover components, not most screens** | 23 baselines in both themes, verified on every `./gradlew build`. But only Settings drives its real screen: every other screen takes a Hilt view model over final Room, DataStore and Ktor classes that cannot be faked, so those baselines are of the screens' own components arranged as the screen arranges them. A change to the order of blocks *inside* a screen file will not fail them. Making each screen's content a stateless `internal` composable would close it |
+| **The Roborazzi Gradle plugin cannot be applied** | 1.46.1 reaches for AGP's `TestedExtension`, which AGP 9.3.1 removed, so applying it fails configuration. Its only job is setting two system properties, which the root build file now sets directly — so verification is the default and re-recording is `-Proborazzi.record`. Revisit when Roborazzi supports AGP 9 |
 | Sleep timer service integration untested | The arithmetic is well covered; the wiring that pauses and restores volume is not |
-| `DownloadEngine` aggregation untested | The fold from per-file Media3 events to one item row — including the duration-weighted percentage used before file sizes are known — has no test. It needs a fake `DownloadIndex` |
+| ~~`DownloadEngine` aggregation untested~~ | Done 16 Aug, and the premise here was wrong: no fake `DownloadIndex` was needed. Extracting the pure fold into `DownloadAggregation` reached the part that can actually be wrong, and a fake would have been the harder path — a Media3 `Download` is only obtainable through a real `DownloadManager`, which wants a cache directory, a database and a thread pool |
 | The offline resolution path is untested end to end | `ManifestBuilder` and the shelf and search queries are covered; `MediaResolver.resolveFromDownload` is not, because it needs the repository, the ledger and Room together |

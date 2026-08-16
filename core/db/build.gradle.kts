@@ -12,6 +12,11 @@ android {
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
+
+        // The migration tests here run twice: once on the JVM under Robolectric, and once
+        // on a device against real SQLite, which is the only place a migration is proved
+        // against the SQLite build a phone actually ships.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -51,4 +56,11 @@ dependencies {
     testImplementation(libs.androidx.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.room.testing)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.truth)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.room.testing)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }

@@ -18,6 +18,8 @@ data class ActiveAccount(
     val userId: String,
     val username: String,
     val defaultLibraryId: String?,
+    /** The second address, when one is configured. Not necessarily the one in use now. */
+    val lanBaseUrl: String? = null,
 )
 
 @Singleton
@@ -26,6 +28,7 @@ class AuthRepository @Inject constructor(
     private val serverDao: ServerDao,
     private val tokenStore: TokenStore,
     private val progressRepository: ProgressRepository,
+    private val serverUrlProvider: ActiveServerUrlProvider,
 ) {
     fun observeAccount(): Flow<ActiveAccount?> = serverDao.observeActive().map { it?.toAccount() }
 
@@ -50,16 +53,23 @@ class AuthRepository @Inject constructor(
         val result = client.login(url, username, password)
 
         tokenStore.save(result.tokens)
+        val serverId = "${url}#${result.userId}"
+        // Signing in again on the same account must not throw away a second address that
+        // was already configured: a re-login after an expired refresh token is routine.
+        val existingLan = serverDao.active()?.takeIf { it.serverId == serverId }?.lanBaseUrl
         val server = ServerEntity(
             // One row per (server, user): signing in as a different user on the same
-            // server is a different account, not an overwrite.
-            serverId = "${url}#${result.userId}",
+            // server is a different account, not an overwrite. Derived from the address
+            // that was typed, once, and never from whichever address a later race picked —
+            // that is what makes a second address safe here.
+            serverId = serverId,
             baseUrl = url,
             userId = result.userId,
             username = result.username,
             defaultLibraryId = result.defaultLibraryId,
             serverVersion = status.serverVersion,
             isActive = true,
+            lanBaseUrl = existingLan,
         )
         serverDao.setActive(server)
 
@@ -70,11 +80,35 @@ class AuthRepository @Inject constructor(
         server.toAccount()
     }
 
+    /**
+     * Sets or clears the second address. Normalised the same way as the first, so "192.168.1.4:13378"
+     * is accepted, and the remembered race result is discarded because it answered a
+     * different question.
+     */
+    suspend fun setLanBaseUrl(rawUrl: String?): Result<String?> = runCatching {
+        val server = serverDao.active() ?: error("Not signed in")
+        val normalised = rawUrl?.takeIf { it.isNotBlank() }?.let {
+            ServerUrl.normalise(it) ?: error("That does not look like a server address")
+        }
+        require(normalised != server.baseUrl) {
+            "That is the address you already sign in with."
+        }
+        serverDao.upsert(server.copy(lanBaseUrl = normalised))
+        serverUrlProvider.forgetAddressDecision()
+        normalised
+    }
+
     suspend fun logout() {
         val active = serverDao.active()
         runCatching { client.send("/logout", io.ktor.http.HttpMethod.Post) }
         tokenStore.clear()
         active?.let { serverDao.delete(it.serverId) }
+        // The custom headers deliberately survive a sign-out. They are a property of the
+        // address rather than of the account, and behind an identity-aware proxy they are
+        // what makes signing back in possible at all — clearing them here would strand
+        // somebody on a login screen that cannot reach the server. The connection screen
+        // deletes them explicitly instead, which is a decision rather than a side effect.
+        serverUrlProvider.forgetAddressDecision()
     }
 
     /** True when we hold credentials that still stand a chance of working. */
@@ -93,4 +127,5 @@ internal fun ServerEntity.toAccount() = ActiveAccount(
     userId = userId,
     username = username,
     defaultLibraryId = defaultLibraryId,
+    lanBaseUrl = lanBaseUrl,
 )

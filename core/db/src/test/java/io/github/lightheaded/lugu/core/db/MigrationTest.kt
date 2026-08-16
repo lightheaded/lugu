@@ -293,6 +293,59 @@ class MigrationTest {
     }
 
     @Test
+    fun `migration 4 to 5 matches the schema Room generates`() {
+        val migrated = databaseAtVersion(4)
+        LuguDatabase.MIGRATION_4_5.migrate(migrated)
+
+        val tables = listOf("collection", "collection_item", "server")
+        val migratedColumns = tables.associateWith { columnsOf(migrated, it) }
+        val migratedIndexes = tables.associateWith { indexesOf(migrated, it).sorted() }
+        migrated.close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        room.openHelper.writableDatabase.let { db ->
+            tables.forEach { table ->
+                assertThat(migratedColumns[table]).isEqualTo(columnsOf(db, table))
+                assertThat(migratedIndexes[table]).isEqualTo(indexesOf(db, table).sorted())
+            }
+        }
+        room.close()
+    }
+
+    /**
+     * The one column an upgrade could get wrong in a way nobody notices: a second server
+     * address that came back as anything other than null would have the app quietly trying
+     * to reach a host that was never configured.
+     */
+    @Test
+    fun `migration 4 to 5 leaves existing servers alone and unconfigured`() {
+        val db = databaseAtVersion(4)
+        db.execSQL(
+            """
+            INSERT INTO server (serverId, baseUrl, userId, username, defaultLibraryId,
+                serverVersion, isActive)
+            VALUES ('srv_1', 'https://example.invalid', 'usr_1', 'someone', NULL, '2.26.0', 1)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_4_5.migrate(db)
+        // Converging on a re-run matters as much here as in the earlier migrations.
+        LuguDatabase.MIGRATION_4_5.migrate(db)
+
+        val lan = db.query("SELECT lanBaseUrl FROM server WHERE serverId = 'srv_1'").use {
+            it.moveToFirst()
+            if (it.isNull(0)) null else it.getString(0)
+        }
+        assertThat(lan).isNull()
+        assertThat(schemaOf(db, "collection")).isNotNull()
+        assertThat(schemaOf(db, "collection_item")).isNotNull()
+        db.close()
+    }
+
+    @Test
     fun `history rows round-trip and come back newest first`() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)

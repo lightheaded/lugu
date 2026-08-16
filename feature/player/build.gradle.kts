@@ -21,6 +21,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests {
+            // Roborazzi draws the real thing, so the real resources have to be there.
+            // Without this a screenshot test renders a screen with no theme attributes
+            // and every baseline is a picture of the failure.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -58,4 +67,15 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+
+    // Screenshot tests. Roborazzi renders Compose on the JVM through Robolectric's native
+    // graphics, so these run on every push without an emulator.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.junit)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
