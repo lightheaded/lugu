@@ -206,7 +206,7 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # Animations make Compose's idling resource wait forever on a transition.
           disable-animations: true
-          script: ./gradlew ${{ matrix.gradle-task }} ${{ matrix.gradle-args }} --stacktrace
+          script: ./gradlew ${{ matrix.gradle-task }} ${{ matrix.gradle-args }} --continue --stacktrace
 
       # The guard that keeps the step above honest. Every one of these tests skips rather
       # than fails when it cannot find a server, which is right for a developer with no

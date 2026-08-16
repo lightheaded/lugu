@@ -21,10 +21,15 @@ val localProps = Properties().apply {
 // CI has no local.properties and never will — it is gitignored precisely because it holds
 // somebody's own server. So the same four values are also read from the environment, which
 // is how the Audiobookshelf container that `scripts/seed-test-server.sh` provisions reaches
-// the instrumented tests. The file wins when both exist, so a developer's own server is
-// never quietly replaced by a stray variable.
+// the instrumented tests.
+//
+// The environment wins. That is the reverse of what this said at first, and the reversal was
+// earned: with the file winning there was no way to point a machine that already has a server
+// configured at a throwaway container for one command, which is exactly what debugging a sync
+// failure needs. An explicit variable on one invocation beating an ambient file is also the
+// ordinary precedence everywhere else.
 fun devProp(key: String, env: String): String =
-    localProps.getProperty(key) ?: System.getenv(env).orEmpty()
+    System.getenv(env)?.takeIf { it.isNotBlank() } ?: localProps.getProperty(key).orEmpty()
 
 // CI stamps a monotonic build number so every build is a distinct version; local
 // builds keep the bare base version. Obtainium compares the installed versionName
