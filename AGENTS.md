@@ -90,6 +90,50 @@ Two things to keep true:
 - Secrets are referenced only in the release job, and a missing secret skips the
   release rather than failing the build.
 
+## Screenshot baselines — record them on Linux, not on your Mac
+
+- Roborazzi renders Compose through Robolectric's **native** graphics mode, which
+  means it uses the host's own font and icon rasterizer. A baseline PNG recorded on
+  macOS (arm64) does not pixel-match the same render on the `ubuntu-latest` runner CI
+  actually uses — every baseline recorded locally on a Mac will fail verification in
+  CI, even though nothing about the screen changed.
+- This bit every screenshot in the repo at once: the whole Roborazzi harness (every
+  `*ScreenshotTest.kt`, every `screenshots/*.png`) was added in one commit, recorded
+  on a Mac, and never run through CI before merging. All three CI runs since failed
+  on `:app:testDebugUnitTest`, which happened to be scheduled first — the same
+  mismatch was silently waiting in `feature/library`, `feature/player` and
+  `feature/settings` too, masked because Gradle stops scheduling once one test task
+  fails without `--continue`.
+- Before trusting a screenshot baseline, record it in an environment that matches
+  the CI runner: `eclipse-temurin:21-jdk-jammy` on `linux/amd64`, Android SDK
+  `platforms;android-37.0` + `build-tools;37.0.0`, run as `./gradlew testDebugUnitTest
+  -Proborazzi.record`. A Mac (including under Rosetta/amd64 emulation) is the wrong
+  host for this regardless of JDK version — the mismatch is in font/icon rendering,
+  not architecture or Java version.
+- If you must do this via a local Docker container: **never mount the live working
+  directory read-write for a throwaway build.** Copy the tree first (`git archive
+  HEAD | tar -x -C $SCRATCH`, or `rsync` excluding `build/`, `.gradle/`, `.git/`) and
+  run against the copy. A stray `local.properties` write or a build-directory race
+  with whatever else is running against the real checkout is not worth the risk.
+
+## Releases — every one needs a TL;DR and a detailed description
+
+- The release job builds its GitHub release notes from git history: commit
+  **subjects** since the previous release tag become a TL;DR bullet list, and
+  commit **bodies** become the detailed "What changed" section. There is no
+  separate release-notes step — the commit message *is* the release note.
+- This means every commit that lands on `main` must carry a real message: a
+  subject that stands alone as a TL;DR line, and a body that explains the
+  feature or fix in enough detail for someone who wasn't there. "fix bug",
+  "wip", "address review comments" are fine mid-branch but must not reach
+  `main` as the final word on a change — squash or reword first.
+- A release without feature content (just install instructions and mapping-file
+  boilerplate) is the failure mode this guards against: notes with nothing in
+  them tell an installer nothing about why they'd want the update.
+- `Co-Authored-By:` and `Claude-Session:` trailers are stripped from the
+  detailed section before publishing — useful in git history, not useful to
+  someone reading a release.
+
 ## Housekeeping
 
 - All commits are signed; the pre-push hook refuses unsigned ones. Never bypass it
