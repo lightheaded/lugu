@@ -42,13 +42,24 @@ import org.junit.runner.RunWith
  *    started for it. That is a headset press in a pocket, and it is not reachable from a
  *    unit test at all.
  *
- * **What this does not do**, said plainly: it does not kill the process. Instrumentation
- * runs inside the process under test, so `am force-stop` on this package would take the
- * test with it, and there is no second process here to issue it from. What is destroyed
- * instead is the playback service, which is what actually goes away when Android reclaims
- * memory — the resolver then runs from Room exactly as it does after a cold start. The
- * whole-process case still has to be done by hand; docs/qa/instrumented.md has the adb
- * recipe.
+ * **What this does not do**, said plainly and more plainly than it used to be said.
+ *
+ * It does not kill the process: instrumentation runs inside the process under test, so
+ * `am force-stop` on this package would take the test with it. `:harness` exists for that,
+ * as its own application id.
+ *
+ * And it does not, it turns out, destroy the service either. The claim here used to be that
+ * `stopService` stands in for Android reclaiming memory. Media3 keeps a
+ * `MediaSessionService` alive while its session is active, and the first CI run that ever
+ * executed this test — it had skipped for want of a server since the day it was written —
+ * came back with the player still holding its position, which a service that had been
+ * through `onCreate` again could not have done.
+ *
+ * So what these two tests actually establish is narrower than their names: that the
+ * position is durable across the session being let go of and picked up again, and that a
+ * media button dispatched through [AudioManager] reaches lugu's session and resumes the
+ * right thing. Both are worth having. Neither is the cold-start case, and the cold-start
+ * case is `:harness`'s.
  *
  * Everything here needs a server, because a position only exists once something has
  * played. With none configured these skip rather than fail. *
@@ -90,9 +101,20 @@ class PlaybackResumptionTest {
         val before = awaitAdvancingPosition()
         stopPlaybackService()
 
-        // A fresh controller starts the service again, with no player and nothing loaded.
+        // No assertion that the player came back empty, and that absence is the point.
+        //
+        // This used to assert `positionOf(resumed) <= 1`, on the reasoning that a destroyed
+        // service builds a fresh ExoPlayer in `onCreate` with nothing loaded — which is true
+        // of the service. What is not true is that `stopService` destroys it: Media3 keeps a
+        // MediaSessionService alive while its session is active, and the first CI run that
+        // ever executed this test came back with 4093ms, meaning the player had never gone
+        // away. The step this test is named after has therefore never actually happened, and
+        // nobody knew because the test skipped for want of a server.
+        //
+        // What is asserted below still holds and is worth having: the position is intact and
+        // playback resumes from it. But the real kill — the process, not the service — is
+        // `:harness`, which runs as its own application id precisely so it can end this one.
         val resumed = connectController()
-        assertThat(positionOf(resumed)).isAtMost(1L)
 
         onMain { resumed.play() }
         awaitPlaying(resumed)
@@ -272,8 +294,14 @@ class PlaybackResumptionTest {
         const val UI_TIMEOUT_MS = 30_000L
         const val PLAYBACK_TIMEOUT_MS = 45_000L
 
-        /** Generous: a first sync mirrors a whole library, and CI's is tiny but cold. */
-        const val SYNC_TIMEOUT_MS = 60_000L
+        /**
+         * Generous, and measured rather than picked. On a cold CI emulator the first mirror
+         * of a two-book library took longer than 60s — the first test in a run timed out at
+         * that and the second, starting later, found the library already there. Why two
+         * books take that long is worth knowing and is in the backlog; it is not this
+         * test's question, so the wait is simply long enough not to be the thing that fails.
+         */
+        const val SYNC_TIMEOUT_MS = 180_000L
         const val CONNECT_TIMEOUT_SEC = 20L
         const val POLL_MS = 250L
         const val SERVICE_TEARDOWN_MS = 2_000L
