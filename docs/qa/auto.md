@@ -51,7 +51,13 @@ else.
 - [ ] **Series** lists series, not books; opening one lists its books in reading order
       (`#2` before `#10`, which is the whole reason the sequence is stored separately)
 - [ ] A podcast opens onto its episodes, newest first
-- [ ] Covers appear on rows. If they do not, the rows are still readable and pressable
+- [ ] **Covers appear on rows**, and on the car's now-playing screen. If they do not, the
+      rows are still readable and pressable — but blank tiles everywhere is a specific
+      failure with a specific cause, not a slow network: the car fetches artwork in its own
+      process, so a cover it cannot authenticate for is a cover it never gets. Artwork is
+      served as `content://` through `CoverProvider` for exactly this reason. Check with
+      `adb shell content read --uri content://io.github.lightheaded.lugu.covers/cover/<itemId>`,
+      which should return image bytes rather than an error
 
 ## Cold start, which is the real test
 

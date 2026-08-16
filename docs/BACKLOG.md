@@ -209,6 +209,14 @@ Reported 15 August. The record now exists; the cause does not.
 | **Nothing tells the UI a start is pending** | The wait is only visible in the notification. A listener with the app open sees nothing until the book begins. Not obviously wrong — the app being open is the case where pressing play is easy — but it is a gap |
 | **The companion observation is re-armed hopefully rather than knowingly** | `startObservingDevicePresence` is re-issued on app start and on boot, because there is no way to ask the system whether an observation is still live. Re-issuing is documented as harmless. If it turns out not to survive something else — a force stop, an update — there is no signal that would say so |
 
+## Left behind by the car covers
+
+| Item | Note |
+|---|---|
+| **A cover is not part of a download** | Everything else about a downloaded book plays in airplane mode; its picture does not, because the cover is never fetched to disk with the audio. `CoverProvider` caches what it has served, so a book looked at once keeps its cover — but a car in a garage with no signal and a cold cache gets blank tiles for books that are fully downloaded, which reads as the offline support being partial. The fix belongs in the download manifest, not in the provider: fetch the cover alongside the first track and serve it from there |
+| **The cover provider is exported, and has to be** | A browse result carries no URI permission grant, so there is no way to hand Android Auto a scoped read. What that opens is small — an app that already knows an Audiobookshelf item id can fetch that item's cover art, and nothing enumerates ids — but it is a surface, and it is only there because the media browser API has no narrower door |
+| **Nothing proves the car actually gets the bytes** | The provider's URI shape and its refusals are unit-tested; that Android Auto resolves a `content://` artwork URI at all is not, and cannot be without a car or the DHU. [qa/auto.md](qa/auto.md) carries the `adb shell content read` check as the closest thing to a proof from the phone side |
+
 ## Known behaviour gaps
 
 | Item | Note |

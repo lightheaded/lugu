@@ -1,10 +1,12 @@
 package io.github.lightheaded.lugu.playback
 
+import android.content.Context
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.toDomain
 import io.github.lightheaded.lugu.core.download.DirectPlay
@@ -49,6 +51,7 @@ data class ResolvedMedia(
 @OptIn(UnstableApi::class)
 @Singleton
 class MediaResolver @Inject constructor(
+    @param:ApplicationContext private val context: Context,
     private val client: AbsClient,
     private val progressRepository: ProgressRepository,
     private val sessionLedgerRepository: SessionLedgerRepository,
@@ -81,7 +84,10 @@ class MediaResolver @Inject constructor(
         val startSec = localProgress?.currentTimeSec ?: session.startTimeSec
 
         val duration = AbsoluteTiming.totalDurationSec(session.tracks, session.durationSec)
-        val coverUrl = runCatching { client.coverUrl(itemId, width = 600) }.getOrNull()
+        // Through lugu's own provider rather than as a server URL: the metadata on a session
+        // is read by other processes — the car's now-playing screen most of all — and none of
+        // them can authenticate to the server. See CoverProvider.
+        val coverUri = CoverProvider.uri(context, itemId, width = COVER_WIDTH)
 
         val episodeKey = episodeKeyOf(episodeId)
         val items = session.tracks.mapIndexed { index, track ->
@@ -97,7 +103,7 @@ class MediaResolver @Inject constructor(
                         .setTitle(session.title)
                         .setArtist(session.author)
                         .setAlbumTitle(session.title)
-                        .setArtworkUri(coverUrl?.let(Uri::parse))
+                        .setArtworkUri(coverUri)
                         .setIsBrowsable(false)
                         .setIsPlayable(true)
                         .build(),
@@ -158,9 +164,10 @@ class MediaResolver @Inject constructor(
             }
         }.getOrDefault(emptyList())
 
-        // The cover is a server URL, so it may not load offline. That is a blank square,
-        // not a failure to play, and Coil serves it from its own cache when it can.
-        val coverUrl = runCatching { client.coverUrl(itemId, width = 600) }.getOrNull()
+        // Covers are not part of a download, so an offline book still needs the server for
+        // its picture. That is a blank square, never a failure to play, and the provider
+        // serves one it has already fetched when it has one.
+        val coverUri = CoverProvider.uri(context, itemId, width = COVER_WIDTH)
 
         val session = PlaybackSessionInfo(
             sessionId = "",
@@ -190,7 +197,7 @@ class MediaResolver @Inject constructor(
                         .setTitle(row.title)
                         .setArtist(row.author)
                         .setAlbumTitle(row.title)
-                        .setArtworkUri(coverUrl?.let(Uri::parse))
+                        .setArtworkUri(coverUri)
                         .setIsBrowsable(false)
                         .setIsPlayable(true)
                         .build(),
@@ -221,6 +228,12 @@ class MediaResolver @Inject constructor(
     }
 
     companion object {
+        /**
+         * Wide enough for a car's now-playing screen, which is the largest place this is
+         * shown; the in-app player asks the server directly and picks its own size.
+         */
+        private const val COVER_WIDTH = 600
+
         /**
          * What the server compares the source codec against to pick direct play. Direct
          * play means byte-range requests and sample-accurate seeking; HLS transcode

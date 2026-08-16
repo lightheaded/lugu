@@ -27,11 +27,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
@@ -344,6 +347,25 @@ class LuguPlaybackService : MediaLibraryService() {
 
         session = MediaLibrarySession.Builder(this, sessionPlayer, LibrarySessionCallback())
             .setSessionActivity(openAppIntent())
+            /*
+             * Stated rather than inherited, because artwork is a `content://` URI now.
+             *
+             * Covers are served by [CoverProvider] so that a car — which fetches artwork in
+             * its own process, with none of lugu's authentication — can show them at all. The
+             * notification's own artwork is loaded in *this* process by whatever loader the
+             * session holds, and a loader that only speaks http would quietly draw nothing.
+             * `DefaultDataSource` handles content, file and http alike, so both ends of the
+             * same URI work. Wrapped in the cache Media3 would have used anyway, so a cover
+             * is decoded once rather than on every notification update.
+             */
+            .setBitmapLoader(
+                CacheBitmapLoader(
+                    DataSourceBitmapLoader(
+                        DataSourceBitmapLoader.DEFAULT_EXECUTOR_SERVICE.get(),
+                        DefaultDataSource.Factory(this),
+                    ),
+                ),
+            )
             .build()
 
         // Being refused a foreground service is one of the ways playback simply does not
@@ -872,7 +894,7 @@ class LuguPlaybackService : MediaLibraryService() {
                     AutoPlayTrigger.AUTO_PLAY_REFUSED,
                     "$deviceName, ${outcome.refusal.reason}",
                 )
-                endAutoPlayWait(stopIfIdle = true)
+                endAutoPlayWait(handingOver = false)
             }
 
             AutoPlayOutcome.Start -> {
@@ -889,7 +911,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 player.play()
                 AutoPlayTrigger.clearCancelled()
                 diary.record(AutoPlayTrigger.AUTO_PLAY_STARTED, playbackDetail(deviceName))
-                endAutoPlayWait(stopIfIdle = false)
+                endAutoPlayWait(handingOver = true)
             }
         }
     }
@@ -927,32 +949,40 @@ class LuguPlaybackService : MediaLibraryService() {
             AutoPlayTrigger.noteCancelled(System.currentTimeMillis())
             diary.record(AutoPlayTrigger.AUTO_PLAY_CANCELLED)
         }
-        endAutoPlayWait(stopIfIdle = true)
+        endAutoPlayWait(handingOver = false)
     }
 
     /**
-     * Takes the waiting notification down and gives the foreground back to Media3.
+     * The end of the wait, whichever way it went.
      *
-     * Order matters and is the whole of this method. Media3 is asked to post first, so that
-     * whatever holds the service in the foreground has already changed hands before the
-     * waiting notification is removed; removing it first would drop the service out of the
-     * foreground for as long as it takes Media3 to notice, and a service that is briefly not
-     * foreground is a service the system may reclaim mid-sentence.
+     * The two ways out want opposite handling, and confusing them is what left the prompt on
+     * screen after "Not now".
      *
-     * Nothing is playing on the refusing path, so nothing is coming to replace the
-     * notification and the whole foreground goes down with it. On the starting path the
-     * removal has to wait for Media3 to actually post — see [retireWaitingNotification].
+     * **A book started.** Something is coming to replace this notification, so the foreground
+     * changes hands before the waiting notification is removed — removing it first would drop
+     * the service out of the foreground for as long as it takes Media3 to notice, and a
+     * service that is briefly not foreground is a service the system may reclaim mid-sentence.
+     * The removal itself has to wait for Media3 to actually post; see
+     * [retireWaitingNotification].
+     *
+     * **Nothing started**, because it was refused or because the listener said no. Then
+     * nothing is coming, and waiting for it would leave a countdown on screen that has already
+     * been answered — so the prompt goes immediately. Media3 is still asked to update, because
+     * a book may be sitting loaded and paused from earlier and is entitled to its own
+     * notification back; and the service only stops if there is nothing left for it to hold.
      */
-    private fun endAutoPlayWait(stopIfIdle: Boolean) {
+    private fun endAutoPlayWait(handingOver: Boolean) {
         autoPlayWaiting = false
-        runCatching { triggerNotificationUpdate() }
-        if (stopIfIdle && player.mediaItemCount == 0 && !player.isPlaying) {
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
-            stopSelf()
+        if (handingOver) {
+            runCatching { triggerNotificationUpdate() }
+            scope.launch { retireWaitingNotification() }
             return
         }
-        scope.launch { retireWaitingNotification() }
+
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
+        runCatching { triggerNotificationUpdate() }
+        if (player.mediaItemCount == 0 && !player.isPlaying) stopSelf()
     }
 
     /**
@@ -991,7 +1021,15 @@ class LuguPlaybackService : MediaLibraryService() {
      * foreground within seconds of being started and this is what puts it there; and a book
      * that is about to start playing by itself should say so before it does, with a way to
      * stop it, rather than after.
+     *
+     * `LaunchActivityFromNotification` is suppressed deliberately. Its advice — a tap should
+     * open a screen, and only the buttons should reach a service — is right for a notification
+     * that represents something ongoing, and wrong for one that asks a single question and
+     * lives for a second. Opening lugu is not an answer to "a book is about to start", and the
+     * feedback the check exists to protect is present either way: the notification disappears
+     * and no book starts.
      */
+    @SuppressLint("LaunchActivityFromNotification")
     private fun postWaitingNotification(
         deviceName: String,
         remainingSec: Int,
@@ -1018,7 +1056,22 @@ class LuguPlaybackService : MediaLibraryService() {
             .setSmallIcon(R.drawable.ic_auto_play_notification)
             .setContentTitle("$deviceName connected")
             .setContentText(text)
-            .setContentIntent(openAppIntent())
+            /*
+             * The whole notification says no, not just the button on it.
+             *
+             * Tapping a notification usually opens the app, and that is the right default
+             * almost everywhere — but this one exists for a second or two and asks exactly
+             * one question. Opening lugu is not an answer to it, and hunting for a button
+             * inside something that is already under your thumb is how the moment gets
+             * missed. The labelled button stays, because a tap target with no label is not
+             * an offer anybody can see.
+             *
+             * Swiping it away means the same thing. Dismissing the prompt and then having
+             * the book start anyway would make the gesture a lie.
+             */
+            .setContentIntent(cancel)
+            .setDeleteIntent(cancel)
+            .setAutoCancel(true)
             .addAction(0, "Not now", cancel)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

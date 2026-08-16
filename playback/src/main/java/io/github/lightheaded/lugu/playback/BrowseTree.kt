@@ -1,5 +1,6 @@
 package io.github.lightheaded.lugu.playback
 
+import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -19,6 +20,7 @@ import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.QueuePrefs
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
@@ -42,6 +44,7 @@ import kotlinx.coroutines.flow.first
  */
 @Singleton
 class BrowseTree @Inject constructor(
+    @param:ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
     private val itemDao: LibraryItemDao,
     private val episodeDao: EpisodeDao,
@@ -93,7 +96,7 @@ class BrowseTree @Inject constructor(
                             author = row.item.authorName,
                             episodeTitle = row.episodeTitle,
                         ),
-                        coverUrl = coverUrl(account, row.item.id),
+                        coverUri = coverUri(row.item.id),
                     )
                 }
 
@@ -104,7 +107,7 @@ class BrowseTree @Inject constructor(
                         node = BrowseNode.Playable(row.libraryItemId, row.episodeKey.ifEmpty { null }),
                         title = row.title.ifBlank { "Not in this library any more" },
                         subtitle = row.author,
-                        coverUrl = coverUrl(account, row.libraryItemId),
+                        coverUri = coverUri(row.libraryItemId),
                     )
                 }
 
@@ -116,7 +119,7 @@ class BrowseTree @Inject constructor(
                         node = BrowseNode.Playable(it.libraryItemId, it.episodeKey.ifEmpty { null }),
                         title = it.title,
                         subtitle = it.author,
-                        coverUrl = coverUrl(account, it.libraryItemId),
+                        coverUri = coverUri(it.libraryItemId),
                     )
                 }
 
@@ -133,7 +136,7 @@ class BrowseTree @Inject constructor(
                 emptyList()
             } else {
                 itemDao.byMediaType(server, user, PODCAST_MEDIA_TYPE)
-                    .map { browsable(BrowseNode.Podcast(it.id), it.title, coverUrl(account, it.id)) }
+                    .map { browsable(BrowseNode.Podcast(it.id), it.title, coverUri(it.id)) }
             }
 
             BrowseNode.LatestEpisodes -> latestEpisodes(account, library)
@@ -284,21 +287,21 @@ class BrowseTree @Inject constructor(
         node = BrowseNode.Playable(id, null),
         title = title,
         subtitle = authorName,
-        coverUrl = coverUrl(account, id),
+        coverUri = coverUri(id),
     )
 
     private fun EpisodeEntity.toMediaItem(itemId: String, account: ActiveAccount): MediaItem = playable(
         node = BrowseNode.Playable(itemId, id),
         title = title,
         subtitle = subtitle,
-        coverUrl = coverUrl(account, itemId),
+        coverUri = coverUri(itemId),
     )
 
     private fun playable(
         node: BrowseNode.Playable,
         title: String,
         subtitle: String?,
-        coverUrl: String?,
+        coverUri: Uri?,
     ): MediaItem = MediaItem.Builder()
         .setMediaId(node.id)
         .setMediaMetadata(
@@ -306,7 +309,7 @@ class BrowseTree @Inject constructor(
                 .setTitle(title)
                 .setSubtitle(subtitle)
                 .setArtist(subtitle)
-                .setArtworkUri(coverUrl?.let(Uri::parse))
+                .setArtworkUri(coverUri)
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
@@ -314,13 +317,13 @@ class BrowseTree @Inject constructor(
         )
         .build()
 
-    private fun browsable(node: BrowseNode, title: String, coverUrl: String? = null): MediaItem =
+    private fun browsable(node: BrowseNode, title: String, coverUri: Uri? = null): MediaItem =
         MediaItem.Builder()
             .setMediaId(node.id)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(title)
-                    .setArtworkUri(coverUrl?.let(Uri::parse))
+                    .setArtworkUri(coverUri)
                     .setIsBrowsable(true)
                     .setIsPlayable(false)
                     .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -341,11 +344,16 @@ class BrowseTree @Inject constructor(
         .build()
 
     /**
-     * Covers are server URLs, which a car may fail to load with no connection. That is a
-     * blank tile, never a missing row — the title carries the meaning.
+     * Covers go out as `content://` rather than as server URLs.
+     *
+     * A car fetches artwork in its own process, which has none of lugu's authentication, so
+     * every one of these used to come back 401 and every tile in the car was blank. Reading
+     * this comes back into lugu instead — see [CoverProvider].
+     *
+     * A cover that still cannot be loaded, because there is no signal and none was cached, is
+     * a blank tile and never a missing row: the title carries the meaning.
      */
-    private fun coverUrl(account: ActiveAccount, itemId: String): String =
-        "${account.baseUrl}/api/items/$itemId/cover?width=400"
+    private fun coverUri(itemId: String): Uri = CoverProvider.uri(context, itemId)
 
     private companion object {
         /** Stored uppercase, from `MediaType.name` — see `LibraryRepository`. */
