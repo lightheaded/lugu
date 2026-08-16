@@ -108,12 +108,43 @@ to differ — debug signing so no keystore is needed, its own application id so 
 beside a debug install, and a test server to reach.
 
 ```sh
-./gradlew connectedMinifiedAndroidTest -Plugu.testMinified
+./gradlew connectedMinifiedAndroidTest -Plugu.testMinified \
+  -Pandroid.testInstrumentationRunnerArguments.annotation=io.github.lightheaded.lugu.BlackBox
 ```
 
 The property switches `testBuildType`; without it instrumented tests run against `debug` as
 before. CI runs one leg this way on API 36, because what it catches is a missing keep rule
 rather than a platform difference.
+
+### Only the black-box tests run there, and that is not a choice
+
+The androidTest APK is compiled separately from the app and loaded into its process, so
+every name it uses has to still exist in the app under that name. On this build type
+lugu's classes are renamed — that is the point — so a test that constructs a `LuguDatabase`
+or parses a `BrowseNode` cannot resolve it and dies before asserting anything. Those tests
+run on `debug`, where nothing is renamed, which is the right place for them.
+
+`@BlackBox` marks the ones that treat lugu as a black box; CI selects on the annotation.
+Today that is `LaunchSmokeTest`, which is a small set and the right one: it launches the
+app, so it exercises Hilt's graph, WorkManager's initialiser and the whole startup path
+under R8.
+
+### What this leg proves, and what it does not
+
+**Proves:** lugu's own code survives R8. That is where the risk named in the backlog lives —
+Room's generated DAOs, Hilt's components, reflectively resolved serializers and a media
+service the system binds by name are all lugu's classes.
+
+**Does not prove:** that shrinking third-party libraries is safe. `proguard-minified-rules.pro`
+keeps everything outside lugu's package, because the test APK references those names and R8
+was removing them one at a time — `androidx.tracing.Trace` first, which killed the
+instrumentation process before a single test loaded, then `kotlin.Lazy`, then Media3's
+`MediaBrowser`, then Compose's `InfiniteAnimationPolicy`. Chasing that list is unbounded.
+Release still shrinks libraries and nothing here checks it; that gap is the price of
+instrumenting a minified build at all, and it is better written down than forgotten.
+
+None of those rules reach release. Verified on the built APKs: the release APK still has
+`androidx.tracing.Trace` stripped and `CoverStore` renamed.
 
 `lugu.test.playQuery` is the title the playback tests ask the library for. It is separate
 from the credentials on purpose: having a server is not the same as agreeing that a test may
