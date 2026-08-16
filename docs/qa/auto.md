@@ -51,6 +51,9 @@ else.
 - [ ] **Series** lists series, not books; opening one lists its books in reading order
       (`#2` before `#10`, which is the whole reason the sequence is stored separately)
 - [ ] A podcast opens onto its episodes, newest first
+- [ ] **A book started from the car plays at its remembered speed.** Set one to 1.5x on the
+      phone, force-stop lugu, then start it from the car: a car hands back an id and nothing
+      else, so the speed is applied where the session is rebuilt. At 1x, that is this path
 - [ ] **Covers appear on rows**, and on the car's now-playing screen. If they do not, the
       rows are still readable and pressable — but blank tiles everywhere is a specific
       failure with a specific cause, not a slow network: the car fetches artwork in its own
@@ -68,6 +71,15 @@ a garage with no signal. This is the case that matters.
       the tree fills without the app being opened on the phone
 - [ ] Repeat with the phone in airplane mode: the tree is identical, because it is served
       from Room
+- [ ] **In airplane mode, a downloaded book still shows its cover.** This is the check that
+      says the picture travelled with the audio. Set it up properly or it proves nothing:
+      download a book, then clear the app's *cache* (Settings → Apps → lugu → Storage →
+      Clear cache, which empties the provider's own cache but not the stored covers), then
+      airplane mode, then force-stop, then open lugu in the DHU. The downloaded book keeps
+      its cover; a book that was never downloaded shows a blank tile, which is expected and
+      is the remaining gap
+- [ ] Delete that download and look again: the tile goes blank, because the cover is kept
+      only for as long as the download is
 - [ ] Repeat with the phone locked and the screen off throughout
 
 ## Playing

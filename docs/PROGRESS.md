@@ -1163,3 +1163,62 @@ notification and wrong for a prompt, and the suppression says so.
 Covers still are not part of a download, so a car with no signal and a cold cache gets blank
 tiles for books that are fully on the phone. That is in the backlog and is the one place the
 offline claim is currently thinner than it reads.
+
+## 2026-08-16 — the picture goes with the audio, and a door out
+
+Three things, all of them gaps between what lugu claims and what it does.
+
+### A download now includes the cover
+
+Everything else about a downloaded book worked in a tunnel; its picture did not. The audio was
+on the phone and the artwork was never fetched to disk with it, so a fully downloaded book in a
+garage showed an empty square — worst in the car, where the tile *is* how a book is picked at a
+glance.
+
+`CoverStore` fetches the cover when a download is queued and holds it in `filesDir`, not
+`cacheDir`: a cache may be reclaimed at any moment, and the one moment that matters is the one
+with no network to re-fetch from. It is written when the download is and dropped when the last
+download for that item goes, so nothing has to expire it — a podcast with a dozen episodes has
+one cover, and deleting the eleventh episode leaves it alone. Startup sweeps orphans, which is
+the honest way to catch a sign-out rather than hanging a delete off every path that might be
+one.
+
+Two readers, both already existing. `CoverProvider` answers from the store before it considers
+the network, which is what fixes the car. The phone's own screens go through a Coil
+interceptor: every screen already passes a cover URL, so recovering the item id from that URL
+and swapping in the file is one place instead of six view models each doing a disk check on the
+main thread.
+
+Tightening fell out of it. The provider is exported, so the item id in a `content://` URI is
+whatever another process wrote — and it becomes part of a file name. A segment of `..` would
+have named a file outside the cache directory. `CoverId` now says what an id is, both callers
+ask it, and the awkward cases are settled in a unit test.
+
+### A book that starts by itself starts at its own speed
+
+`applyRememberedSpeed` existed and one path called it. The other two did not: a headset press
+through `onPlaybackResumption`, and a car handing back an id through `onSetMediaItems`. Both
+came up at whatever speed the player held, which on a fresh service is 1x — so a 1.5x book
+played at 1x for whoever was not looking at the screen. All three call it now, before the items
+are handed back, since playback parameters belong to the player rather than to an item and
+survive the list being replaced. Doing it afterwards would mean a word or two at the wrong
+speed.
+
+### Somewhere to go for what lugu cannot do yet
+
+Until there is parity, hiding the client that *can* do the rest is the worse of the two
+options. Settings offers the server's web client, and a book's page links to its own page
+there.
+
+The caveat is the whole feature, so it is stated before the link is followed rather than
+discovered after: a browser has its own cookies, and — the part that is neither obvious nor
+recoverable — lugu's custom proxy headers and client certificate cannot be handed to another
+app. For a server behind an identity-aware proxy the browser is turned away before it reaches
+Audiobookshelf at all, and the refusal comes from the proxy, in the proxy's words, which will
+not mention lugu. The row says so when either is configured.
+
+### Next
+
+The device pass on a signed release build, which now gates more than it did: whether the extra
+second before playback is needed, whether "Not now" is redundant, and whether the car actually
+draws a downloaded cover with the network off.

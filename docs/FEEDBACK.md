@@ -589,9 +589,11 @@ back into lugu, where the authentication is. The session's bitmap loader had to 
 explicitly as well — the notification loads its own artwork in-process, and a loader that
 only speaks http would have drawn nothing while the car drew everything.
 
-The one thing this does not fix: **covers are not part of a download**, so a car in a garage
-with no signal still gets blank tiles for anything whose cover has not been fetched before.
-The provider caches what it fetches, which covers the ordinary case. In the backlog.
+The one thing this did not fix at the time: **covers were not part of a download**, so a car
+in a garage with no signal still got blank tiles for books that were entirely on the phone.
+Since closed — a download now stores its cover beside its audio, and both the car and the
+phone's own screens read it before they consider the network. What is left is an item that
+was never downloaded *and* never looked at, which has no picture anywhere to show.
 
 **"Not now" left the notification on screen.** A second bug in the same area as the one fixed
 earlier that day, with a different cause: the prompt was only taken down when the player had
@@ -605,6 +607,26 @@ right default nearly everywhere — but this one lives for a second and asks a s
 and opening lugu is not an answer to it. The whole notification now says no. Swiping it away
 does too, because dismissing a prompt and then having the book start anyway would make the
 gesture a lie. The labelled button stays: a tap target nobody can see is not an offer.
+
+## A way out to the web client
+
+> *I think we need a passthrough "go to web client" until we have feature parity.*
+
+Taken as asked. Hiding the client that can do the rest, while lugu cannot, is the worse of
+the two options — a missing feature should mean a detour rather than a dead end.
+
+Settings offers the server's own web client under the account, and a book's page links to
+that book's page there. The route was read from the Audiobookshelf source rather than
+guessed, because a wrong link is the kind that fails quietly: it opens a browser on a page
+that is not there and reports nothing back.
+
+The caveat is stated before the link is followed, not discovered after it. A browser has its
+own cookies, so a first visit may land on the login page — annoying, but obvious and
+recoverable. The two that are neither are **lugu's custom proxy headers and its client
+certificate**: both live in this app and cannot be handed to another one, so for a server
+behind an identity-aware proxy the browser is turned away before it ever reaches
+Audiobookshelf, and the refusal comes from the proxy, in the proxy's words, which will not
+mention lugu. The row says so whenever either is configured.
 
 ## Earlier findings
 
