@@ -21,12 +21,15 @@ import io.github.lightheaded.lugu.core.download.DownloadScheduler
 import io.github.lightheaded.lugu.core.sync.Realtime
 import io.github.lightheaded.lugu.core.sync.RealtimeSync
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
+import io.github.lightheaded.lugu.playback.CompanionDevices
 import io.github.lightheaded.lugu.playback.PlaybackConnection
 import io.github.lightheaded.lugu.playback.PlaybackStateHolder
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
@@ -59,6 +62,10 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
      * connected and no service is started unless somebody asked for that behaviour.
      */
     @Inject lateinit var playback: PlaybackConnection
+
+    @Inject lateinit var playbackPrefs: PlaybackPrefs
+
+    @Inject lateinit var companionDevices: CompanionDevices
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -98,6 +105,19 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
         // so the Sentry dependency stays inside :app.
         scope.launch {
             crashReportingPrefs.enabled.collect { crashReporting.applyConsent(it) }
+        }
+
+        // Asks the system, again, to be told when the chosen devices turn up. An
+        // observation is a request this process made, and there is no guarantee it
+        // survived whatever ended the last one — a restart, a system update, the app
+        // being force stopped. Re-asking costs a few milliseconds and removes the
+        // failure mode where the feature works until something invisible happens and
+        // then never works again.
+        scope.launch {
+            runCatching {
+                val devices = playbackPrefs.settings.first().autoPlay
+                if (devices.armed) companionDevices.observe(devices.devices)
+            }
         }
 
         // Live updates from the server. Everything they do is also done by the periodic

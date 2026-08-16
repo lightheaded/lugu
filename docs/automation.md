@@ -137,6 +137,23 @@ In Tasker, the same sleep timer as a task:
 Leave *Mime Type*, *Data* and *Category* empty. Then give the task whatever profile you
 like — a time, a Bluetooth device, an NFC tag.
 
+## Starting a book when a device connects is built in
+
+If the routine you are writing is *"when my headset connects, wait a few seconds, then
+play"*, do not write it. Settings → Headphones and car → **Start playing when a device
+connects** does exactly that, and does it in the one way an automation app cannot.
+
+The obstacle is the last bullet below. An app in the background is not allowed to start a
+playback service, and neither a Tasker broadcast nor lugu's own receiver is on the list of
+exemptions — so a `PLAY` sent to a lugu that has been closed for hours may simply be
+refused, silently, and the refusal is not the routine's fault or fixable from it. The
+built-in version goes through a companion-device association, which *is* exempt, and which
+is also why it can start a book with the app closed and the process dead.
+
+It also does the things a routine would have to be told about individually: it refuses over
+a call and over another app's audio, checks the headset is really there when the wait ends,
+and offers a way to say no. See [qa/autoplay.md](qa/autoplay.md).
+
 ## Things worth knowing
 
 - `PLAY` resumes what is already loaded. If nothing is, it has nothing to resume; use

@@ -8,8 +8,11 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.lightheaded.lugu.core.model.AutoPlay
+import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 import javax.inject.Inject
@@ -143,6 +146,40 @@ class PlaybackPrefs @Inject constructor(
 
     suspend fun setResumeInCar(enabled: Boolean) {
         store.edit { it[RESUME_CAR] = enabled }
+    }
+
+    suspend fun setAutoPlayEnabled(enabled: Boolean) {
+        store.edit { it[AUTO_PLAY_ENABLED] = enabled }
+    }
+
+    suspend fun setAutoPlayWaitSec(seconds: Int) {
+        store.edit { it[AUTO_PLAY_WAIT] = seconds.coerceIn(0, AutoPlay.MAX_WAIT_SEC) }
+    }
+
+    /**
+     * Adds a device, or renames one already there.
+     *
+     * Keyed on the device rather than appended, so associating the same headphones twice —
+     * which the system picker allows, and which happens after a device is forgotten and
+     * chosen again — leaves one row rather than two that cannot be told apart.
+     */
+    suspend fun addAutoPlayDevice(device: AutoPlayDevice) {
+        store.edit { prefs ->
+            val kept = prefs[AUTO_PLAY_DEVICES].orEmpty()
+                .mapNotNull(AutoPlay::decode)
+                .filterNot { it.key == device.key }
+            prefs[AUTO_PLAY_DEVICES] = (kept + device).map(AutoPlay::encode).toSet()
+        }
+    }
+
+    suspend fun removeAutoPlayDevice(key: String) {
+        store.edit { prefs ->
+            prefs[AUTO_PLAY_DEVICES] = prefs[AUTO_PLAY_DEVICES].orEmpty()
+                .mapNotNull(AutoPlay::decode)
+                .filterNot { it.key == key }
+                .map(AutoPlay::encode)
+                .toSet()
+        }
     }
 
     suspend fun setSpeedPresets(presets: List<Float>) {
@@ -307,6 +344,15 @@ class PlaybackPrefs @Inject constructor(
             resumeOnHeadphones = this[RESUME_HEADPHONES] ?: DEFAULTS.route.resumeOnHeadphones,
             resumeInCar = this[RESUME_CAR] ?: DEFAULTS.route.resumeInCar,
         ),
+        autoPlay = AutoPlaySettings(
+            enabled = this[AUTO_PLAY_ENABLED] ?: DEFAULTS.autoPlay.enabled,
+            waitSec = this[AUTO_PLAY_WAIT] ?: DEFAULTS.autoPlay.waitSec,
+            // Sorted by name so the settings list does not reorder itself between visits:
+            // a preference set has no order of its own.
+            devices = this[AUTO_PLAY_DEVICES].orEmpty()
+                .mapNotNull(AutoPlay::decode)
+                .sortedBy { it.name.lowercase() },
+        ),
         skip = SkipSettings(
             defaultTrim = PodcastTrim(
                 introSec = this[TRIM_INTRO] ?: DEFAULTS.skip.defaultTrim.introSec,
@@ -380,5 +426,8 @@ class PlaybackPrefs @Inject constructor(
         val ANNOUNCE_SKIPS = booleanPreferencesKey("announce_skips")
         val BUFFER_AHEAD = intPreferencesKey("buffer_ahead_minutes")
         val RETAIN_STREAMED = intPreferencesKey("retain_streamed_mb")
+        val AUTO_PLAY_ENABLED = booleanPreferencesKey("auto_play_enabled")
+        val AUTO_PLAY_WAIT = intPreferencesKey("auto_play_wait_sec")
+        val AUTO_PLAY_DEVICES = stringSetPreferencesKey("auto_play_devices")
     }
 }

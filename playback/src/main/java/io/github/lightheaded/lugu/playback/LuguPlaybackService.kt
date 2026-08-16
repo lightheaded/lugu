@@ -1,13 +1,20 @@
 package io.github.lightheaded.lugu.playback
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.os.Build
 import android.view.KeyEvent
 import androidx.annotation.OptIn
+import androidx.core.app.NotificationChannelCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -33,6 +40,9 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.download.DownloadCache
+import io.github.lightheaded.lugu.core.model.AutoPlay
+import io.github.lightheaded.lugu.core.model.AutoPlayConditions
+import io.github.lightheaded.lugu.core.model.AutoPlayOutcome
 import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.model.MediaButton
 import io.github.lightheaded.lugu.core.model.MediaButtonClassifier
@@ -56,6 +66,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -225,6 +236,31 @@ class LuguPlaybackService : MediaLibraryService() {
 
     /** The arming in flight, so a second request does not start a second resolution. */
     private var armingJob: Job? = null
+
+    /**
+     * The wait between a chosen device connecting and the book starting, or null when there
+     * is none in flight.
+     *
+     * One at a time: connecting a headset produces several events seconds apart, and each of
+     * them starts this service again. The second and third find a wait already running and
+     * leave it alone rather than restarting the countdown, which would otherwise make the
+     * wait longer every time the hardware felt chatty.
+     */
+    private var autoPlayJob: Job? = null
+
+    /**
+     * Whether the waiting notification is the one holding the service in the foreground.
+     *
+     * Read by [onUpdateNotificationAsync], which is Media3's decision rather than ours: while
+     * a start is pending there is nothing playing, so without this the framework would let
+     * the foreground go in the middle of the wait and the system would be free to reclaim the
+     * process before the book ever started.
+     */
+    private var autoPlayWaiting = false
+
+    /** What the pending start is for, and how much of its wait is left. */
+    private var autoPlayDeviceName = AutoPlay.UNNAMED
+    private var autoPlayRemainingSec = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -651,6 +687,289 @@ class LuguPlaybackService : MediaLibraryService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
+    /**
+     * A chosen device connected, or the listener said not now.
+     *
+     * Media3 owns every other reason this service is started — media buttons, controllers
+     * binding — so anything not ours goes straight to it untouched.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        when (intent?.action) {
+            AutoPlayTrigger.ACTION_AUTO_PLAY -> {
+                beginAutoPlay(
+                    deviceName = intent.getStringExtra(AutoPlayTrigger.EXTRA_DEVICE_NAME)
+                        ?.takeIf { it.isNotBlank() } ?: AutoPlay.UNNAMED,
+                    waitSec = intent.getIntExtra(
+                        AutoPlayTrigger.EXTRA_WAIT_SEC,
+                        AutoPlay.DEFAULT_WAIT_SEC,
+                    ),
+                )
+                START_NOT_STICKY
+            }
+
+            AutoPlayTrigger.ACTION_CANCEL_AUTO_PLAY -> {
+                cancelAutoPlay()
+                START_NOT_STICKY
+            }
+
+            else -> super.onStartCommand(intent, flags, startId)
+        }
+
+    /**
+     * Waits, then starts the last thing played.
+     *
+     * The foreground notification goes up first and before anything else can fail, because
+     * the service was started with `startForegroundService` and the system gives only a few
+     * seconds to make good on that — including on the paths that end in refusing. Everything
+     * afterwards is free to take as long as it takes or to decide against playing at all.
+     *
+     * Resolving what to play happens during the wait; loading it into the player does not.
+     * That split is deliberate: the slow part — reading the last position, asking the server
+     * for a play session — is overlapped with the countdown, while the part that would make
+     * Media3 post a notification of its own is left until the moment of playing, so there is
+     * one notification on screen throughout rather than two arguing about it.
+     */
+    private fun beginAutoPlay(deviceName: String, waitSec: Int) {
+        autoPlayWaiting = true
+
+        // A second event from the same connection — the link, then the audio profile, then
+        // sometimes the call profile, seconds apart. Each of them starts this service again
+        // and each has to be answered with a foreground notification, but the countdown
+        // already running is the right one: restarting it would push the start further away
+        // every time the hardware felt talkative.
+        if (autoPlayJob?.isActive == true) {
+            postWaitingNotification(autoPlayDeviceName, autoPlayRemainingSec)
+            return
+        }
+
+        autoPlayDeviceName = deviceName
+        autoPlayRemainingSec = waitSec.coerceIn(0, AutoPlay.MAX_WAIT_SEC)
+        postWaitingNotification(deviceName, autoPlayRemainingSec)
+
+        autoPlayJob = scope.launch {
+            val resolving = async { resolveForAutoPlay() }
+            while (autoPlayRemainingSec > 0) {
+                delay(1_000)
+                autoPlayRemainingSec--
+                if (autoPlayRemainingSec > 0) {
+                    postWaitingNotification(deviceName, autoPlayRemainingSec)
+                }
+            }
+            finishAutoPlay(deviceName, resolving.await())
+        }
+    }
+
+    /**
+     * What to play, or null when there is nothing.
+     *
+     * Nothing is loaded into the player here. A player that already has something in it is
+     * left alone and reported as ready: the listener may have armed a book, or a controller
+     * may have loaded one while the wait was running, and either is a better answer than
+     * whatever was last played.
+     */
+    private suspend fun resolveForAutoPlay(): Resumption? {
+        if (player.mediaItemCount > 0) return null
+        return withContext(Dispatchers.IO) {
+            runCatching { resumptionResolver.resolveLastPlayed() }.getOrNull()
+        }
+    }
+
+    /**
+     * The wait is over. Everything that could have changed during it is asked again.
+     *
+     * The checks are [AutoPlay.decide]'s rather than this method's, so the rule about what
+     * may interrupt a start is written once and can be read without a device.
+     */
+    private suspend fun finishAutoPlay(deviceName: String, resolved: Resumption?) {
+        val alreadyLoaded = player.mediaItemCount > 0
+        val outcome = AutoPlay.decide(
+            AutoPlayConditions(
+                deviceStillConnected = hasListenableOutput(),
+                someoneElseHasTheAudio = someoneElseHasTheAudio(),
+                onACall = onACall(),
+                hasSomethingToPlay = alreadyLoaded || resolved != null,
+            ),
+        )
+
+        when (outcome) {
+            is AutoPlayOutcome.Refuse -> {
+                diary.record(
+                    AutoPlayTrigger.AUTO_PLAY_REFUSED,
+                    "$deviceName, ${outcome.refusal.reason}",
+                )
+                endAutoPlayWait(stopIfIdle = true)
+            }
+
+            AutoPlayOutcome.Start -> {
+                if (resolved != null && !alreadyLoaded) {
+                    stateHolder.set(resolved.nowPlaying)
+                    player.setMediaItems(
+                        resolved.mediaItems,
+                        resolved.startTrackIndex,
+                        resolved.startPositionMs,
+                    )
+                    applyRememberedSpeed(resolved.nowPlaying)
+                }
+                if (player.playbackState == Player.STATE_IDLE) player.prepare()
+                player.play()
+                AutoPlayTrigger.clearCancelled()
+                diary.record(AutoPlayTrigger.AUTO_PLAY_STARTED, playbackDetail(deviceName))
+                endAutoPlayWait(stopIfIdle = false)
+            }
+        }
+    }
+
+    /**
+     * The speed this item was last listened at.
+     *
+     * Applied here because nothing else on this path does it. A book loaded through
+     * `PlaybackConnection.play` gets its speed from the same store, but one loaded straight
+     * into the player — by this, or by a headset press through `onPlaybackResumption` — comes
+     * up at whatever speed the player happens to hold, which on a fresh service is 1x. A book
+     * that starts by itself at the wrong speed is a worse first impression than one that does
+     * not start at all. The resumption path has the same gap and is recorded in the backlog.
+     */
+    private suspend fun applyRememberedSpeed(nowPlaying: NowPlaying) {
+        val type = if (nowPlaying.episodeId != null) MediaType.PODCAST else MediaType.BOOK
+        val speed = withContext(Dispatchers.IO) {
+            runCatching { playbackPrefs.speedFor(nowPlaying.libraryItemId, type) }.getOrNull()
+        } ?: return
+        player.setPlaybackSpeed(speed)
+    }
+
+    /**
+     * "Not now", from the notification.
+     *
+     * The refusal is remembered for a minute, in [AutoPlayTrigger], because the events from
+     * one connection arrive over several seconds and the next of them would otherwise start
+     * the wait again — which reads, from the outside, as a cancel button that does not work.
+     */
+    private fun cancelAutoPlay() {
+        val wasWaiting = autoPlayJob?.isActive == true || autoPlayWaiting
+        autoPlayJob?.cancel()
+        autoPlayJob = null
+        if (wasWaiting) {
+            AutoPlayTrigger.noteCancelled(System.currentTimeMillis())
+            diary.record(AutoPlayTrigger.AUTO_PLAY_CANCELLED)
+        }
+        endAutoPlayWait(stopIfIdle = true)
+    }
+
+    /**
+     * Takes the waiting notification down and gives the foreground back to Media3.
+     *
+     * Order matters and is the whole of this method. Media3 is asked to post first, so that
+     * whatever holds the service in the foreground has already changed hands before the
+     * waiting notification is removed; removing it first would drop the service out of the
+     * foreground for as long as it takes Media3 to notice, and a service that is briefly not
+     * foreground is a service the system may reclaim mid-sentence.
+     */
+    private fun endAutoPlayWait(stopIfIdle: Boolean) {
+        autoPlayWaiting = false
+        runCatching { triggerNotificationUpdate() }
+        NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
+        if (stopIfIdle && player.mediaItemCount == 0 && !player.isPlaying) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    /**
+     * The notification shown while a start is pending.
+     *
+     * It exists for two reasons that are both about honesty. The service has to be in the
+     * foreground within seconds of being started and this is what puts it there; and a book
+     * that is about to start playing by itself should say so before it does, with a way to
+     * stop it, rather than after.
+     */
+    private fun postWaitingNotification(deviceName: String, remainingSec: Int) {
+        ensureAutoPlayChannel()
+        val text = when {
+            remainingSec <= 0 -> "Starting now"
+            remainingSec == 1 -> "Starting in a second"
+            else -> "Starting in $remainingSec seconds"
+        }
+        val cancel = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, LuguPlaybackService::class.java)
+                .setAction(AutoPlayTrigger.ACTION_CANCEL_AUTO_PLAY),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val notification = NotificationCompat.Builder(this, AUTO_PLAY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_auto_play_notification)
+            .setContentTitle("$deviceName connected")
+            .setContentText(text)
+            .setContentIntent(openAppIntent())
+            .addAction(0, "Not now", cancel)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            // The countdown updates every second and none of those updates is news.
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setOngoing(true)
+            .build()
+
+        // The type constant arrived in Android 10 but is compiled in rather than looked up,
+        // and ServiceCompat drops it on the versions that predate typed services — so this
+        // is correct at every level this app runs at.
+        @SuppressLint("InlinedApi")
+        ServiceCompat.startForeground(
+            this,
+            AUTO_PLAY_NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+        )
+    }
+
+    /**
+     * A channel of its own rather than the player's.
+     *
+     * These are the only notifications lugu posts that nobody asked for at the moment they
+     * appear, so they are the only ones somebody might reasonably want to silence without
+     * silencing the player. Separating them is what makes that possible.
+     */
+    private fun ensureAutoPlayChannel() {
+        val channel = NotificationChannelCompat.Builder(
+            AUTO_PLAY_CHANNEL_ID,
+            NotificationManagerCompat.IMPORTANCE_LOW,
+        )
+            .setName("Starting playback")
+            .setDescription("Shown for a few seconds when a book is about to start by itself")
+            .build()
+        NotificationManagerCompat.from(this).createNotificationChannel(channel)
+    }
+
+    /** Whether anything worth playing to is attached — headphones, a car, a cable. */
+    private fun hasListenableOutput(): Boolean {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return true
+        val carMode = isCarMode()
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+            AudioRoutes.classify(it.type, carMode) != AudioRouteClass.OTHER
+        }
+    }
+
+    /**
+     * Whether the audio belongs to something else.
+     *
+     * Nothing of ours is playing at this point — the wait has only just ended — so anything
+     * `isMusicActive` reports is another app, and taking the audio from it would be exactly
+     * the behaviour that makes people uninstall a media app.
+     */
+    private fun someoneElseHasTheAudio(): Boolean {
+        if (player.isPlaying) return false
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        return audioManager.isMusicActive
+    }
+
+    private fun onACall(): Boolean {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        return audioManager.mode == AudioManager.MODE_IN_CALL ||
+            audioManager.mode == AudioManager.MODE_IN_COMMUNICATION ||
+            audioManager.mode == AudioManager.MODE_RINGTONE
+    }
+
     /** The player's state as [PersistencePolicy] understands it. */
     private fun phase(): PlaybackPhase = when {
         player.mediaItemCount == 0 -> PlaybackPhase.EMPTY
@@ -697,7 +1016,13 @@ class LuguPlaybackService : MediaLibraryService() {
                 playbackDetail(if (held) "held through the pause" else "let go"),
             )
         }
-        return super.onUpdateNotificationAsync(session, startInForegroundRequired || held)
+        // The auto-play wait is added here rather than folded into the policy above, because
+        // it is not a persistence decision: nothing has played, nothing is paused, and the
+        // hold lasts seconds rather than until the listener comes back.
+        return super.onUpdateNotificationAsync(
+            session,
+            startInForegroundRequired || held || autoPlayWaiting,
+        )
     }
 
     /**
@@ -1856,6 +2181,7 @@ class LuguPlaybackService : MediaLibraryService() {
         diary.record(PlaybackEvent.SERVICE_DESTROYED, playbackDetail("was playing: ${player.isPlaying}"))
 
         persistPosition(reason = "destroy")
+        autoPlayJob?.cancel()
         retryJob?.cancel()
         shakeDetector?.stop()
         shakeListeningAt = null
@@ -1875,6 +2201,16 @@ class LuguPlaybackService : MediaLibraryService() {
     private companion object {
         const val TICK_MS = 5_000L
         const val SLEEP_TICK_MS = 500L
+
+        /**
+         * The waiting notification's own id and channel.
+         *
+         * Deliberately not Media3's. Sharing them would mean one notification that morphs
+         * from the countdown into the player, which sounds tidier until Media3 posts an
+         * update of its own mid-wait and silently takes the cancel button away with it.
+         */
+        const val AUTO_PLAY_NOTIFICATION_ID = 1002
+        const val AUTO_PLAY_CHANNEL_ID = "lugu_auto_play"
 
         /** How long after a disconnect a reconnection still means "carry on". */
         const val ROUTE_RESUME_WINDOW_MS = 30 * 60 * 1_000L

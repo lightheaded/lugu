@@ -1,9 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      Starting a book when a chosen device connects. All four of these are normal
+      permissions with no prompt, and none of them is the Bluetooth one: see
+      CompanionDevices for why the companion-device association is the only way to do
+      this on Android 12 and later, and why asking for BLUETOOTH_CONNECT would be both
+      alarming and, on its own, insufficient.
+
+      The two companion permissions are what make the feature possible rather than
+      merely convenient. Associating grants them, and they are what allows a process
+      the system started on lugu's behalf to put a playback service in the foreground —
+      which an app in the background may otherwise not do.
+    -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+      Android 11 and earlier only, where this is a normal permission and the connection
+      broadcast is still both readable and allowed to start playback. From Android 12 the
+      association above replaces it entirely.
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
     <!--
       For the connectivity callback that brings a streamed book back when the network
       does. Declared here as well as in the app so this module carries its own
@@ -28,5 +57,42 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!--
+          Bound by the system when an associated device turns up, which is what lets a
+          book start with the app closed and the process dead. The permission is the
+          system's own: only the platform may bind this, so nothing else on the device
+          can use it as a way to start playback.
+        -->
+        <service
+            android:name=".AutoPlayCompanionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            tools:targetApi="s">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          The Android 11 and earlier path. One of the handful of implicit broadcasts still
+          delivered to a manifest receiver, which is what allows it to start a process that
+          is not running. The receiver returns immediately on later versions.
+        -->
+        <receiver
+            android:name=".BluetoothConnectionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".AutoPlayBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -1,5 +1,10 @@
 package io.github.lightheaded.lugu.feature.settings
 
+import android.app.Activity
+import android.content.IntentSender
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -33,12 +39,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.model.AutoPlay
+import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 import io.github.lightheaded.lugu.core.model.formatSpeed
@@ -53,6 +67,7 @@ import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Settings, grouped by what the listener is trying to change rather than by which
@@ -670,6 +685,67 @@ private fun settingEntries(
             },
         )
 
+        if (viewModel.autoPlaySupported) {
+            add(
+                SettingEntry(
+                    id = "auto-play",
+                    category = "Headphones and car",
+                    title = "Start playing when a device connects",
+                    keywords = "auto play automatic start headphones bluetooth connect resume " +
+                        "tasker automation begin",
+                ) {
+                    SwitchRow(
+                        title = "Start playing when a device connects",
+                        subtitle = "Picks up the last thing you were listening to, even with " +
+                            "the app closed. Only for the devices you choose below",
+                        checked = settings.autoPlay.enabled,
+                        onChange = viewModel::setAutoPlayEnabled,
+                    )
+                },
+            )
+            add(
+                SettingEntry(
+                    id = "auto-play-devices",
+                    category = "Headphones and car",
+                    title = "Devices that start a book",
+                    keywords = "device headphones earbuds car choose pick add remove pair " +
+                        "bluetooth which auto play",
+                ) {
+                    AutoPlayDevices(
+                        devices = settings.autoPlay.devices,
+                        usesSystemPicker = viewModel.usesSystemDevicePicker,
+                        message = state.autoPlayMessage,
+                        pending = viewModel.devicePicker,
+                        onChoose = viewModel::chooseAutoPlayDevice,
+                        onPickerLaunched = viewModel::devicePickerLaunched,
+                        onPicked = viewModel::onDevicePicked,
+                        pairedDevices = viewModel::pairedDevices,
+                        onAdd = viewModel::addAutoPlayDevice,
+                        onRemove = viewModel::removeAutoPlayDevice,
+                        onDismissMessage = viewModel::dismissAutoPlayMessage,
+                    )
+                },
+            )
+            add(
+                SettingEntry(
+                    id = "auto-play-wait",
+                    category = "Headphones and car",
+                    title = "How long to wait first",
+                    keywords = "wait delay seconds auto play start pause before begin",
+                ) {
+                    ChoiceRow(
+                        title = "How long to wait first",
+                        subtitle = "Headphones take a moment to be ready. Start too soon and " +
+                            "the first words go to the phone's speaker",
+                        options = AutoPlay.WAIT_CHOICES_SEC,
+                        selected = settings.autoPlay.waitSec,
+                        format = { if (it == 0) "None" else "$it s" },
+                        onSelect = viewModel::setAutoPlayWaitSec,
+                    )
+                },
+            )
+        }
+
         add(
             SettingEntry(
                 id = "library-media-types",
@@ -1066,6 +1142,16 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "version",
+                category = "About",
+                title = "Version",
+                keywords = "version build number release which update installed about",
+            ) {
+                InfoRow(title = "Version", value = installedVersion())
+            },
+        )
+        add(
+            SettingEntry(
                 id = "licenses",
                 category = "About",
                 title = "Open source licenses",
@@ -1351,6 +1437,173 @@ private fun PresetEditor(presets: List<Float>, onAdd: (Float) -> Unit, onRemove:
                 )
             }
         }
+    }
+}
+
+/**
+ * The devices a connection from which starts a book.
+ *
+ * Two ways of choosing one, decided by what the phone supports rather than by a preference.
+ * On Android 12 and later the system shows its own picker — lugu never sees the other
+ * devices, and no Bluetooth permission is asked for. Before that there is no such picker, so
+ * the paired devices are listed here instead, which is free on those versions.
+ *
+ * The device has to be switched on and in range for the system picker to offer it, and that
+ * is said on screen rather than left to be discovered: "my headphones are not in the list"
+ * otherwise looks exactly like a broken feature.
+ */
+@Composable
+private fun AutoPlayDevices(
+    devices: List<AutoPlayDevice>,
+    usesSystemPicker: Boolean,
+    message: String?,
+    pending: StateFlow<IntentSender?>,
+    onChoose: () -> Unit,
+    onPickerLaunched: () -> Unit,
+    onPicked: () -> Unit,
+    pairedDevices: () -> List<AutoPlayDevice>,
+    onAdd: (AutoPlayDevice) -> Unit,
+    onRemove: (AutoPlayDevice) -> Unit,
+    onDismissMessage: () -> Unit,
+) {
+    val picker by pending.collectAsStateWithLifecycle()
+    var showPaired by remember { mutableStateOf(false) }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) onPicked()
+    }
+
+    LaunchedEffect(picker) {
+        picker?.let {
+            runCatching { launcher.launch(IntentSenderRequest.Builder(it).build()) }
+            onPickerLaunched()
+        }
+    }
+
+    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Text("Devices that start a book", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            if (devices.isEmpty()) {
+                "Nothing chosen yet, so nothing starts by itself"
+            } else {
+                "Only these. Any other device connecting is ignored"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        devices.forEach { device ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    device.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { onRemove(device) }) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove ${device.name}")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = { if (usesSystemPicker) onChoose() else showPaired = true }) {
+            Text(if (devices.isEmpty()) "Choose a device" else "Add another device")
+        }
+
+        if (usesSystemPicker) {
+            Text(
+                "Android shows the list. Have the device switched on and connected first, or " +
+                    "it will not be in it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        message?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp).clickable(onClick = onDismissMessage),
+            )
+        }
+    }
+
+    if (showPaired) {
+        val paired = remember { pairedDevices() }
+        val chosen = devices.map { it.key }.toSet()
+        AlertDialog(
+            onDismissRequest = { showPaired = false },
+            title = { Text("Paired devices") },
+            text = {
+                if (paired.isEmpty()) {
+                    Text("Nothing is paired, or Bluetooth is switched off")
+                } else {
+                    Column {
+                        paired.forEach { device ->
+                            TextButton(
+                                onClick = {
+                                    onAdd(device)
+                                    showPaired = false
+                                },
+                                enabled = device.key !in chosen,
+                            ) {
+                                Text(device.name)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPaired = false }) { Text("Done") }
+            },
+        )
+    }
+}
+
+/**
+ * A setting that is only ever read, with its value where a control would otherwise be.
+ */
+@Composable
+private fun InfoRow(title: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * The version of the app that is actually installed, as `1.4 (7)`.
+ *
+ * Read from the package manager rather than from `BuildConfig`. This module has a
+ * `BuildConfig` of its own, but it is the library's and carries no version at all — and
+ * even in the app module the constant is what was compiled rather than what is installed.
+ * The package manager answers the question a bug report is really asking.
+ *
+ * The name already carries `-debug` on a debug build, through `versionNameSuffix`, so the
+ * two installs identify themselves without anything extra here.
+ */
+@Composable
+private fun installedVersion(): String {
+    val context = LocalContext.current
+    return remember(context) {
+        runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            val code = PackageInfoCompat.getLongVersionCode(info)
+            "${info.versionName} ($code)"
+        }.getOrDefault("unknown")
     }
 }
 

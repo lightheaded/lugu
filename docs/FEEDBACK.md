@@ -431,6 +431,60 @@ podcast's own page shows whether it is following the global default or carries i
 because a show trimmed to nothing and a show following a default of nothing hold identical
 numbers and behave differently the moment that default moves.
 
+## Starting a book when the headphones connect
+
+Asked on 16 Aug, and worth quoting because the request already contained its own
+specification: *for the official app I use Tasker to start playing x seconds after the
+headset with a given name or MAC connects. Can we build that in, and always start whatever
+was last playing?*
+
+| Item | Status |
+|---|---|
+| **Start playing when a chosen device connects** | done 16 Aug |
+| **Only for named devices**, not any headphones | done 16 Aug |
+| **Wait a configurable few seconds first** | done 16 Aug |
+| **Always the last thing played**, from cold | done 16 Aug |
+| **Show the app version** | done 16 Aug, Settings → About |
+
+**The existing setting looked like this and was not.** "Resume when headphones reconnect"
+continues something a *disconnection* interrupted: it needs the player still loaded, a
+disconnect on record as the cause, and half an hour or less since. It cannot start a book
+with the app closed and the process dead, which is the whole of what was being asked for,
+and it fires for any headphones rather than a chosen pair. Both settings now exist, and
+say plainly which is which.
+
+**The delay was the interesting part of the request.** It looks like a workaround and is
+not: a headset announces itself before the audio route has moved, so a book started inside
+that gap plays its first sentence to the room instead. The wait is a real setting for a
+real property of the hardware, defaulting to five seconds. When it expires, the route is
+checked again — a headset that connected and dropped straight out again gets nothing.
+
+**What Tasker could not offer, and this does, is a way to say no.** The waiting notification
+carries a "Not now" button, and refusing suppresses the rest of that connection's events for
+a minute — because connecting a headset fires several of them, seconds apart, and without
+that the next one would restart the countdown a moment after it was cancelled. A cancel
+button that visibly does not work is worse than none.
+
+**Three things are never played over**: a call in progress, another app already holding the
+audio, and a device that is no longer there. The record says which of them refused, because
+the question this feature generates is always "why did it not start".
+
+**The MAC address never appears anywhere.** On Android 12 and later lugu never learns it:
+the system shows its own device picker, and what comes back is an association, not a device
+list. On older versions it is read from the paired list but is only ever a key — the
+playback diary, which the feedback screen can send, records the device's *name*. An address
+identifies hardware a person carries around and has no business in a bug report.
+
+**On Android 12 and later this could not have been built the obvious way.** A receiver for
+the Bluetooth connection broadcast needs a runtime permission whose prompt talks about
+determining the relative position of nearby devices, and — separately and fatally — an app
+in the background is not allowed to start a playback service, with a Bluetooth broadcast
+absent from the documented exemptions. It would have been delivered the broadcast and then
+refused the service: a feature that looks like it works and never plays anything. The
+companion-device association is the supported path and grants exactly the exemption
+required. Below Android 12 neither restriction exists, so the straightforward version is
+also the correct one, and that is what runs there.
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport
