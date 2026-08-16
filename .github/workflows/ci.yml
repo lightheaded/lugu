@@ -174,7 +174,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Full history and tags, not just HEAD: the release notes below walk
+      # commits back to the previous release tag, which a shallow clone can't see.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: gradle/actions/wrapper-validation@v6
 
@@ -278,7 +282,26 @@ jobs:
           fi
           VERSION="$BASE.${GITHUB_RUN_NUMBER}"
 
+          # Every commit back to the previous release tag, turned into a TL;DR
+          # (subject lines) and a detailed section (full bodies, where the actual
+          # feature description lives — see AGENTS.md's Releases section). Notes
+          # were previously just the install boilerplate below with no feature
+          # content at all.
+          PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          RANGE="HEAD"
+          [ -n "$PREV_TAG" ] && RANGE="$PREV_TAG..HEAD"
+
+          TLDR=$(git log "$RANGE" --format='- %s' --no-merges)
+          DETAILS=$(git log "$RANGE" --format='### %s%n%n%b' --no-merges \
+            | grep -v '^Co-Authored-By:' | grep -v '^Claude-Session:')
+
           NOTES="lugu $VERSION — alpha build from \`${GITHUB_SHA::7}\`.
+
+          ## TL;DR
+          $TLDR
+
+          ## What changed
+          $DETAILS
 
           Install over any previous lugu build; the signing key is stable.
           Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk

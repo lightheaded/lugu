@@ -43,6 +43,15 @@ looks like — if one you did not expect has moved, that is the suite doing its 
 Record everything in one run rather than module by module, so the whole set stays taken
 with the same Compose and Robolectric versions.
 
+**Record on Linux, not on your Mac.** Roborazzi renders through Robolectric's native
+graphics mode, which uses the host's own font and icon rasterizer — a baseline recorded
+on macOS will not pixel-match the same screen rendered on CI's `ubuntu-latest` runner, and
+`./gradlew build` will fail there even though nothing about the screen actually changed.
+Record in an environment matching CI: `eclipse-temurin:21-jdk-jammy` on `linux/amd64`, with
+Android SDK `platforms;android-37.0` and `build-tools;37.0.0`. If using a local Docker
+container for this, copy the working tree into it first — never mount the live checkout
+read-write for a throwaway build.
+
 ## Why the pictures are not what is on your phone
 
 Two deliberate differences:
