@@ -142,6 +142,10 @@ android {
             versionNameSuffix = "-minified"
             signingConfig = signingConfigs.getByName("debug")
             applyTestServer()
+            // R8 shrinks the androidTest APK too when the type under test is minified.
+            // That shrinks the harness rather than the app, and it broke the run outright
+            // the first time this leg executed — see the file for the crash it produced.
+            testProguardFiles("proguard-test-rules.pro")
         }
     }
 
