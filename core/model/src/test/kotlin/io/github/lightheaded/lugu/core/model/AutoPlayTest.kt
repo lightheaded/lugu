@@ -197,4 +197,61 @@ class AutoPlayTest {
         assertThat(AutoPlay.WAIT_CHOICES_SEC.max()).isAtMost(AutoPlay.MAX_WAIT_SEC)
         assertThat(AutoPlay.WAIT_CHOICES_SEC).contains(AutoPlay.DEFAULT_WAIT_SEC)
     }
+
+    /**
+     * The case this exists for: a pair of earbuds is two addresses under one name, and the
+     * list is read by somebody who owns one pair of earbuds.
+     */
+    @Test
+    fun `both sides of one pair of earbuds are one entry`() {
+        val devices = listOf(
+            AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:66"), "Elite 10"),
+            AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:77"), "Elite 10"),
+        )
+
+        val groups = AutoPlay.group(devices)
+
+        assertThat(groups).hasSize(1)
+        assertThat(groups.single().name).isEqualTo("Elite 10")
+        assertThat(groups.single().devices).hasSize(2)
+        assertThat(groups.single().isPair).isTrue()
+    }
+
+    @Test
+    fun `one device on its own is not a pair`() {
+        val devices = listOf(AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:66"), "Car"))
+
+        assertThat(AutoPlay.group(devices).single().isPair).isFalse()
+    }
+
+    @Test
+    fun `different names stay apart`() {
+        val devices = listOf(
+            AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:66"), "Car"),
+            AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:77"), "Elite 10"),
+        )
+
+        assertThat(AutoPlay.group(devices).map { it.name })
+            .containsExactly("Car", "Elite 10")
+            .inOrder()
+    }
+
+    @Test
+    fun `grouping nothing is nothing`() {
+        assertThat(AutoPlay.group(emptyList())).isEmpty()
+    }
+
+    /**
+     * Grouping is for reading, not for matching. Only the side that actually connected is the
+     * device that connected, and the other side's key must not answer for it — the two are
+     * observed separately and each one has to be chosen before it counts.
+     */
+    @Test
+    fun `grouping does not make one side match the other`() {
+        val left = AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:66"), "Elite 10")
+        val right = AutoPlayDevice(AutoPlay.deviceKey("11:22:33:44:55:77"), "Elite 10")
+
+        assertThat(AutoPlay.match(listOf(left), right.key)).isNull()
+        assertThat(AutoPlay.match(listOf(left, right), right.key)).isEqualTo(right)
+    }
 }

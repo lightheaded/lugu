@@ -1048,3 +1048,65 @@ rather than the square behind them.
 The device pass on a release build, unchanged and still carrying the whole of the auto-play
 work — above all [qa/autoplay.md](qa/autoplay.md) item 7, whether the extra second on top of
 the audio switchover is needed at all.
+
+## 2026-08-16 (the first device pass) — three faults only hardware could find
+
+Auto-play met a real pair of headphones for the first time. Everything structural worked —
+the association, the cold start with the process dead, the switchover detection — and three
+things were wrong that no emulator and no unit test would ever have shown.
+
+### The waiting notification would not go away
+
+It sat under the player for the rest of the session. The line removing it had been there
+since the first commit and had never once worked.
+
+The waiting notification is the one passed to `startForeground`, and **a service's current
+foreground notification cannot be cancelled** — the system holds it on screen for exactly as
+long as the service is foreground under that id. It becomes an ordinary, removable
+notification only after `startForeground` has been called again with Media3's id. The code
+asked Media3 to post and cancelled on the next line; the post is built asynchronously, so the
+cancel was racing something that had not happened yet and lost every time. It now waits for
+the player's notification to appear before removing its own, with a timeout as the safety net
+rather than the mechanism.
+
+Worth noting what the original comment got right and wrong. Its instinct — hand the
+foreground over before letting go of it — was exactly correct, and is why this was never a
+crash or a dropped service. It just assumed `triggerNotificationUpdate` was synchronous.
+
+### "Not now" was behind a gesture longer than the thing it interrupts
+
+Reported as: *I have to scroll down with two fingers to reveal it, and the time has gone past
+by then.* In Android's ordinary notification layout the action buttons live in the **expanded**
+view. The channel was low importance, so the notification arrived collapsed, and the offer to
+stop a book starting in one second was two gestures deep.
+
+The channel is now high importance, which brings the notification forward with its button
+already showing. Coming forward and making a noise are separate things and only the first is
+wanted, so it has no sound and no vibration, and only the first post of a countdown alerts at
+all. The channel id had to be versioned to do it: importance belongs to the listener once a
+channel exists, and `createNotificationChannel` cannot raise it afterwards — which is correct,
+since that is exactly how an app would undo somebody turning it down.
+
+### Only one earbud started a book
+
+*I connected my Jabra Elite 10 Gen 2, but only the left one triggers the auto-play. I think
+they have separate MAC addresses, but the same name.* Right on both counts.
+
+There is no fix at the moment of connection, and it is worth being plain about why: on
+Android 12 and later only an **associated** device is observed, so the right earbud connecting
+never reached lugu at all. There was nothing to match against — no event, no address, no name.
+Matching on the name instead would have changed nothing, because nothing was called.
+
+What was genuinely broken was everything around it. Both sides can be chosen, and could
+before — but they listed as two rows with the same name and no way to tell them apart, which
+looks like a bug and makes "remove" a guess. The sides of one pair are now one row marked
+**Both sides**, removing it removes both, and the text under the picker says that earbuds
+appear once per side and both want adding. The grouping is a pure function in `:core:model`
+with a test that pins the important part: grouping is for reading, and must never make one
+side match for the other.
+
+### Next
+
+The rest of [qa/autoplay.md](qa/autoplay.md), now with the three cases this pass produced —
+including **item 7**, still the measurement that decides whether the extra second on top of
+the switchover is needed at all.

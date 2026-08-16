@@ -451,6 +451,40 @@ was last playing?*
 | **Wait a configurable few seconds first** | done 16 Aug, then replaced by watching for the switchover — see below |
 | **Always the last thing played**, from cold | done 16 Aug |
 | **Show the app version** | done 16 Aug, Settings → About |
+| The waiting notification stays on screen after the book starts | fixed 16 Aug — see below |
+| "Not now" is hidden until the notification is expanded | fixed 16 Aug — see below |
+| Only one earbud of a pair starts a book | fixed 16 Aug — see below |
+
+### The first device pass, and three things it found
+
+Reported 16 Aug, from a real pair of Jabra Elite 10 Gen 2 earbuds. All three are the kind of
+fault only hardware produces.
+
+**The waiting notification never went away.** It sat under the player for the rest of the
+session. The removal was there and did nothing, for a reason worth writing down: the waiting
+notification is the one handed to `startForeground`, and a service's current foreground
+notification cannot be cancelled — the system holds it on screen for as long as the service
+is foreground under that id. It only becomes removable once `startForeground` has been called
+again with the player's id. The code asked Media3 to post and then cancelled immediately,
+racing a post that had not happened yet and losing every time. It now waits for the player's
+notification to actually appear before taking its own down.
+
+**"Not now" needed a two-finger pull to reveal, by which time the moment had passed.** In
+Android's ordinary notification layout the action buttons live in the expanded view, and the
+channel was low importance, so the notification arrived collapsed with the button behind a
+gesture that takes longer than the thing it interrupts. The channel is now high importance,
+which brings the notification forward with the button already showing — and makes no sound,
+no vibration, and only alerts on the first post of a countdown. Coming forward and making a
+noise are separate things, and only the first is wanted.
+
+**Only the left earbud started a book.** Correctly diagnosed on the spot: each side is its own
+device with its own address, under the same name. Every side has to be chosen, because on
+Android 12 and later only an associated device is observed at all — the right one connecting
+did not reach lugu, so there was nothing to match against and no cleverness available at the
+moment of connection. What could be fixed is everything around that: the list now groups the
+sides of one pair into a single row marked **Both sides**, removing it removes both, and the
+text under the picker says that earbuds appear once per side and both want adding. Two rows
+with the same name and no way to tell them apart was the real defect.
 
 **The existing setting looked like this and was not.** "Resume when headphones reconnect"
 continues something a *disconnection* interrupted: it needs the player still loaded, a

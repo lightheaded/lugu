@@ -1495,18 +1495,23 @@ private fun AutoPlayDevices(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        devices.forEach { device ->
+        AutoPlay.group(devices).forEach { group ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    device.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = { onRemove(device) }) {
-                    Icon(Icons.Default.Close, contentDescription = "Remove ${device.name}")
+                Column(Modifier.weight(1f)) {
+                    Text(group.name, style = MaterialTheme.typography.bodyMedium)
+                    if (group.isPair) {
+                        Text(
+                            "Both sides",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                IconButton(onClick = { group.devices.forEach(onRemove) }) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove ${group.name}")
                 }
             }
         }
@@ -1516,14 +1521,24 @@ private fun AutoPlayDevices(
             Text(if (devices.isEmpty()) "Choose a device" else "Add another device")
         }
 
-        if (usesSystemPicker) {
-            Text(
+        /*
+         * Earbuds are the case this warns about and it is not a rare one. Each side is its own
+         * device with its own address, and on most of them either side can be worn alone — so
+         * a pair chosen once starts a book from one ear and does nothing from the other, which
+         * looks exactly like a feature that works intermittently.
+         */
+        Text(
+            if (usesSystemPicker) {
                 "Android shows the list. Have the device switched on and connected first, or " +
-                    "it will not be in it",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+                    "it will not be in it. Earbuds appear once per side, under the same name — " +
+                    "add both if either ear should start a book"
+            } else {
+                "Earbuds appear once per side, under the same name. Add both if either ear " +
+                    "should start a book"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         message?.let {
             Text(
