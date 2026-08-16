@@ -59,6 +59,36 @@
         </service>
 
         <!--
+          The other half of playback resumption, and it was missing.
+
+          `onPlaybackResumption` has been implemented since M0 — it rebuilds the item, the
+          playlist and the position from Room with no UI alive. What was never declared is
+          the receiver the system delivers the button to, and Media3's contract is both or
+          neither: "to opt in to this feature, you need to declare a media button receiver
+          and implement the onPlaybackResumption method."
+
+          Without it Media3 falls back to a pending intent aimed at the service, which is
+          fine while the process is alive and is not a thing the platform keeps once it is
+          gone. Measured on emulators before the fix: with lugu open, `dumpsys
+          media_session` reported `mediaButtonReceiver=PendingIntent{... startForegroundService}`
+          on API 26 and **null** on API 36, and no component of lugu's answered
+          `android.intent.action.MEDIA_BUTTON` at all. So on a modern phone there was
+          nothing for a headset press to arrive at once the process had been reclaimed —
+          which is exactly M0's central promise, and the one path no test had ever taken.
+
+          Nothing caught it because nothing could: the resumption test destroys the
+          *service* from inside the app's own process, so a live session was always there
+          to receive the button. It took a second process that could end the first.
+        -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!--
           Bound by the system when an associated device turns up, which is what lets a
           book start with the app closed and the process dead. The permission is the
           system's own: only the platform may bind this, so nothing else on the device
