@@ -265,6 +265,9 @@ dependencies {
     androidTestImplementation(libs.media3.session)
     androidTestImplementation(libs.kotlinx.coroutines.guava)
     androidTestImplementation(project(":playback"))
+    // The car browse tree is served from Room, so the test that checks it seeds Room —
+    // which needs the entities and the DAOs, not just the module the app links against.
+    androidTestImplementation(project(":core:db"))
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
 }
