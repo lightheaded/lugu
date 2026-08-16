@@ -97,6 +97,23 @@ class MediaSessionDumpTest {
         assertThat(snapshot.toString()).doesNotContain("Lighthouse")
     }
 
+    /**
+     * A service that is up with nothing in it, which is what lugu looks like from the moment
+     * its UI opens until something is played. The harness waits past this state rather than
+     * for it: a book that was left at its end loads, plays out whatever is left, and stops,
+     * so "a session exists" and "a book is loaded" and "a book is playing" are three answers
+     * and the middle one is the one worth waiting for.
+     */
+    @Test
+    fun `tells a session holding nothing from a session holding a book`() {
+        val empty = MediaSessionDump.parse(dump(metadata = "null"), PACKAGE, 0)
+        val loaded = MediaSessionDump.parse(dump(), PACKAGE, 0)
+
+        assertThat(empty).isNotNull()
+        assertThat(empty!!.hasItem).isFalse()
+        assertThat(loaded!!.hasItem).isTrue()
+    }
+
     @Test
     fun `has no answer for a package that holds no session`() {
         assertThat(MediaSessionDump.parse(dump(), "io.github.lightheaded.lugu", 0)).isNull()
@@ -117,6 +134,7 @@ class MediaSessionDumpTest {
         speed: String = "1.5",
         title: String = "Lighthouse Wakes",
         chapter: String = "Chapter Four",
+        metadata: String = "size=9, description=$title, $chapter, $chapter",
     ) = """
         |Sessions Stack - have 1 sessions:
         |  androidx.media3.session.id. $PACKAGE/androidx.media3.session.id./6 (userId=0)
@@ -131,7 +149,7 @@ class MediaSessionDumpTest {
         |    state=PlaybackState {state=$state, position=612000, buffered position=640000, speed=$speed, updated=73178, actions=7339725, custom actions=[Action:mName='Back 15 seconds, mIcon=2131165246, mExtras=Bundle[mParcelledData.dataSize=140]], active item id=0, error=null}
         |    audioAttrs=AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC flags=0x800 tags= bundle=null
         |    volumeType=LOCAL, controlType=ABSOLUTE, max=0, current=0, volumeControlId=null
-        |    metadata: size=9, description=$title, $chapter, $chapter
+        |    metadata: $metadata
         |    queueTitle=null, size=0
     """.trimMargin()
 
