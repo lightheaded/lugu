@@ -73,8 +73,17 @@ pictures are of the screens' own components — `ItemCard`, `ShelfRowView`, `Lis
 screen arranges them, rather than of the screen composable itself. A change to the order of
 blocks inside a screen file will not fail these.
 
-Settings is the exception: its view model's six dependencies are all constructible without
-Hilt, so `SettingsScreenshotTest` drives the real `SettingsScreen`.
+Settings is the exception: its view model's dependencies are all constructible without Hilt,
+so `SettingsScreenshotTest` drives the real `SettingsScreen`. Two things follow. Adding a row
+that renders here changes these baselines and they must be re-recorded — see below. And the
+test runs **signed out**, over an empty database, so anything inside `state.account?.let` is
+absent from the pictures: a change to the account section may leave them untouched, which is
+the suite being accurate rather than the suite missing it.
+
+That real view model also makes this the one place a settings *crash* is caught. It builds a
+`ConnectionPrefs` whose encrypted store cannot open under Robolectric, exactly as on a device
+whose keystore is unusable — so a screen that does not survive that failure produces no
+picture at all.
 
 Making a screen's own content composable `internal` and stateless — taking a UI state and a
 set of callbacks, with the view model wiring left in the public wrapper — would let the rest
