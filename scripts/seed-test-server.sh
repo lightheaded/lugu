@@ -102,6 +102,34 @@ META
 
 start_server() {
   [ "${ABS_NO_DOCKER:-0}" = "1" ] && { say "using the server already at $ABS_URL"; return; }
+
+  # Refuse to take over a container that belongs to a different ABS_ROOT.
+  #
+  # The container name is fixed and the root is not, so two roots on one machine fight over
+  # one name — and the loser does not find out. Running this from a second root silently
+  # replaced the first one's server and left its stored password pointing at an account that
+  # no longer existed. What that looks like downstream is a sign-in that fails, an empty
+  # library, and a test reporting "the title was not on screen", which reads like a bug in
+  # the app rather than a stale credential. It cost two runs and nearly a wrong conclusion
+  # about someone else's work.
+  local mounted
+  mounted=$(docker inspect "$ABS_CONTAINER" \
+    --format '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+  if [ -n "$mounted" ] && [ "$mounted" != "$ROOT/config" ]; then
+    cat >&2 <<MSG
+A container named $ABS_CONTAINER is already serving a different library.
+
+  it is using:  $mounted
+  you asked for: $ROOT/config
+
+Re-creating it would strand whatever is pointed at the running one. Either use that
+root — ABS_ROOT=$(dirname "$mounted") $0 — or take the running one down first:
+
+  docker rm -f $ABS_CONTAINER
+MSG
+    exit 1
+  fi
+
   docker rm -f "$ABS_CONTAINER" >/dev/null 2>&1 || true
   mkdir -p "$ROOT/config" "$ROOT/metadata"
   docker run -d --name "$ABS_CONTAINER" -p "$ABS_PORT:80" \
