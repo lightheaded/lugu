@@ -119,6 +119,14 @@ jobs:
 
       # Booting an AVD from cold is several minutes. Without this cache the emulator
       # job dominates every run and the whole thing gets turned off.
+      #
+      # The key carries a generation number, because a saved snapshot is restored into
+      # whatever emulator the runner image ships this week, and the two can fall out of step:
+      # the API 26 leg started dying on `adb shell input keyevent 82` with SIGKILL, twice in a
+      # row, after a morning of green runs on the same key and the same commit range — before
+      # Gradle ran at all, so nothing in the app could reach it. The snapshot is the only state
+      # that persists between those runs. Bump the generation to throw it away; the next run
+      # pays for one cold boot and then caches a fresh one.
       - name: Cache the AVD
         uses: actions/cache@v4
         id: avd-cache
@@ -126,7 +134,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+          key: avd-gen2-${{ matrix.api-level }}-${{ matrix.target }}
 
       - name: Create the AVD and cache a booted snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
