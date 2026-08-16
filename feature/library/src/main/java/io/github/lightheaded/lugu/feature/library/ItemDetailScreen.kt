@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -29,9 +30,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,6 +43,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,7 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.download.DownloadStatus
@@ -72,7 +78,11 @@ import io.github.lightheaded.lugu.core.model.LibraryItem
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
+import io.github.lightheaded.lugu.core.model.PodcastTrim
 import io.github.lightheaded.lugu.core.model.Series
+import io.github.lightheaded.lugu.core.model.SeriesRef
+import io.github.lightheaded.lugu.core.model.formatLengthCompact
+import io.github.lightheaded.lugu.core.model.formatShortSeconds
 import io.github.lightheaded.lugu.core.sync.BrowseKind
 import java.time.Instant
 import java.time.ZoneId
@@ -93,6 +103,10 @@ fun ItemDetailScreen(
     val item = state.item
     val snackbarHostState = remember { SnackbarHostState() }
     var showCollections by remember { mutableStateOf(false) }
+    // Saveable, unlike the collections dialog: the trim controls are where a rotation is
+    // most likely to happen mid-edit, and folding them away underneath somebody choosing a
+    // number is worse than the row of state it costs to remember.
+    var trimExpanded by rememberSaveable { mutableStateOf(false) }
 
     // The collections pull is the heaviest request the app makes, so it is tied to opening
     // the list rather than to opening the page: almost nobody who reads a book's page wants
@@ -169,7 +183,11 @@ fun ItemDetailScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            formatDuration(item.durationSec),
+                            // The dash is this line's decision rather than the formatter's:
+                            // a podcast carries no item-level duration at all, and "0s"
+                            // under the cover reads as a show with no audio in it instead
+                            // of as a length there was never a figure for.
+                            item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -181,7 +199,7 @@ fun ItemDetailScreen(
             // items apart, so an empty row still leaves a gap where it was.
             if (item.hasBrowseLinks) {
                 item {
-                    BrowseGroupLinks(item = item, onBrowseGroup = onBrowseGroup)
+                    BrowseGroupLinks(item = item, series = state.series, onBrowseGroup = onBrowseGroup)
                 }
             }
 
@@ -194,7 +212,10 @@ fun ItemDetailScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "${formatDuration(state.positionSec)} of ${formatDuration(item.durationSec)}",
+                            // No dash here: this line only exists once there is progress to
+                            // draw, so both figures are known by construction.
+                            "${formatLengthCompact(state.positionSec)} of " +
+                                formatLengthCompact(item.durationSec),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -232,6 +253,22 @@ fun ItemDetailScreen(
             item.description?.takeIf { it.isNotBlank() }?.let { description ->
                 item {
                     Text(description, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+
+            // Only a podcast has a trim, and only a podcast's page offers one: an intro is
+            // the same fifteen seconds on every episode of one show, which is what makes it
+            // worth setting once here rather than in a settings screen listing every show.
+            if (item.mediaType == MediaType.PODCAST) {
+                item {
+                    PodcastTrimSection(
+                        trim = state.trim,
+                        isOwn = state.trimIsOwn,
+                        expanded = trimExpanded,
+                        onExpandedChange = { trimExpanded = it },
+                        onTrimChange = viewModel::setTrim,
+                        onUseDefault = viewModel::useDefaultTrim,
+                    )
                 }
             }
 
@@ -400,7 +437,7 @@ private fun EpisodeSelectionBar(state: ItemDetailUiState, viewModel: ItemDetailV
                 viewModel::addSelectedToQueue,
                 any,
             ),
-            SelectionAction("Play next", Icons.Default.PlaylistPlay, viewModel::playSelectedNext, any),
+            SelectionAction("Play next", Icons.AutoMirrored.Default.PlaylistPlay, viewModel::playSelectedNext, any),
             SelectionAction(
                 "Remove download",
                 Icons.Default.Delete,
@@ -538,7 +575,7 @@ internal fun RowActionsMenu(
                     expanded = false
                     onPlayNext()
                 },
-                leadingIcon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Default.PlaylistPlay, contentDescription = null) },
             )
             DropdownMenuItem(
                 text = { Text("Add to queue") },
@@ -579,6 +616,164 @@ internal fun RowActionsMenu(
     }
 }
 
+/**
+ * What this show skips at the start, at the end, and in the middle.
+ *
+ * Folded away behind one row, because it is a thing done once per show and then never
+ * again: a listener who has told lugu about a fifteen-second sting should not have to read
+ * about it every time they open the feed. The row itself stays visible and says what the
+ * current answer is, which is the part that has to be readable without opening anything.
+ *
+ * The status line is the whole reason this is not three plain controls. A show set to trim
+ * nothing and a show following a default of nothing show identical numbers, and they are
+ * not the same: change the default later and only the second one moves. So the line names
+ * which of the two it is, and the way back to the default is a button rather than an
+ * inference from setting everything to zero.
+ *
+ * On adverts, and what the switch does not promise. It skips chapters whose own titles say
+ * they are advertising, which is all an episode's own markers can support — see the
+ * reasoning written out on `SkipRegions`. An unmarked advert needs audio fingerprinting
+ * against a database of known adverts, and a false positive there eats a minute of the
+ * show, so nothing here looks for one. The copy says so in as many words: a switch that
+ * reads as "skip the adverts" and then plays them is worse than no switch.
+ */
+@Composable
+internal fun PodcastTrimSection(
+    trim: PodcastTrim,
+    isOwn: Boolean,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onTrimChange: (PodcastTrim) -> Unit,
+    onUseDefault: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable { onExpandedChange(!expanded) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Skipping", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    trimStatusLine(trim, isOwn),
+                    style = MaterialTheme.typography.labelMedium,
+                    // Its own trim is said in the accent colour and the default in the quiet
+                    // one, so the two are told apart at a glance as well as in words.
+                    color = if (isOwn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Hide skipping" else "Change skipping",
+            )
+        }
+
+        if (!expanded) return@Column
+
+        TrimChoiceRow(
+            title = "Intro",
+            subtitle = "Cut from the start of every episode of this show.",
+            seconds = trim.introSec,
+            onSelect = { onTrimChange(trim.copy(introSec = it)) },
+        )
+        TrimChoiceRow(
+            title = "Outro",
+            subtitle = "Cut from the end of every episode of this show.",
+            seconds = trim.outroSec,
+            onSelect = { onTrimChange(trim.copy(outroSec = it)) },
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Skip marked adverts", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Skips chapters the episode itself names as advertising. An advert the " +
+                        "episode does not mark cannot be found, so this will miss any show " +
+                        "that does not chapter its ad breaks.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            Switch(
+                checked = trim.skipMarkedAdverts,
+                onCheckedChange = { onTrimChange(trim.copy(skipMarkedAdverts = it)) },
+            )
+        }
+
+        // Offered only where it would do something. A show already on the default has
+        // nothing to go back to, and a button that is its own no-op teaches nothing about
+        // which of the two states the show is in.
+        if (isOwn) {
+            TextButton(onClick = onUseDefault) { Text("Use the default again") }
+        }
+    }
+}
+
+/** One trim length, as a row of the choices worth one tap. */
+@Composable
+private fun TrimChoiceRow(
+    title: String,
+    subtitle: String,
+    seconds: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.padding(vertical = 8.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            items(PodcastTrim.TRIM_CHOICES_SEC) { choice ->
+                FilterChip(
+                    selected = choice == seconds,
+                    onClick = { onSelect(choice) },
+                    label = { Text(trimChoiceLabel(choice), maxLines = 1, softWrap = false) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What the show is skipping, and on whose say-so.
+ *
+ * Both halves are load-bearing. The second says what is being cut, so nobody has to open
+ * the controls to find out; the first says whether these numbers are this show's or the
+ * default's, which is the difference between "I set this to nothing" and "nothing has been
+ * set" — states that are identical on screen and behave differently the day the default
+ * changes.
+ */
+internal fun trimStatusLine(trim: PodcastTrim, isOwn: Boolean): String {
+    val source = if (isOwn) "Set for this show" else "Following the default"
+    val parts = listOfNotNull(
+        trim.introSec.takeIf { it > 0 }?.let { "${formatShortSeconds(it)} intro" },
+        trim.outroSec.takeIf { it > 0 }?.let { "${formatShortSeconds(it)} outro" },
+        "marked adverts".takeIf { trim.skipMarkedAdverts },
+    )
+    return if (parts.isEmpty()) "$source — nothing skipped" else "$source — ${parts.joinToString(", ")}"
+}
+
+/** "None" rather than "0s": a chip reading zero looks like a length, not like an off switch. */
+internal fun trimChoiceLabel(seconds: Int): String =
+    if (seconds <= 0) "None" else formatShortSeconds(seconds)
+
 /** Whether there is anything to link to at all: a podcast often has none of the three. */
 private val LibraryItem.hasBrowseLinks: Boolean
     get() = listOfNotNull(authorName, narratorName, seriesName).any { it.isNotBlank() }
@@ -598,12 +793,27 @@ private val LibraryItem.hasBrowseLinks: Boolean
 @Composable
 private fun BrowseGroupLinks(
     item: LibraryItem,
+    series: List<SeriesRef>,
     onBrowseGroup: (kind: String, name: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val seriesTitle = remember(item.seriesName) { Series.titleOf(item.seriesName) }
-    val seriesPrefix = remember(item.seriesName) {
-        seriesSequenceLabel(item.seriesName)?.let { "$it of" } ?: "Part of"
+    /*
+     * The memberships, falling back to the rendered string only while the mirror has none.
+     *
+     * The fallback exists for the moment after an upgrade and before the first sync, and
+     * for an item the series sync has not reached. It is the old reading and carries the
+     * old flaw — a book in two series renders as one phantom named after both — so it is
+     * the second choice rather than the first, and it disappears as soon as there is a
+     * real membership to draw.
+     */
+    val entries = remember(series, item.seriesName) {
+        series.ifEmpty {
+            listOfNotNull(
+                Series.titleOf(item.seriesName)?.let {
+                    SeriesRef(id = null, name = it, sequence = Series.sequenceOf(item.seriesName))
+                },
+            )
+        }
     }
 
     Column(modifier) {
@@ -620,11 +830,13 @@ private fun BrowseGroupLinks(
                 prefix = "Read by",
             )
         }
-        seriesTitle?.let { series ->
+        // One link per series, because a book that ends one trilogy and opens another is
+        // two facts about it and only ever showed as one.
+        entries.forEach { membership ->
             BrowseGroupLink(
-                name = series,
-                onClick = { onBrowseGroup(BrowseKind.SERIES.id, series) },
-                prefix = seriesPrefix,
+                name = membership.name,
+                onClick = { onBrowseGroup(BrowseKind.SERIES.id, membership.name) },
+                prefix = seriesSequenceLabel(membership.sequence)?.let { "$it of" } ?: "Part of",
             )
         }
     }
@@ -746,19 +958,6 @@ internal fun DownloadButton(
     }
 }
 
-/** Hours and minutes; seconds only matter for short things. */
-internal fun formatDuration(seconds: Double): String {
-    if (seconds <= 0) return "—"
-    val total = seconds.toLong()
-    val hours = total / 3600
-    val minutes = (total % 3600) / 60
-    return when {
-        hours > 0 -> "${hours}h ${minutes}m"
-        minutes > 0 -> "${minutes}m"
-        else -> "${total}s"
-    }
-}
-
 /** The whole secondary line, joined only from the parts the feed actually supplied. */
 internal fun episodeSubline(
     episode: PodcastEpisode,
@@ -767,7 +966,7 @@ internal fun episodeSubline(
 ): String = listOfNotNull(
     formatEpisodeNumber(episode.season, episode.episodeNumber),
     formatPublished(episode.publishedAtMs, nowMs, zone),
-    formatDuration(episode.durationSec).takeIf { episode.durationSec > 0 },
+    episode.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact),
 ).joinToString(" · ")
 
 /**

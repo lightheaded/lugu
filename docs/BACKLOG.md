@@ -77,7 +77,7 @@ dominant context, even though it is not our platform.
 |---|---|
 | **A paused notification that survives** | app#1800 and app#1571, 21 comments. Upstream's disappears a couple of minutes after pausing, so resuming means reopening the app. Already listed under *Why playback stops* as a risk here too; the fix is a foreground-service lifecycle decision, and the diary will say whether we have the problem |
 | **A configurable rewind-after-pause curve** | app#205, 20 comments of people disagreeing about the right number — which is itself the argument for making it a setting rather than picking one |
-| **Skip intro and outro** | app#749, 7 👍. Per-podcast trim offsets, remembered, so a fifteen-second sting is not heard three hundred times |
+| **Skip intro and outro** — done 16 Aug, with adverts | app#749, 7 👍. Per-podcast trim offsets, remembered, so a fifteen-second sting is not heard three hundred times. Adverts ride the same mechanism *at the point of playing* and a different one at the point of finding: they are skipped only where the episode marks them with a chapter that names itself as advertising. Finding an unmarked advert needs fingerprinting against a database of known adverts, and a false positive eats a minute of the show — a skip that removes narration is worse than an advert that plays. Reasoning is on `object SkipRegions` |
 | **Duck rather than cut for other audio** — done 16 Aug | app#1259. A navigation prompt should lower the book, not interrupt it |
 | **xHE-AAC** | server#4236, 15 👍 and 38 comments, the most-discussed server enhancement of the year. Android 9 and later decode it natively, so a native client can play files the web player cannot — a real differentiator, provided the server serves the bytes rather than refusing to probe them |
 | **Tasker-compatible intents** — done 16 Aug, see [automation.md](automation.md) | app#858, 21 👍. Exported play/pause intents. Small, and it wins the automation audience outright |
@@ -88,7 +88,7 @@ dominant context, even though it is not our platform.
 
 | Item | Note |
 |---|---|
-| **A–Z rail on the browse pages too** | The grid has one; the author, series and narrator lists do not, and a library with four hundred authors needs it just as much. They have a search box in the meantime |
+| **A–Z rail on the browse pages too** — done 16 Aug | The grid had one and the author, series and narrator lists did not. The rail indexes the list *after* the search box, so it cannot offer a letter the search has removed |
 | **Edit collections from the phone** — done 16 Aug | app#207, 6 👍. Read-only on mobile upstream, though the API allows writing |
 | **Confirm covers are cached to disk** | app#907, 7 👍. Coil caches by default, but "by default" is an assumption, and a library that re-fetches every cover feels slow in exactly the way people describe |
 | **Sleep after N chapters** — done 16 Aug | app#202, 6 👍. Chapter count rather than clock time, which is how people actually decide when to stop |
@@ -156,8 +156,8 @@ the person who finds it will otherwise think it an oversight.
 | **Offline playback has not been proven on hardware** | Downloading has now moved real bytes — a 629 MB book, downloaded and ready to play, 15 Aug. What is still untested is the other half: going offline for long enough to matter and confirming nothing is lost, and that the session replays on reconnect. Until then, "a week in airplane mode loses nothing" is a claim, not a result |
 | **Transcoded items still cannot be downloaded — now deliberately** | Resolved 16 Aug as a refusal that explains itself rather than as a feature. Three independent reasons, any one sufficient: an HLS playlist is minted against a play session that expires and takes its segment URLs with it, so the download could not be keyed by item and track the way every other one is; a transcode has no size until it exists, so a truncated download is indistinguishable from a complete one and the failure surfaces in a tunnel; and it would be a re-encode, at a bitrate the server chose, of a file the server already holds intact. The productive direction was the other one — widening the supported mime types so fewer items transcode at all. Reasoning is on `DownloadRefusal.TranscodeOnly` |
 | **`audio/x-aiff` is claimed but unverified** | It is in the supported-mime list and no AIFF extractor could be confirmed in Media3's published formats. Pre-existing, and the opposite mistake from the one just fixed: overselling makes the server hand over a file nothing can decode. Worth one test against a real AIFF file |
-| **Storage cap is checked, not enforced mid-download** | The estimate is charged against the cap before a download starts. A book much larger than its reported size can still overshoot; nothing aborts a download in flight |
-| **A streamed listen does not fill the download cache** | Streaming and downloading already share one cache, but a book listened to over the network is not retained, so listening ahead does not pre-warm anything. Upstream calls the split between the two concepts the root cause of much of its download trouble (app#1371) |
+| ~~**Storage cap is checked, not enforced mid-download**~~ | Done 16 Aug. Enforced on the existing one-second progress sweep; a cap-reaching download is stopped and its row records why |
+| **A streamed listen does not fill the download cache** — answered differently, 16 Aug | Streamed audio is now retained, but in a *second* bounded cache with an oldest-first evictor rather than in the download cache. Filling the download cache would have meant a download being evicted to make room for something merely streamed, which is exactly what makes an offline mode untrustworthy. The two figures are shown separately and never summed |
 | **Cache and Room can drift** | The cache is the truth about bytes and Room is the truth about state. `reconcile()` on start repairs the common case, but bytes evicted by the system outside the app would leave a row claiming "completed" |
 | **No download progress in a notification per item** | One foreground notification covers all downloads. Fine for a few, vague for a queue of ten |
 
@@ -183,13 +183,28 @@ Reported 15 August. The record now exists; the cause does not.
 | **A car that neither projects nor sets car mode reads as headphones** | Telling a car from headphones properly needs `BluetoothClass`, which needs `BLUETOOTH_CONNECT` on Android 12+ — a runtime permission prompt for a resume rule. The current answer infers it from the connected car-projection controller or `UiModeManager`, which covers Android Auto and misses a plain Bluetooth car stereo. Only affects which *resume* switch applies; pausing is unaffected |
 | **The foreground-service refusal is recorded, not handled** | `onForegroundServiceStartNotAllowedException` writes a diary line. What it should *do* — retry, or fall back to a plain notification — depends on when it actually happens, which is not yet known |
 
+## Left behind by the 16 August sweep, streaming and podcast work
+
+| Item | Note |
+|---|---|
+| **The deep buffer and the retained cache only take effect at the next service start** | A `LoadControl` is fixed at `ExoPlayer.Builder` and a `SimpleCache` holds a folder lock and a read index, so neither can be swapped under a running player. Changing either setting is honest about this rather than pretending to apply live. Rebuilding the player mid-book to apply one would cost the buffer and a re-prepare, which is a worse trade than waiting |
+| **`SpeedSettings.STEP` is declared and never used** | Which is why the truncating speed formatter never produced the "1.79x" it was capable of: nothing steps a speed by repeated addition, every value comes from a clean preset. Either wire it to a stepper or delete it — a constant that exists to describe behaviour nothing implements will eventually be trusted |
+| **`AutoDownloader` reads the primary series' sequence** | `bySeries` now returns real membership, but the download-ahead rule still filters on `library_item.seriesSequence`, which is re-derived for the *primary* series only. For a book in two series that may be the other series' number. Reading `ItemSeriesDao` would make it exact; nothing is worse than it was |
+| **A cap-stopped download offers a retry that will fail again** | Enforcing the cap mid-download writes the row to failed with its reason, and the failed row carries the ordinary retry affordance — which will hit the same cap. It should either be suppressed or say what has to change first |
+| **`EndItem` plus Undo cannot fully be undone** | A skip that ends an episode fires continuation, and the undo is a *seek*, so it is now guarded on the player still holding that episode. Where continuation has moved on, the progress row is restored — right for the next time that episode is opened — but the listener is not taken back to it. A proper fix wants a re-load entry point on `PlaybackConnection` rather than a seek |
+| **A skip is recorded in the position history as a plain seek** | `onPositionDiscontinuity` writes `reason = "seek"` for every discontinuity including our own skips. The diary names them properly; the history does not, so a trim that is eating audio is harder to see there than it should be |
+| **The "—" for a zero-or-less duration is now unpinned** | It was never a formatter behaviour and is now explicitly a call-site rule on three screens (podcast header, continue card, queue row). Correct placement, no test |
+| **`createComposeRule` is deprecated across every screenshot test** | The replacement swaps `Unconfined` for `StandardTestDispatcher`, so it is a repo-wide migration with real behavioural consequences rather than an import change. Not started inside one module on purpose |
+| **`onPlaybackResumption(session, controller)` is deprecated** | The three-argument version takes `isForPlayback`, which alters resumption semantics — the one path M0 rests on. Worth doing deliberately, with the device pass behind it |
+
 ## Known behaviour gaps
 
 | Item | Note |
 |---|---|
-| Podcasts show no progress bar on the continue-listening shelf | Progress is per-episode; the shelf reads item-level progress and finds none. Cosmetic, but it makes the shelf look broken for podcasts |
-| Losing connectivity mid-book stalls playback unless the book is downloaded | A downloaded book plays offline; a streamed one still stops when the connection does. Resuming a stream gracefully after a dropout is its own piece of work |
-| Series shelves ignore a third of the library's series | Roughly a third of series entries have no parseable `#N`, so they are excluded from "Next in series" by design. Reading `GET /api/libraries/:id/series` would recover the real ordering for them |
+| ~~Podcasts show no progress bar on the continue-listening shelf~~ | Fixed 16 Aug by the per-episode continue shelf: the row now names its own episode and carries that episode's progress and duration |
+| Losing connectivity mid-book stalls playback unless the book is downloaded — largely fixed 16 Aug | A deep read-ahead buffer, a retry ladder widened to five attempts over thirty seconds, a reconnect trigger, and a bounded cache so a re-prepare replays from disk rather than re-fetching. **None of it has met a real tunnel**; see the device pass |
+| Series with no volume numbers are still left out of "Next in series" | Membership now comes from the server's own join table, which recovered every book that was excluded for being in *two* series. What is left is a series nobody numbered at all, and the server cannot order those either — its listing sorts on the sequence strings, so with none to sort it returns the order the scanner inserted the rows in. That order lays a series page out, and is deliberately not allowed to recommend a next book |
+| Series listings are heavy and rate-limited to five minutes | `GET /api/libraries/:id/series` echoes the documented `minified` parameter without reading it, exactly as the collections listing does, and sends every member of every series as a complete item payload. Unlike collections its paging is real, so lugu walks it fifty series at a time, tied to a library sync rather than to opening a book page |
 
 ## Architecture and tech debt
 
@@ -198,11 +213,11 @@ Reported 15 August. The record now exists; the cause does not.
 | **R8 is on, and has never run on a device** | Turned on 15 August with hand-written keep rules for Media3, Room, Hilt, kotlinx-serialization, Ktor, OkHttp, Coil and Sentry. A clean `assembleRelease` proves only that nothing is missing at compile time — every path R8 can break fails at runtime and only in a release build. **A device pass on a release APK is owed before the next release is treated as trustworthy**: sign in, play a streamed book, play a downloaded one, open Android Auto, and change a setting |
 | **Release stack traces are obfuscated with nowhere to send the mapping** | R8 renames everything, so a crash report from a release build is unreadable until `mapping.txt` reaches Sentry. The Gradle plugin does this but fails the build without an auth token. Either gate the plugin on the token in CI, or attach `mapping.txt` to the GitHub release and retrace by hand |
 | `:core:queue` and `:core:testing` modules not created | M3 shipped the queue without either. `QueueRepository` lives in `:core:sync` with the other repositories, its DAO in `:core:db` with the other DAOs; a module holding one repository that depends on `:core:sync` anyway would be structure without substance. `QueueEntity` was already in schema v1, so the plan's real requirement — no migration for M3 — held |
-| Speed formatting duplicated | `trimSpeed` in `:feature:player` and `formatSpeed` in `:feature:settings` do the same job. Wants one shared formatter, probably in `:core:model` alongside the other display helpers |
+| ~~Speed formatting duplicated~~ | Done 16 Aug — `:core:model/Formatting.kt`, along with the clock and length formatters and the Continue-row rule |
 | `EncryptedSharedPreferences` / `MasterKey` deprecated | Still the practical option for encrypted token storage on Android; needs a replacement decision, not just a version bump |
-| `hiltViewModel` deprecated | Moved to `androidx.hilt.lifecycle.viewmodel.compose`; mechanical import change across the feature modules |
-| `MediaSession.ConnectionResult.AcceptedResultBuilder` deprecated | Mechanical, in `LuguPlaybackService` |
-| Time formatting duplicated | `formatTime` in `:feature:player` and `formatDuration` in `:feature:library` overlap |
+| ~~`hiltViewModel` deprecated~~ | Done 16 Aug. The new artifact already arrives through `hilt-navigation-compose`, so it was a pure import change across thirteen files |
+| ~~`MediaSession.ConnectionResult.AcceptedResultBuilder` deprecated~~ | Done 16 Aug. Only the single-argument *constructor* was deprecated, not the builder. The two-argument form is trust-aware, so the session now hands an untrusted controller Media3's restricted command set — its own default since 1.11 for anything that does not override `onConnect`. **Confirm car browse in the DHU**: Android Auto's host is trusted through the platform's `isTrustedForMediaControl`, but that is read rather than observed |
+| ~~Time formatting duplicated~~ | Done 16 Aug, same file. Collected rather than merged: a *place* takes colons and a *length* takes units, and a dense line and a roomy one stay different functions |
 
 ## Dev-process infrastructure — planned
 
@@ -286,7 +301,11 @@ key), but F-Droid client ≥1.19 gives fully unattended background updates on An
 (BR/ID/SG/TH) and globally in 2027. A free hobbyist tier covers up to 20 devices. Does
 not affect this now; will eventually affect every channel except Play.
 
-### 3. In-app feedback, including a post-crash prompt
+### 3. In-app feedback, including a post-crash prompt — **DONE 2026-08-15**
+
+`FeedbackScreen` and `PlaybackRecordScreen` both ship and are reachable from `MainActivity`;
+the crash prompt is `CrashPrompt`. The plan below is kept as the record of why it is shaped
+the way it is.
 
 **Why.** [FEEDBACK.md](FEEDBACK.md) is currently Tom typing up recollections after the
 fact. Catching the detail at the moment of the failure is strictly better evidence, and

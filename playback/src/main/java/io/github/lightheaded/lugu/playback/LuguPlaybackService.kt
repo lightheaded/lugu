@@ -15,6 +15,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
@@ -48,6 +49,7 @@ import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
+import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -57,9 +59,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The one playback brain.
@@ -105,6 +113,31 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private val stopAttributor = StopAttributor()
     private val retryPolicy = PlaybackRetryPolicy()
+    private val reconnectPolicy = ReconnectPolicy()
+    private val skipEnforcer = SkipRegionEnforcer()
+
+    /**
+     * The regions to skip in what is playing, or null for a book and for a show with no
+     * trim — which is nearly everything.
+     *
+     * Rebuilt when the item, the show's trim or the announce setting changes, so the
+     * half-second tick reads a field rather than recomputing regions from chapters on
+     * every pass. Volatile because that tick and the collector that maintains it are on
+     * different coroutines.
+     */
+    @Volatile
+    private var skipPlan: SkipPlan? = null
+
+    private var networkWatcher: NetworkWatcher? = null
+
+    /**
+     * The failure a returning network is allowed to undo, or null when there is none.
+     *
+     * Cleared by every transport command and by any successful playback, which is the half of
+     * the rule that matters most: a book the listener paused on purpose has nothing recorded
+     * against it, so nothing can restart it. See [ReconnectPolicy].
+     */
+    private var networkStall: NetworkStall? = null
 
     /**
      * The reason Media3 gave the last time it stopped wanting to play.
@@ -201,15 +234,24 @@ class LuguPlaybackService : MediaLibraryService() {
         // from the listener's buttons rather than from Media3's previous/next pair.
         setMediaNotificationProvider(LuguNotificationProvider(this))
 
-        // Reads through the download cache first and the network second, so a downloaded
-        // book plays from disk on every surface without any of them having to know that
-        // downloads exist. Auth headers rather than `?token=` URLs on the way out: a
-        // signed URL expires mid-book, a header is re-resolved per request.
-        val dataSourceFactory = downloadCache.playbackDataSourceFactory()
+        // Read once, synchronously, because two things below are fixed at construction and
+        // cannot be changed afterwards: the load control and the retained-stream cache. See
+        // [settingsAtStartup] for what that costs and what happens when it times out.
+        val startupSettings = settingsAtStartup()
+        currentSettings = startupSettings
+
+        // Reads through the download cache first, the retained-stream cache second and the
+        // network third, so a downloaded book plays from disk on every surface without any of
+        // them having to know that downloads exist. Auth headers rather than `?token=` URLs on
+        // the way out: a signed URL expires mid-book, a header is re-resolved per request.
+        val dataSourceFactory = downloadCache.playbackDataSourceFactory(
+            retainStreamedMb = startupSettings.stream.retainStreamedMb,
+        )
 
         player = ExoPlayer.Builder(this)
             .setRenderersFactory(DefaultRenderersFactory(this))
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setLoadControl(loadControlFor(startupSettings.stream))
             // Speech to begin with, which is what tells Media3 to pause rather than duck;
             // [applyDucking] replaces it with whatever the setting says.
             .setAudioAttributes(audioAttributes(duck = false), /* handleAudioFocus = */ true)
@@ -239,15 +281,20 @@ class LuguPlaybackService : MediaLibraryService() {
             onPlayRequested = {
                 diary.record(PlaybackEvent.PLAY_REQUESTED, playbackDetail())
                 pausedByRoute = null
+                networkStall = null
             },
             onPauseRequested = {
                 // A deliberate pause ends any retry in flight; nothing should start
-                // playing again after the listener has said stop.
+                // playing again after the listener has said stop. The stall goes with it,
+                // for the same reason and with more force: a returning network must never
+                // undo a stop the listener asked for, however recent the failure before it.
                 retryJob?.cancel()
                 pausedByRoute = null
+                networkStall = null
             },
             onStopRequested = {
                 stopAttributor.declare(StopAttributor.REASON_STOP_COMMAND, System.currentTimeMillis())
+                networkStall = null
             },
         )
 
@@ -273,6 +320,8 @@ class LuguPlaybackService : MediaLibraryService() {
             onGained = ::onAudioRouteGained,
         ).also { it.start() }
 
+        networkWatcher = NetworkWatcher(this, ::onNetworkAvailable).also { it.start() }
+
         // Settings are read live, so changing a skip duration, hiding a button or turning
         // on silence skipping takes effect immediately rather than at the next session.
         scope.launch {
@@ -295,6 +344,10 @@ class LuguPlaybackService : MediaLibraryService() {
             }
         }
 
+        // Kept in a field rather than read on the tick, because building it means walking
+        // an episode's chapters and the tick runs twice a second for the whole of a book.
+        scope.launch { skipPlans().collect { skipPlan = it } }
+
         // The accelerometer follows the timer rather than the app: a sensor registered
         // for the whole life of the service is a battery cost nothing on screen explains.
         scope.launch {
@@ -312,6 +365,98 @@ class LuguPlaybackService : MediaLibraryService() {
         }
 
         startPositionTicker()
+    }
+
+    /**
+     * The settings, read before anything is built.
+     *
+     * Almost every setting in lugu is read live, off the flow below, and takes effect on the
+     * playing book. Two cannot: a `LoadControl` is handed to `ExoPlayer.Builder` and is fixed
+     * for the life of the player, and a `SimpleCache` holds a lock on its folder and an index
+     * it has already read. Both therefore need an answer here, in `onCreate`, before the
+     * collector has had a chance to emit anything.
+     *
+     * So this blocks — briefly, and with a bound. The read is one small preferences file and
+     * is almost always warm; the timeout exists for the cold start under disk pressure where
+     * it is not, and the answer when it expires is the defaults, which are the same defaults
+     * the flow would have produced for anyone who has never touched the settings. What is
+     * lost in that case is one service lifetime's worth of a non-default buffer size, and
+     * everything that *can* be applied live still is, a moment later, when the flow emits.
+     *
+     * Blocking on `Dispatchers.IO` rather than inline so the disk read does not happen on the
+     * main thread — the main thread waits for it, which is the point, but it does not do it.
+     */
+    private fun settingsAtStartup(): PlayerSettings = runBlocking(Dispatchers.IO) {
+        withTimeoutOrNull(SETTINGS_READ_TIMEOUT_MS) { playbackPrefs.currentSettings() }
+    } ?: PlayerSettings()
+
+    /**
+     * How far ahead the player reads, and the ceiling that stops that being a crash.
+     *
+     * The numbers, and the bitrate assumption behind the byte ceiling, are worked out and
+     * argued in [StreamBuffer]. Two things about how they are applied belong here:
+     *
+     * **Streaming, not local.** Media3 1.11 keeps separate buffer durations for the two and
+     * decides which apply from the media item's URI scheme. Everything lugu plays reads as
+     * streaming, including a fully downloaded book, because a downloaded item keeps its
+     * server URL as its URI and finds its bytes by cache key instead — see `MediaResolver`.
+     * So the deep buffer applies to downloads too, which costs nothing: the reads come off
+     * the disk and complete instantly. The streaming-specific setter is used rather than the
+     * generic one anyway, so that the day the download path moves to `file:` URIs, the local
+     * defaults are already sensible and this needs no thought.
+     *
+     * **`prioritizeTimeOverSizeThresholds` is left false for streaming**, which is what makes
+     * the byte ceiling authoritative rather than advisory: `DefaultLoadControl` stops loading
+     * on the ceiling even when the buffered duration is still short of the minimum. True
+     * would invert that and let a high-bitrate file spend whatever the minutes worked out to.
+     *
+     * A change to the buffer setting takes effect **the next time the playback service
+     * starts**, and there is no way to make it otherwise — the load control is not
+     * replaceable on a built player. Nothing here pretends to apply it live.
+     */
+    private fun loadControlFor(stream: StreamSettings): DefaultLoadControl {
+        val plan = StreamBuffer.planFor(
+            bufferAheadMinutes = stream.bufferAheadMinutes,
+            maxHeapBytes = Runtime.getRuntime().maxMemory(),
+        )
+        return DefaultLoadControl.Builder()
+            .setBufferDurationsMsForStreaming(
+                plan.minBufferMs,
+                plan.maxBufferMs,
+                StreamBuffer.BUFFER_FOR_PLAYBACK_MS,
+                StreamBuffer.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+            )
+            .setTargetBufferBytes(plan.targetBufferBytes)
+            .build()
+    }
+
+    /**
+     * A network arrived, and something may be waiting for it.
+     *
+     * Whether anything should happen is [ReconnectPolicy]'s decision and not this method's;
+     * every outcome is written to the diary, including the refusals, because "it did not come
+     * back on its own" and "it came back on its own when it should not have" are both
+     * complaints that cannot be investigated from silence.
+     *
+     * The retry ladder is reset as well as cancelled. A ladder exhausted against the old
+     * connection has no bearing on the new one, and leaving the count where it was would mean
+     * the first failure after a genuine reconnection got no attempts at all.
+     */
+    private fun onNetworkAvailable() {
+        val verdict = reconnectPolicy.verdictFor(
+            stall = networkStall,
+            nowMs = System.currentTimeMillis(),
+            hasSomethingLoaded = player.mediaItemCount > 0,
+            alreadyPlaying = player.isPlaying,
+        )
+        diary.record(NETWORK_RETURNED, playbackDetail(verdict.reason))
+        if (verdict.action != ReconnectAction.RESUME) return
+
+        networkStall = null
+        retryJob?.cancel()
+        retryAttempts = 0
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        player.play()
     }
 
     /**
@@ -640,6 +785,9 @@ class LuguPlaybackService : MediaLibraryService() {
                 delay(SLEEP_TICK_MS)
                 applyCarSleepRule()
                 evaluateSleepTimer()
+                // Before the metadata refresh, so a skip and the chapter it lands in are
+                // published on the same tick rather than a beat apart.
+                enforceSkipRegions()
                 refreshChapterMetadata()
             }
         }
@@ -700,6 +848,108 @@ class LuguPlaybackService : MediaLibraryService() {
             persistPosition(reason = "sleep-timer")
             syncShakeListening()
         }
+    }
+
+    /**
+     * The current episode's skip plan, or null.
+     *
+     * `flatMapLatest` because the trim is stored per show, so *which* preference flow to
+     * watch is decided by what is playing and has to be swapped when that changes.
+     * Combined with the settings so that turning announcing off is felt on the next skip
+     * rather than only on the next episode.
+     */
+    @kotlin.OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun skipPlans(): Flow<SkipPlan?> =
+        stateHolder.nowPlaying.flatMapLatest { now ->
+            val episodeId = now?.episodeId
+            if (now == null || episodeId == null) {
+                flowOf(null)
+            } else {
+                // Keyed on the library item, which for an episode is the show: the trim
+                // belongs to the podcast, exactly as the speed does.
+                combine(
+                    playbackPrefs.observeTrimFor(now.libraryItemId),
+                    playbackPrefs.settings,
+                ) { trim, settings ->
+                    SkipPlan.forEpisode(
+                        libraryItemId = now.libraryItemId,
+                        episodeId = episodeId,
+                        durationSec = now.durationSec,
+                        chapters = now.chapters,
+                        trim = trim,
+                        announces = settings.skip.announceSkips,
+                    )
+                }
+            }
+        }
+
+    /**
+     * Jumps a podcast episode over its intro, its outro and its marked adverts.
+     *
+     * The decision belongs to [SkipRegionEnforcer] and the seek belongs here, because the
+     * seek has to go back through [AbsoluteTiming]: the enforcer works, like everything
+     * that records, syncs or resumes a position, in whole-item seconds, and only this has
+     * the track list to turn one of those into a player position.
+     *
+     * On the existing half-second loop rather than a ticker of its own — nothing wakes up
+     * for this, and [skipPlan] is null for every book and every untrimmed show, so the
+     * ordinary cost is one null check.
+     */
+    private fun enforceSkipRegions() {
+        val plan = skipPlan ?: return
+        val context = stateHolder.nowPlaying.value ?: return
+        val position = currentAbsoluteSec() ?: return
+        val decision = skipEnforcer.decide(plan, position, player.isPlaying) ?: return
+
+        // Announced before the seek, and before the end, so the notice is about the
+        // episode still in the player. A correction the listener cannot see is
+        // indistinguishable from lost audio.
+        decision.undo?.let(stateHolder::setUndoableJump)
+
+        when (decision) {
+            is SkipDecision.Seek -> {
+                diary.record(
+                    SKIPPED_REGION,
+                    playbackDetail("skipped the ${decision.skipped.reason.label}"),
+                )
+                seekToAbsolute(context, decision.toPositionSec)
+            }
+
+            is SkipDecision.EndItem -> {
+                diary.record(
+                    SKIPPED_REGION,
+                    playbackDetail("ended on the ${decision.skipped.reason.label}"),
+                )
+                // The end of the episode reached the way every episode reaches it. Seeking
+                // to the tail of the last track puts Media3 in STATE_ENDED, and
+                // [PersistenceListener] then persists it — finished, because the position
+                // is inside FINISHED_TAIL_SEC of the duration — and calls [continueToNext].
+                // Stopping here instead would leave the queue, the continuation and the
+                // progress sync all unrun, and the episode would sit at its very end
+                // marked unfinished forever.
+                seekToAbsolute(context, context.durationSec)
+            }
+        }
+    }
+
+    /**
+     * Whole-item seconds to a seek — the only place a position from the model is ever
+     * turned into one.
+     *
+     * Seeks the raw [player] rather than the session's wrapper, following
+     * [applyRewindOnResume]: this is an internal correction, and [ChapterAwarePlayer]
+     * remaps the transport commands for a listener pressing buttons.
+     */
+    private fun seekToAbsolute(context: NowPlaying, absoluteSec: Double) {
+        val safe = absoluteSec.coerceAtLeast(0.0)
+        // An item that arrived without a track list would otherwise map every position to
+        // track 0 offset 0, which is a seek to the beginning wearing a skip's clothes.
+        if (context.tracks.isEmpty()) {
+            player.seekTo((safe * 1000).toLong())
+            return
+        }
+        val target = AbsoluteTiming.toTrack(context.tracks, safe)
+        player.seekTo(target.trackIndex, target.positionMs)
     }
 
     /**
@@ -1033,6 +1283,14 @@ class LuguPlaybackService : MediaLibraryService() {
                     newPosition.mediaItemIndex,
                     newPosition.positionMs.coerceAtLeast(0),
                 )
+
+                // Synchronously, before the coroutine below: the enforcer has to know
+                // whether this seek was its own or the listener's before the next tick.
+                // A deliberate seek into a region is the listener overriding the skip, and
+                // it is also what makes the Undo on a skip notice work rather than be
+                // undone again half a second later.
+                skipEnforcer.onSeek(skipPlan, to)
+
                 scope.launch {
                     val account = authRepository.account() ?: return@launch
                     withContext(Dispatchers.IO) {
@@ -1091,6 +1349,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 // one rather than a continuation of the last.
                 retryAttempts = 0
                 pausedByRoute = null
+                networkStall = null
                 diary.record(PlaybackEvent.PLAYING, playbackDetail())
                 return
             }
@@ -1150,6 +1409,15 @@ class LuguPlaybackService : MediaLibraryService() {
             diary.record(
                 PlaybackEvent.ERROR,
                 playbackDetail("${error.errorCodeName}: ${error.message.orEmpty()}"),
+            )
+            // Recorded here, at the failure, because by the time the network returns the
+            // player has been idle for minutes and no longer holds either fact.
+            // `playWhenReady` survives an error — the player still wants to play, it simply
+            // cannot — so it is the honest answer to "was anybody listening".
+            networkStall = NetworkStall(
+                atMs = System.currentTimeMillis(),
+                networkFault = retryPolicy.isTransient(error.errorCode),
+                wantedToPlay = player.playWhenReady,
             )
             scheduleRetry(error, resumeAfterwards = player.playWhenReady)
         }
@@ -1320,7 +1588,20 @@ class LuguPlaybackService : MediaLibraryService() {
                 carControllers += controller.packageName
             }
 
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+            // The base set depends on whether the user trusts this controller, which is
+            // Media3's own default behaviour since 1.11 and what the single-argument
+            // `AcceptedResultBuilder(session)` — now deprecated — could not express. An
+            // untrusted controller is any app that is not lugu, not the system, and has
+            // neither media-control permission nor an enabled notification listener; the
+            // notification controller, the app's own controller and a car projection host are
+            // all trusted. Giving the untrusted case the full set would hand any installed
+            // app the whole browse tree, which is exactly what these constants exist to stop.
+            val commands = if (controller.isTrusted) {
+                MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+            } else {
+                MediaSession.ConnectionResult.DEFAULT_UNTRUSTED_SESSION_AND_LIBRARY_COMMANDS
+            }.buildUpon()
+
             carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
             NotificationLayout.allCommands().forEach { commands.add(it) }
             // Not a button anywhere. It is how the app tells the service it has come to the
@@ -1329,7 +1610,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 SessionCommand(PersistencePolicy.COMMAND_ARM_LAST_PLAYED, android.os.Bundle.EMPTY),
             )
 
-            val result = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+            val result = MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands.build())
 
             // The controller behind the notification is given the layout and nothing else.
@@ -1579,6 +1860,7 @@ class LuguPlaybackService : MediaLibraryService() {
         shakeDetector?.stop()
         shakeListeningAt = null
         routeWatcher?.stop()
+        networkWatcher?.stop()
         loudnessBoost?.release()
         clearListener()
         session?.run {
@@ -1599,6 +1881,15 @@ class LuguPlaybackService : MediaLibraryService() {
 
         /** One buffering record per interval, so stalls show as a pattern without flooding. */
         const val BUFFERING_RECORD_INTERVAL_MS = 30_000L
+
+        /**
+         * How long `onCreate` will wait for the settings it cannot apply later.
+         *
+         * Short enough that a slow disk delays the service rather than being reported as one
+         * that never started, long enough that an ordinary cold-start read comfortably
+         * finishes inside it. See [settingsAtStartup].
+         */
+        const val SETTINGS_READ_TIMEOUT_MS = 500L
 
         /**
          * Package prefixes that mean a car is driving the session. Prefixes rather than
@@ -1636,6 +1927,16 @@ class LuguPlaybackService : MediaLibraryService() {
         const val HEADSET_BUTTON = "headset button"
 
         /**
+         * A network arrived, and what lugu decided to do about it.
+         *
+         * Written on every arrival, including the ones that change nothing, because the two
+         * complaints this feature sits between — "it never came back" and "it came back on
+         * its own in my pocket" — are told apart by exactly this line and by nothing else.
+         * The verdict's own words say which condition refused it.
+         */
+        const val NETWORK_RETURNED = "network came back"
+
+        /**
          * The sleep timer is armed and something has happened to it short of firing: it was
          * held for a car, given back, carried through a pause, or found nothing to count.
          *
@@ -1665,6 +1966,15 @@ class LuguPlaybackService : MediaLibraryService() {
          * record that a book in the shade was put there by the app rather than by a press.
          */
         const val ARMED = "armed the last thing played"
+
+        /**
+         * A stretch the listener's trim settings asked to be jumped over.
+         *
+         * Recorded because a skip and a stall are the same event from the outside — the
+         * audio moved somewhere the listener did not put it — and an over-eager trim
+         * setting is a plausible answer to "it jumped and I do not know why".
+         */
+        const val SKIPPED_REGION = "skipped a region"
 
         /**
          * Whether a foreground service's notification can be swiped away.

@@ -505,14 +505,35 @@ class PlaybackConnection @Inject constructor(
     /** Live player settings, so the UI lays out the controls the listener asked for. */
     val settings: Flow<PlayerSettings> get() = playbackPrefs.settings
 
-    /** Puts the position back where it was before a jump was adopted from another device. */
+    /**
+     * Puts the position back where it was before a jump the listener did not ask for.
+     *
+     * The revert always happens: it is addressed to the jump's own item and episode, so it
+     * writes the right progress row whatever is loaded by the time the button is pressed.
+     *
+     * The *seek* is guarded on the player still holding that same thing, because it is not
+     * addressed to anything — it moves whatever is loaded. The notice sits on screen for
+     * `noticeSeconds`, which is long enough for the item to change underneath it: an
+     * episode that ends during the notice hands over to the next one, and a skip that ends
+     * an episode by design does exactly that. Seeking then would drag the *new* episode to
+     * a position belonging to the old one, which is the same class of bug as the
+     * notification rewind that started all of this — an unasked-for jump, this time caused
+     * by the button offered to undo one.
+     *
+     * Where the item has moved on, restoring the row is still the useful half: the position
+     * is right again the next time that episode is opened.
+     */
     fun undoJump() {
         scope.launch {
             val jump = stateHolder.pendingJump.value ?: return@launch
             val account = authRepository.account() ?: return@launch
-            val duration = stateHolder.nowPlaying.value?.durationSec ?: 0.0
+            val loaded = stateHolder.nowPlaying.value
+            val duration = loaded?.durationSec ?: 0.0
             withContext(Dispatchers.IO) { progressRepository.revertJump(account, jump, duration) }
-            seekTo(jump.fromSec)
+            val stillLoaded = loaded != null &&
+                loaded.libraryItemId == jump.libraryItemId &&
+                loaded.episodeId == jump.episodeId
+            if (stillLoaded) seekTo(jump.fromSec)
             stateHolder.clearJump()
         }
     }

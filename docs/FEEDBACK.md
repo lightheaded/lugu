@@ -387,6 +387,50 @@ says "Delete books you have listened to", explains that it applies once you reac
 and offers "After a week" rather than "After 7d". A setting whose worst reading is
 destructive has to be worded for that reading.
 
+## Podcast trimming, and adverts
+
+Asked on 16 Aug alongside a batch of backlog items: *skip intro and outro — and maybe skip
+for ads too, if it's the same mechanism.*
+
+| Item | Status |
+|---|---|
+| **Skip a podcast's intro and outro**, per show | done 16 Aug |
+| **Skip adverts** | done 16 Aug, for marked adverts only — see below |
+
+**It is the same mechanism at the point of playing, and a different one at the point of
+finding**, and the distinction is what decides what can honestly be offered.
+
+An intro and an outro are fixed offsets from the ends of an episode. The same sting opens
+every episode of a show, so one number covers all of them forever. An advert is somewhere
+in the middle, at a different place and a different length every week — no fixed offset can
+find one.
+
+So adverts are skipped where the episode *says* where they are: a chapter whose title names
+it as advertising. A useful number of shows ship those markers, because the same markers
+drive the chapter list in every podcast app, and lugu already parses them — so this costs a
+title match and nothing else.
+
+What is deliberately not attempted is finding an *unmarked* advert. That needs audio
+fingerprinting against a database of known adverts — a different kind of program, with a
+network service behind it, and a false positive silently eats a minute of the show. A skip
+that removes narration is worse than an advert that plays.
+
+The title match is on the whole title with punctuation stripped, so "[Ad]" and "Sponsor
+Message" match while "Adam's Return" and "Broad Strokes" do not. A substring match on "ad"
+would have skipped both of those, and that is the direction that matters.
+
+**Every skip announces itself and can be undone**, through the same notice the app already
+uses for a position it corrected — a skip is exactly the case where a silent correction and
+a lost minute of audio are indistinguishable from the listener's side. The notice now names
+the cause, so it reads "Skipped the intro from 0:00 to 0:15" rather than leaving the numbers
+to speak for themselves.
+
+**Trim belongs to the show, not to the episode**, stored beside the per-podcast speed and
+for the same reason: setting it per episode would mean setting it again every week. A
+podcast's own page shows whether it is following the global default or carries its own,
+because a show trimmed to nothing and a show following a default of nothing hold identical
+numbers and behave differently the moment that default moves.
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport

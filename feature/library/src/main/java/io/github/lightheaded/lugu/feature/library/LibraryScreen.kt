@@ -51,7 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.ItemSort
@@ -96,7 +96,11 @@ fun LibraryScreen(
         state.items.map { it.fastScrollKey(state.sort) }
     }
     val letters = remember(letterKeys) { fastScrollLetters(letterKeys) }
-    val showRail = fastScrollEarnsItsPlace(state.items.size, state.sort, letters.size)
+    val showRail = fastScrollEarnsItsPlace(
+        itemCount = state.items.size,
+        letterCount = letters.size,
+        orderedAlphabetically = state.sort.isAlphabetical,
+    )
     val currentLetter by remember(letterKeys) {
         derivedStateOf { letterKeys.getOrNull(gridState.firstVisibleItemIndex)?.let(::initialOf) }
     }

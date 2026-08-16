@@ -68,6 +68,8 @@ import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
+import io.github.lightheaded.lugu.core.model.PodcastTrim
+import io.github.lightheaded.lugu.core.model.formatLengthCompact
 import io.github.lightheaded.lugu.core.sync.BrowseKind
 import io.github.lightheaded.lugu.core.sync.QueueItem
 import io.github.lightheaded.lugu.core.sync.ShelfEntry
@@ -92,7 +94,8 @@ import org.robolectric.annotation.GraphicsMode
  * class whose dependencies are final classes over Room, DataStore and Ktor, so none of
  * them can be rendered from fabricated state as it stands. What is rendered here instead
  * is each screen's own components — [ItemCard], [ShelfRowView], [ContinueCard],
- * [ListControlsBar], [SelectionBar], [DownloadButton], [RowActionsMenu] — arranged the way
+ * [ListControlsBar], [SelectionBar], [DownloadButton], [RowActionsMenu],
+ * [PodcastTrimSection] — arranged the way
  * the screen arranges them. That covers the parts where the design decisions live and where a
  * regression would actually show; it does not cover the assembly, and a change to the
  * order of blocks in a screen file will not fail these.
@@ -163,6 +166,16 @@ class LibraryScreensScreenshotTest {
     @Test
     fun `a podcast page reads correctly in the dark`() {
         capture("item_podcast_dark", dark = true) { PodcastPagePreview() }
+    }
+
+    @Test
+    fun `the trim controls tell a show's own setting from the default`() {
+        capture("podcast_trim_light", dark = false) { PodcastTrimPreview() }
+    }
+
+    @Test
+    fun `the trim controls tell the two states apart in the dark`() {
+        capture("podcast_trim_dark", dark = true) { PodcastTrimPreview() }
     }
 
     @Test
@@ -553,8 +566,8 @@ private fun BookPagePreview() {
                 LinearProgressIndicator(progress = { 0.42f }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "${formatDuration(0.42 * LIGHTHOUSE.durationSec)} of " +
-                        formatDuration(LIGHTHOUSE.durationSec),
+                    "${formatLengthCompact(0.42 * LIGHTHOUSE.durationSec)} of " +
+                        formatLengthCompact(LIGHTHOUSE.durationSec),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -581,6 +594,18 @@ private fun PodcastPagePreview() {
     ItemPageScaffold(PODCAST.title) {
         item { ItemHeaderPreview(PODCAST) }
         item { GroupLinkPreview(null, PODCAST.authorName.orEmpty()) }
+        // Above the episode list, where the screen puts it: it is a fact about the show,
+        // and everything below this point is a fact about one episode.
+        item {
+            PodcastTrimSection(
+                trim = PodcastTrim.NONE,
+                isOwn = false,
+                expanded = false,
+                onExpandedChange = {},
+                onTrimChange = {},
+                onUseDefault = {},
+            )
+        }
         item {
             Column {
                 Text("Episodes", style = MaterialTheme.typography.titleMedium)
@@ -605,6 +630,37 @@ private fun PodcastPagePreview() {
             }
         }
         items(EPISODES.size) { index -> EpisodeRowPreview(EPISODES[index]) }
+    }
+}
+
+/**
+ * The trim controls in the two states the whole section exists to distinguish.
+ *
+ * Folded away at the top: a show following the default, said in the quiet colour. Open
+ * underneath: a show with a trim of its own, said in the accent one. If those two ever
+ * start looking alike, "set to nothing" and "never set" become the same row on screen, and
+ * the way back to the default disappears with the difference.
+ */
+@Composable
+private fun PodcastTrimPreview() {
+    Column(Modifier.padding(16.dp)) {
+        PodcastTrimSection(
+            trim = PodcastTrim.NONE,
+            isOwn = false,
+            expanded = false,
+            onExpandedChange = {},
+            onTrimChange = {},
+            onUseDefault = {},
+        )
+        Spacer(Modifier.height(16.dp))
+        PodcastTrimSection(
+            trim = PodcastTrim(introSec = 15, outroSec = 30, skipMarkedAdverts = true),
+            isOwn = true,
+            expanded = true,
+            onExpandedChange = {},
+            onTrimChange = {},
+            onUseDefault = {},
+        )
     }
 }
 
@@ -652,7 +708,7 @@ private fun ItemHeaderPreview(item: LibraryItem) {
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                formatDuration(item.durationSec),
+                item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -775,7 +831,7 @@ private fun QueueRowPreview(item: QueueItem, position: Int) {
                     Text(
                         buildString {
                             item.author?.let { append(it).append(" · ") }
-                            append(formatDuration(item.durationSec))
+                            append(item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—")
                             if (item.isSuggestion) append(" · suggested")
                         },
                         style = MaterialTheme.typography.bodySmall,

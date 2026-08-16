@@ -156,6 +156,28 @@ class DownloadAggregationTest {
     }
 
     /**
+     * A stopped file is one lugu stopped, and [StorageCap] is the only thing that ever does.
+     * Read as queued it would leave the row promising to continue, waiting for a resumption
+     * that will not come until the cap is raised — and hiding the message that says so.
+     *
+     * Waiting for Wi-Fi is a different state entirely: an unmet *requirement* leaves the file
+     * queued, which is why that case is not caught here.
+     */
+    @Test
+    fun `a download stopped at the storage cap reads as failed rather than queued`() {
+        val files = listOf(
+            track(1, 100.0) to FileProgress(Download.STATE_COMPLETED, 1_000, 1_000, 100f),
+            track(2, 100.0) to FileProgress(Download.STATE_STOPPED, 400, 1_000, 40f),
+        )
+
+        val folded = DownloadAggregation.fold(files, knownBytesTotal = 2_000)
+
+        assertThat(folded.state).isEqualTo(DownloadState.FAILED)
+        // The bytes already fetched are still counted, because they are still on the disk.
+        assertThat(folded.bytesDownloaded).isEqualTo(1_400)
+    }
+
+    /**
      * A podcast episode with no recorded duration would otherwise divide by nought, and a
      * NaN percentage renders as an empty bar for ever.
      */

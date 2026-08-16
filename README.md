@@ -50,6 +50,15 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
   is still a bookmark
 - **Author, series and narrator pages**, computed locally — the server has no API that
   hands a client either of the first two
+- **Podcast trimming**, per show: skip the intro, skip the outro, and skip adverts where
+  the episode marks them with a chapter that names itself as one. Every skip says so and
+  can be undone. An advert the episode does not mark cannot be found — that would need
+  fingerprinting against a database of known adverts, and a skip that removes narration
+  is worse than an advert that plays
+- **Streaming that survives a dropout**: minutes of read-ahead rather than seconds,
+  retries that come back when the network does, and streamed audio kept in a bounded
+  cache of its own — never in the download cache, because a book you asked for must
+  never be evicted to make room for one you merely streamed
 - Chapter list, silence skipping, volume boost, a sleep timer that fades out, rewinds
   when you come back and can be extended with a shake
 - Configurable transport: skip durations, which buttons appear where and **in what

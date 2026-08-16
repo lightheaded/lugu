@@ -120,7 +120,25 @@ data class MetadataDto(
     val subtitle: String? = null,
     val authorName: String? = null,
     val narratorName: String? = null,
+    /**
+     * Every series this book is in, joined into one string: "The Breakwater #2", or
+     * "The Breakwater #1, The Tidelands #3" for a book in two of them.
+     *
+     * The only series information the *minified* payload carries, which is what the paged
+     * library listing returns and therefore what the whole-library sync sees. Prefer
+     * [series] wherever it is populated; this string cannot represent two memberships
+     * without becoming ambiguous, and a client that splits it is guessing.
+     */
     val seriesName: String? = null,
+    /**
+     * The structured membership — present on `?expanded=1` and absent from every minified
+     * payload (verified against `Book.oldMetadataToJSONMinified` on 2.36.0, which lists
+     * `seriesName` and not this).
+     *
+     * An empty list here therefore means "this payload was minified" at least as often as
+     * it means "this book is in no series", so emptiness is never read as an answer.
+     */
+    val series: List<SeriesRefDto> = emptyList(),
     val description: String? = null,
     val publishedYear: String? = null,
     val publisher: String? = null,
@@ -129,6 +147,21 @@ data class MetadataDto(
     val explicit: Boolean = false,
     /** Podcast metadata uses `author` where books use `authorName`. */
     val author: String? = null,
+)
+
+/**
+ * One membership of one series, from the structured `metadata.series` array.
+ *
+ * [sequence] is a **string** and not a number: on the server it is a plain `STRING`
+ * column on the book-to-series join row with nothing validating it, so it arrives as "2",
+ * as "2.5", as "Book Two" and as null. Declaring it as a number here would turn a
+ * mis-typed sequence into a parse failure for the whole item.
+ */
+@Serializable
+data class SeriesRefDto(
+    val id: String? = null,
+    val name: String = "",
+    val sequence: String? = null,
 )
 
 @Serializable

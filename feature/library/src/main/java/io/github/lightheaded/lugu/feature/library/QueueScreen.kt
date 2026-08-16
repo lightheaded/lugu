@@ -45,8 +45,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.model.formatLengthCompact
 import io.github.lightheaded.lugu.core.sync.QueueItem
 
 /**
@@ -291,7 +292,9 @@ private fun QueueRowView(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     val detail = buildString {
                         item.author?.takeIf { it.isNotBlank() }?.let { append(it).append(" · ") }
-                        append(formatDuration(item.durationSec))
+                        // A queued entry the library no longer holds has no duration to
+                        // print, and the dash says so without pretending it is a length.
+                        append(item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—")
                         if (item.isSuggestion) append(" · suggested")
                     }
                     Text(

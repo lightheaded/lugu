@@ -18,6 +18,7 @@ import io.github.lightheaded.lugu.core.db.ChapterDao
 import io.github.lightheaded.lugu.core.db.CollectionDao
 import io.github.lightheaded.lugu.core.db.DownloadDao
 import io.github.lightheaded.lugu.core.db.EpisodeDao
+import io.github.lightheaded.lugu.core.db.ItemSeriesDao
 import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.LibraryItemFtsDao
@@ -47,6 +48,8 @@ object DatabaseModule {
     @Provides fun libraryDao(db: LuguDatabase): LibraryDao = db.libraryDao()
 
     @Provides fun libraryItemDao(db: LuguDatabase): LibraryItemDao = db.libraryItemDao()
+
+    @Provides fun itemSeriesDao(db: LuguDatabase): ItemSeriesDao = db.itemSeriesDao()
 
     @Provides fun episodeDao(db: LuguDatabase): EpisodeDao = db.episodeDao()
 

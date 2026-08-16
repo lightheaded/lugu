@@ -49,9 +49,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import io.github.lightheaded.lugu.core.model.formatLengthCompact
 import io.github.lightheaded.lugu.core.sync.StartTab
 
 /** The two jobs the signed-in app does, in the order they are wanted. */
@@ -333,7 +334,11 @@ internal fun ContinueCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "${formatDuration(card.remainingSec)} left",
+                    // Nothing reaches this card unless it is part-heard, so the dash is for
+                    // the one case left: a mirror with no duration to subtract from. "0s
+                    // left" there would read as a book about to finish.
+                    card.remainingSec.takeIf { it > 0 }
+                        ?.let { "${formatLengthCompact(it)} left" } ?: "—",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

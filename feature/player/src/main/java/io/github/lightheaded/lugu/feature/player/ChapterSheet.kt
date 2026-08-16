@@ -27,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.Chapters
+import io.github.lightheaded.lugu.core.model.formatClock
+import io.github.lightheaded.lugu.core.model.formatLength
 
 /** A chapter as the list draws it: its number, whether it is the one playing, and how far in. */
 internal data class ChapterRow(
@@ -149,12 +151,12 @@ private fun ChapterRowItem(row: ChapterRow, onSeek: (Double) -> Unit) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    formatTime(row.chapter.startSec),
+                    formatClock(row.chapter.startSec),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    formatDurationLabel(row.chapter.endSec - row.chapter.startSec),
+                    formatLength(row.chapter.endSec - row.chapter.startSec),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

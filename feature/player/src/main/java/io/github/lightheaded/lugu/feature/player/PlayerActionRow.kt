@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 
 /**
  * Everything in the player that is not transport.
@@ -46,7 +47,7 @@ internal fun PlayerActionRow(
     ) {
         AssistChip(
             onClick = onSpeed,
-            label = { Text("${trimSpeed(speed)}x", maxLines = 1, softWrap = false) },
+            label = { Text("${formatSpeedNumber(speed)}x", maxLines = 1, softWrap = false) },
             leadingIcon = { Icon(Icons.Default.Speed, contentDescription = "Playback speed") },
         )
 

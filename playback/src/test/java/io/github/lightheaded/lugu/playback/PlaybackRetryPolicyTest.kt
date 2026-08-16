@@ -55,6 +55,21 @@ class PlaybackRetryPolicyTest {
         assertThat(policy.isTransient(PlaybackException.ERROR_CODE_DECODING_FAILED)).isFalse()
     }
 
+    /**
+     * The bound is an argument rather than a constant — see the class documentation — so it
+     * is pinned as the figure that argument is about: half a minute of trying, not seven
+     * seconds, now that a returning network is caught separately and this ladder covers the
+     * connection that never went away.
+     */
+    @Test
+    fun `the whole ladder is about half a minute`() {
+        val total = (0 until PlaybackRetryPolicy.MAX_ATTEMPTS).sumOf {
+            policy.retryDelayMs(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, it) ?: 0L
+        }
+
+        assertThat(total).isEqualTo(31_000L)
+    }
+
     @Test
     fun `the wait never runs away`() {
         val delay = policy.retryDelayMs(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, 2)

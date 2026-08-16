@@ -3,6 +3,9 @@ package io.github.lightheaded.lugu.core.sync
 import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.AbsJson
 import io.github.lightheaded.lugu.core.api.LibraryItemDto
+import io.github.lightheaded.lugu.core.api.librarySeries
+import io.github.lightheaded.lugu.core.api.seriesRefFor
+import io.github.lightheaded.lugu.core.api.seriesRefs
 import io.github.lightheaded.lugu.core.api.toDomain
 import io.github.lightheaded.lugu.core.db.BrowseGroup
 import io.github.lightheaded.lugu.core.db.ChapterDao
@@ -10,19 +13,22 @@ import io.github.lightheaded.lugu.core.db.ChapterEntity
 import io.github.lightheaded.lugu.core.db.EpisodeDao
 import io.github.lightheaded.lugu.core.db.EpisodeEntity
 import io.github.lightheaded.lugu.core.db.InProgressRow
+import io.github.lightheaded.lugu.core.db.ItemSeriesDao
+import io.github.lightheaded.lugu.core.db.ItemSeriesEntity
 import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryEntity
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.LibraryItemEntity
 import io.github.lightheaded.lugu.core.db.LibraryItemFtsDao
 import io.github.lightheaded.lugu.core.db.LibraryItemFtsEntity
+import io.github.lightheaded.lugu.core.db.SeriesOrigin
 import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.model.FtsQuery
 import io.github.lightheaded.lugu.core.model.Library
 import io.github.lightheaded.lugu.core.model.LibraryItem
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
-import io.github.lightheaded.lugu.core.model.Series
+import io.github.lightheaded.lugu.core.model.SeriesRef
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -99,9 +105,19 @@ class LibraryRepository @Inject constructor(
     private val episodeDao: EpisodeDao,
     private val chapterDao: ChapterDao,
     private val ftsDao: LibraryItemFtsDao,
+    private val seriesDao: ItemSeriesDao,
     private val libraryPrefs: LibraryPrefs,
     private val clock: Clock,
 ) {
+    /**
+     * When the series listing for each library last finished, so the next pass can decline.
+     *
+     * In memory rather than on disk, for the same reason as in `CollectionRepository`:
+     * forgetting it on a cold start is right, because that is when the mirror is most
+     * likely to be stale.
+     */
+    private val lastSeriesSyncAtMs = mutableMapOf<String, Long>()
+
     /**
      * The libraries this listener wants to see.
      *
@@ -151,6 +167,21 @@ class LibraryRepository @Inject constructor(
 
     fun observeItem(account: ActiveAccount, itemId: String): Flow<LibraryItem?> =
         itemDao.observeById(account.serverId, account.userId, itemId).map { it?.toDomain() }
+
+    /**
+     * Every series this book belongs to, in the order a page should list them.
+     *
+     * The screens had to read `LibraryItem.seriesName` before this existed, and that field
+     * is a *rendering* of this list rather than a substitute for it — the server joins all
+     * of a book's series into one string, so a book in two of them rendered as a single
+     * phantom series named after both with the second one's number attached. What is
+     * returned here is the membership itself, one entry per series, each with its own
+     * number or none.
+     */
+    fun observeSeriesFor(account: ActiveAccount, itemId: String): Flow<List<SeriesRef>> =
+        seriesDao.observeForItem(account.serverId, account.userId, itemId).map { rows ->
+            rows.map { SeriesRef(id = it.seriesId, name = it.seriesName, sequence = it.sequence) }
+        }
 
     fun observeEpisodes(account: ActiveAccount, itemId: String): Flow<List<PodcastEpisode>> =
         episodeDao.observeForItem(account.serverId, account.userId, itemId).map { rows ->
@@ -331,6 +362,7 @@ class LibraryRepository @Inject constructor(
             val entities = response.results.map { it.toEntity(account, libraryId, startedAt) }
             itemDao.upsertAll(entities)
             ftsDao.replaceAll(account.serverId, account.userId, entities.map { it.toFtsRow() })
+            writeParsedSeries(account, libraryId, response.results, startedAt)
 
             synced += response.results.size
             page += 1
@@ -341,7 +373,188 @@ class LibraryRepository @Inject constructor(
         // The sweep above is the only place items disappear, so it is also the only
         // place the index can be left pointing at rows that no longer exist.
         ftsDao.deleteOrphans(account.serverId, account.userId, libraryId)
+        seriesDao.deleteOrphans(account.serverId, account.userId, libraryId)
+
+        // The series listing rides along with the item sync rather than being scheduled
+        // separately, so nothing outside this class has to know it exists — and it is not
+        // tied to opening an item, which is the one cadence it must never have. Its own
+        // failure is not this one's: the mirror is already written, and the memberships
+        // fall back to what the paged pass parsed. Hence the Result being dropped.
+        syncSeries(account, libraryId)
         synced
+    }
+
+    /**
+     * Mirrors one library's series from the server's own listing.
+     *
+     * This is the only source that states series membership for a whole library at once.
+     * The paged item listing cannot: its minified payloads carry the joined `seriesName`
+     * string and nothing else, so a book in two series is indistinguishable from a book
+     * in one series with an odd name.
+     *
+     * Rate-limited to [SERIES_SYNC_INTERVAL_MS] unless [force] is set, which is what a
+     * pull-to-refresh passes. The listing is expensive in the way the collections listing
+     * is expensive — its documented `minified` parameter is echoed back and never read, so
+     * every member of every series arrives as a complete item payload — and the reason it
+     * is not simply refused is that, unlike collections, its paging is real: `limit` and
+     * `offset` go straight into the database query, so this walks the library in bounded
+     * pages rather than pulling it in one response.
+     *
+     * The sweep at the end runs only when every page came back. A pass that failed halfway
+     * and then swept would read a dropped connection as "this library has no series any
+     * more" and empty every series page on the phone.
+     */
+    suspend fun syncSeries(
+        account: ActiveAccount,
+        libraryId: String,
+        force: Boolean = false,
+    ): Result<Int> = runCatching {
+        val startedAt = clock.nowMs()
+        val last = lastSeriesSyncAtMs[libraryId] ?: 0
+        if (!force && last > 0 && startedAt - last < SERIES_SYNC_INTERVAL_MS) return@runCatching 0
+
+        var page = 0
+        var seen = 0
+        var total = Int.MAX_VALUE
+
+        while (seen < total) {
+            val response = client.librarySeries(libraryId, page = page)
+            if (response.results.isEmpty()) break
+            total = response.total.takeIf { it > 0 } ?: response.results.size
+
+            response.results.forEach { series ->
+                val name = series.name.trim()
+                if (name.isEmpty()) return@forEach
+                val members = series.books.filter { it.id.isNotBlank() }
+                seriesDao.replaceForItems(
+                    account.serverId,
+                    account.userId,
+                    members.map { it.id },
+                    members.mapIndexed { rank, book ->
+                        val ref = book.seriesRefFor(series.id.takeIf { it.isNotBlank() }, name)
+                        ItemSeriesEntity(
+                            serverId = account.serverId,
+                            userId = account.userId,
+                            libraryItemId = book.id,
+                            libraryId = book.libraryId.ifBlank { libraryId },
+                            seriesName = ref.name,
+                            seriesId = ref.id,
+                            sequence = ref.sequence,
+                            serverRank = rank,
+                            origin = SeriesOrigin.SERVER,
+                            syncedAtMs = startedAt,
+                        )
+                    },
+                )
+            }
+
+            seen += response.results.size
+            page += 1
+        }
+
+        // Only reached when the walk completed, which is what makes the sweep safe.
+        seriesDao.deleteStale(account.serverId, account.userId, libraryId, startedAt)
+        // And now the two columns on the item can be brought into line with what the
+        // listing said, rather than staying whatever the paged pass parsed out of a string
+        // that, for a book in two series, names neither of them.
+        itemDao.refreshPrimarySeries(account.serverId, account.userId, libraryId)
+        lastSeriesSyncAtMs[libraryId] = startedAt
+        seen
+    }
+
+    /**
+     * One item's memberships, from the structured array only an expanded fetch carries.
+     *
+     * The most exact source there is — the server's own join rows, with their own ids and
+     * sequences — so it always writes, where the parsed floor defers to whatever came
+     * before it. Absence of the array is not absence of series: every minified payload
+     * lacks it, so a payload with none is left entirely alone rather than read as "this
+     * book is in nothing", which would empty the item's series between one sync and the
+     * next.
+     *
+     * The rank is carried across from the rows being replaced. It belongs to the library
+     * listing and this fetch knows nothing about it; writing null would quietly cost a
+     * series page its ordering the first time somebody opened one of its books.
+     */
+    private suspend fun writeStructuredSeries(
+        account: ActiveAccount,
+        libraryId: String,
+        dto: LibraryItemDto,
+        syncedAtMs: Long,
+    ) {
+        val structured = dto.media?.metadata?.series.orEmpty()
+        if (structured.isEmpty() || dto.id.isBlank()) return
+
+        val ranks = seriesDao.forItem(account.serverId, account.userId, dto.id)
+            .associate { it.seriesName to it.serverRank }
+        seriesDao.replaceForItems(
+            account.serverId,
+            account.userId,
+            listOf(dto.id),
+            dto.seriesRefs().map { ref ->
+                ItemSeriesEntity(
+                    serverId = account.serverId,
+                    userId = account.userId,
+                    libraryItemId = dto.id,
+                    libraryId = libraryId,
+                    seriesName = ref.name,
+                    seriesId = ref.id,
+                    sequence = ref.sequence,
+                    serverRank = ranks[ref.name],
+                    origin = SeriesOrigin.SERVER,
+                    syncedAtMs = syncedAtMs,
+                )
+            },
+        )
+    }
+
+    /**
+     * The floor under everything: one membership per item, parsed from the joined string.
+     *
+     * Written only for items the server has not already spoken for, so the pass that runs
+     * on every app open cannot undo what the series listing established. Without that
+     * guard a book in two series would be correct for a few seconds after each sync and
+     * wrong for the rest of the time.
+     *
+     * A membership that survives here is one neither server source covered — the listing
+     * has not run yet, or could not be reached — and it is exactly what the app did before
+     * any of this, no better and no worse.
+     */
+    private suspend fun writeParsedSeries(
+        account: ActiveAccount,
+        libraryId: String,
+        items: List<LibraryItemDto>,
+        syncedAtMs: Long,
+    ) {
+        val ids = items.map { it.id }.filter { it.isNotBlank() }
+        if (ids.isEmpty()) return
+        val spokenFor = seriesDao
+            .itemsAtOrAbove(account.serverId, account.userId, ids, SeriesOrigin.SERVER)
+            .toSet()
+        val writable = items.filter { it.id.isNotBlank() && it.id !in spokenFor }
+        if (writable.isEmpty()) return
+
+        seriesDao.replaceForItems(
+            account.serverId,
+            account.userId,
+            writable.map { it.id },
+            writable.flatMap { dto ->
+                dto.seriesRefs().map { ref ->
+                    ItemSeriesEntity(
+                        serverId = account.serverId,
+                        userId = account.userId,
+                        libraryItemId = dto.id,
+                        libraryId = dto.libraryId.ifBlank { libraryId },
+                        seriesName = ref.name,
+                        seriesId = ref.id,
+                        sequence = ref.sequence,
+                        serverRank = null,
+                        origin = if (ref.id != null) SeriesOrigin.SERVER else SeriesOrigin.PARSED,
+                        syncedAtMs = syncedAtMs,
+                    )
+                }
+            },
+        )
     }
 
     /**
@@ -353,6 +566,7 @@ class LibraryRepository @Inject constructor(
         val entity = dto.toEntity(account, dto.libraryId, clock.nowMs())
         itemDao.upsertAll(listOf(entity))
         ftsDao.replaceAll(account.serverId, account.userId, listOf(entity.toFtsRow()))
+        writeStructuredSeries(account, entity.libraryId, dto, clock.nowMs())
 
         val duration = dto.media?.duration ?: 0.0
         val chapters = Chapters.normalise(dto.media?.chapters.orEmpty().map { it.toDomain() }, duration)
@@ -409,6 +623,7 @@ class LibraryRepository @Inject constructor(
     suspend fun remove(account: ActiveAccount, itemId: String) {
         itemDao.delete(account.serverId, account.userId, itemId)
         ftsDao.deleteByItemIds(account.serverId, account.userId, listOf(itemId))
+        seriesDao.deleteForItem(account.serverId, account.userId, itemId)
         episodeDao.deleteForItem(account.serverId, account.userId, itemId)
         chapterDao.deleteForItem(account.serverId, account.userId, itemId)
     }
@@ -421,6 +636,15 @@ class LibraryRepository @Inject constructor(
     private companion object {
         /** Two weeks without a listen is when a book stops being "in progress" in someone's head. */
         const val STALE_AFTER_MS = 14L * 24 * 60 * 60 * 1000
+
+        /**
+         * The same floor the collections listing gets, for the same reason: an endpoint
+         * that sends a complete item payload per member is not one to call on every screen
+         * that wants a series name. Long enough that moving between screens costs nothing,
+         * short enough that a book added on the desktop turns up while somebody is
+         * still looking for it.
+         */
+        const val SERIES_SYNC_INTERVAL_MS = 5L * 60 * 1000
     }
 }
 
@@ -430,6 +654,7 @@ private fun LibraryItemDto.toEntity(
     syncedAtMs: Long,
 ): LibraryItemEntity {
     val domain = toDomain()
+    val primarySeries = seriesRefs().firstOrNull()
     return LibraryItemEntity(
         serverId = account.serverId,
         userId = account.userId,
@@ -441,11 +666,14 @@ private fun LibraryItemDto.toEntity(
         authorName = domain.authorName,
         narratorName = domain.narratorName,
         seriesName = domain.seriesName,
-        // Split on the way in. The server sends one string, "The Breakwater #2", which means
-        // two books in the same series do not compare equal — so the series has to be
-        // identified by its title, and ordered by its number, both stored separately.
-        seriesTitle = Series.titleOf(domain.seriesName),
-        seriesSequence = Series.sequenceOf(domain.seriesName),
+        // The item's *primary* series, kept for the queries that legitimately want one
+        // answer — an author page groups a writer's books by series, and the item screen
+        // has room for one line. Every question about membership proper is answered by
+        // `item_series`, which is where a book in two series is two rows rather than one
+        // mangled string. Taken from the structured array when the payload has one, so an
+        // expanded fetch fixes this column too and not only the table.
+        seriesTitle = primarySeries?.name,
+        seriesSequence = primarySeries?.sequence,
         description = domain.description,
         durationSec = domain.durationSec,
         sizeBytes = domain.sizeBytes,

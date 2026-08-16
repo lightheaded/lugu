@@ -12,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ServerEntity::class,
         LibraryEntity::class,
         LibraryItemEntity::class,
+        ItemSeriesEntity::class,
         EpisodeEntity::class,
         ChapterEntity::class,
         ProgressEntity::class,
@@ -25,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CollectionEntity::class,
         CollectionItemEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class LuguDatabase : RoomDatabase() {
@@ -34,6 +35,8 @@ abstract class LuguDatabase : RoomDatabase() {
     abstract fun libraryDao(): LibraryDao
 
     abstract fun libraryItemDao(): LibraryItemDao
+
+    abstract fun itemSeriesDao(): ItemSeriesDao
 
     abstract fun episodeDao(): EpisodeDao
 
@@ -253,9 +256,73 @@ abstract class LuguDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the series membership table, and seeds it from what the mirror already knows.
+         *
+         * Additive like the rest — the two series columns on `library_item` stay exactly
+         * where they are, still written and still read, so nothing that queries them
+         * changes behaviour on the way through this upgrade.
+         *
+         * The backfill is the part that matters to somebody upgrading. Every query that
+         * used to read `library_item.seriesTitle` now reads this table, so an empty table
+         * would mean an empty "Next in series" shelf and empty series pages until a sync
+         * finished — on a train, indefinitely. Copying the parsed columns across gives an
+         * upgraded install exactly the series it had a moment earlier, and the first sync
+         * afterwards replaces those rows with the server's own membership. The rows are
+         * marked [SeriesOrigin.PARSED] precisely so that replacement is allowed to happen.
+         *
+         * A book in two series is still one row after the backfill, because one row is all
+         * the old columns could hold. That is the thing the next sync fixes, and it is not
+         * something SQL could have recovered here.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `item_series` (
+                        `serverId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `libraryItemId` TEXT NOT NULL,
+                        `libraryId` TEXT NOT NULL,
+                        `seriesName` TEXT NOT NULL,
+                        `seriesId` TEXT,
+                        `sequence` REAL,
+                        `serverRank` INTEGER,
+                        `origin` INTEGER NOT NULL,
+                        `syncedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`serverId`, `userId`, `libraryItemId`, `seriesName`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_item_series_serverId_userId_seriesName` " +
+                        "ON `item_series` (`serverId`, `userId`, `seriesName`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_item_series_serverId_userId_libraryId` " +
+                        "ON `item_series` (`serverId`, `userId`, `libraryId`)",
+                )
+
+                // INSERT OR REPLACE rather than a plain insert: the primary key makes the
+                // backfill idempotent, so a migration retried after a bad upgrade
+                // converges instead of failing on a constraint.
+                db.execSQL(
+                    """
+                    INSERT OR REPLACE INTO `item_series`
+                        (`serverId`, `userId`, `libraryItemId`, `libraryId`, `seriesName`,
+                         `seriesId`, `sequence`, `serverRank`, `origin`, `syncedAtMs`)
+                    SELECT `serverId`, `userId`, `id`, `libraryId`, `seriesTitle`,
+                           NULL, `seriesSequence`, NULL, ${SeriesOrigin.PARSED}, 0
+                    FROM `library_item`
+                    WHERE `seriesTitle` IS NOT NULL AND TRIM(`seriesTitle`) != ''
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): LuguDatabase =
             Room.databaseBuilder(context.applicationContext, LuguDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

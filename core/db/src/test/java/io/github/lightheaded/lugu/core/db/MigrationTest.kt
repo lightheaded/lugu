@@ -346,6 +346,88 @@ class MigrationTest {
     }
 
     @Test
+    fun `migration 5 to 6 matches the schema Room generates`() {
+        val migrated = databaseAtVersion(5)
+        LuguDatabase.MIGRATION_5_6.migrate(migrated)
+
+        val migratedColumns = columnsOf(migrated, "item_series")
+        val migratedIndexes = indexesOf(migrated, "item_series").sorted()
+        val migratedIndexColumns = migratedIndexes.associateWith { indexedColumnsOf(migrated, it) }
+        migrated.close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        room.openHelper.writableDatabase.let { db ->
+            assertThat(migratedColumns).isEqualTo(columnsOf(db, "item_series"))
+            assertThat(migratedIndexes).isEqualTo(indexesOf(db, "item_series").sorted())
+            migratedIndexes.forEach { index ->
+                assertThat(migratedIndexColumns[index]).isEqualTo(indexedColumnsOf(db, index))
+            }
+        }
+        room.close()
+    }
+
+    /**
+     * The reason the migration backfills instead of waiting for a sync.
+     *
+     * Every query behind "Next in series" and the series pages moved to the new table in
+     * this version. An upgrade that left it empty would therefore not degrade gracefully —
+     * it would empty the series shelf and every series page until a sync finished, which on
+     * a train is never. Copying what the mirror already parsed means the app looks
+     * unchanged through the upgrade and only improves afterwards.
+     */
+    @Test
+    fun `migration 5 to 6 carries the series the mirror already knew`() {
+        val db = databaseAtVersion(5)
+        db.execSQL(
+            """
+            INSERT INTO library_item (serverId, userId, id, libraryId, mediaType, title, subtitle,
+                authorName, narratorName, seriesName, seriesTitle, seriesSequence, description,
+                durationSec, sizeBytes, numEpisodes, addedAtMs, updatedAtMs, coverPath, rawJson,
+                syncedAtMs)
+            VALUES ('s', 'u', 'li_1', 'lib_1', 'BOOK', 'Lighthouse Wakes', NULL,
+                'James T. R. Corven', 'Jefferson Vale', 'The Breakwater #1', 'The Breakwater',
+                1.0, NULL, 41400.0, 0, 0, 0, 0, NULL, NULL, 0),
+            ('s', 'u', 'li_2', 'lib_1', 'BOOK', 'A standalone', NULL, 'Ingrid Salla', NULL,
+                NULL, NULL, NULL, NULL, 41400.0, 0, 0, 0, 0, NULL, NULL, 0)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_5_6.migrate(db)
+        // Converging on a re-run matters as much here as in the earlier migrations, and the
+        // backfill is an INSERT — without the primary key doing the work, a retry would
+        // either throw or double every membership.
+        LuguDatabase.MIGRATION_5_6.migrate(db)
+
+        val rows = db.query(
+            "SELECT libraryItemId, libraryId, seriesName, sequence, serverRank, origin FROM item_series",
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        listOf(
+                            cursor.getString(0),
+                            cursor.getString(1),
+                            cursor.getString(2),
+                            cursor.getDouble(3),
+                            if (cursor.isNull(4)) null else cursor.getInt(4),
+                            cursor.getInt(5),
+                        ),
+                    )
+                }
+            }
+        }
+
+        // The book with a series, exactly as it was parsed; the one without, not invented.
+        assertThat(rows).containsExactly(
+            listOf("li_1", "lib_1", "The Breakwater", 1.0, null, SeriesOrigin.PARSED),
+        )
+        db.close()
+    }
+
+    @Test
     fun `history rows round-trip and come back newest first`() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)

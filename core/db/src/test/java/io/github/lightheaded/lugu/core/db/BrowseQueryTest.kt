@@ -72,6 +72,26 @@ class BrowseQueryTest {
         syncedAtMs = 0,
     )
 
+    /** Membership is its own row from schema 6 on, so every series case states one. */
+    private fun membership(
+        itemId: String,
+        seriesName: String,
+        sequence: Double? = null,
+        serverRank: Int? = null,
+        libraryId: String = "lib1",
+    ) = ItemSeriesEntity(
+        serverId = serverId,
+        userId = userId,
+        libraryItemId = itemId,
+        libraryId = libraryId,
+        seriesName = seriesName,
+        seriesId = null,
+        sequence = sequence,
+        serverRank = serverRank,
+        origin = SeriesOrigin.SERVER,
+        syncedAtMs = 0,
+    )
+
     @Test
     fun `authors come back once each, with a count`() = runTest {
         db.libraryItemDao().upsertAll(
@@ -95,15 +115,15 @@ class BrowseQueryTest {
 
     /**
      * The subtle one. `seriesName` carries the number ("The Breakwater #2"), so grouping by
-     * it makes every book its own series — which is why `seriesTitle` exists as a column.
+     * it makes every book its own series — which is why membership is kept apart from it.
      */
     @Test
-    fun `a series groups by its title, not by the name with the number in it`() = runTest {
+    fun `a series groups by its name, not by the string with the number in it`() = runTest {
         db.libraryItemDao().upsertAll(
-            listOf(
-                item("a", seriesName = "The Breakwater #1", seriesTitle = "The Breakwater", seriesSequence = 1.0),
-                item("b", seriesName = "The Breakwater #2", seriesTitle = "The Breakwater", seriesSequence = 2.0),
-            ),
+            listOf(item("a", seriesName = "The Breakwater #1"), item("b", seriesName = "The Breakwater #2")),
+        )
+        db.itemSeriesDao().upsertAll(
+            listOf(membership("a", "The Breakwater", 1.0), membership("b", "The Breakwater", 2.0)),
         )
 
         val series = db.libraryItemDao().observeSeries(serverId, userId).first()
@@ -113,21 +133,80 @@ class BrowseQueryTest {
         assertThat(series.single().itemCount).isEqualTo(2)
     }
 
+    /**
+     * A book in two series belongs on both pages and in both counts.
+     *
+     * The one column this replaced could only ever put it on one, and for a book whose
+     * joined string was "The Breakwater #2, Riverton #1" it put it on neither: it filed the
+     * book under a series called "The Breakwater #2, Riverton" that nothing else was in.
+     */
     @Test
-    fun `a series page is in reading order, and the unnumbered come last`() = runTest {
+    fun `a book in two series appears under both`() = runTest {
         db.libraryItemDao().upsertAll(
             listOf(
-                item("ten", title = "Tenth", seriesTitle = "Breakwater", seriesSequence = 10.0),
-                item("two", title = "Second", seriesTitle = "Breakwater", seriesSequence = 2.0),
-                item("none", title = "A companion volume", seriesTitle = "Breakwater", seriesSequence = null),
+                item("wakes", title = "Lighthouse Wakes"),
+                item("falls", title = "Lighthouse Falls", seriesName = "The Breakwater #2, Riverton #1"),
+            ),
+        )
+        db.itemSeriesDao().upsertAll(
+            listOf(
+                membership("wakes", "The Breakwater", 1.0),
+                membership("falls", "The Breakwater", 2.0),
+                membership("falls", "Riverton", 1.0),
             ),
         )
 
-        val rows = db.libraryItemDao().observeBySeries(serverId, userId, "Breakwater").first()
+        val series = db.libraryItemDao().observeSeries(serverId, userId).first()
+
+        assertThat(series.map { it.name }).containsExactly("Riverton", "The Breakwater").inOrder()
+        assertThat(series.first { it.name == "The Breakwater" }.itemCount).isEqualTo(2)
+        assertThat(db.libraryItemDao().observeBySeries(serverId, userId, "Riverton").first().map { it.id })
+            .containsExactly("falls")
+    }
+
+    @Test
+    fun `a series page is in reading order, and the unnumbered come last`() = runTest {
+        db.libraryItemDao().upsertAll(
+            listOf(item("ten", title = "Tenth"), item("two", title = "Second"), item("none", title = "A companion")),
+        )
+        db.itemSeriesDao().upsertAll(
+            listOf(
+                membership("ten", "The Breakwater", 10.0),
+                membership("two", "The Breakwater", 2.0),
+                membership("none", "The Breakwater", sequence = null),
+            ),
+        )
+
+        val rows = db.libraryItemDao().observeBySeries(serverId, userId, "The Breakwater").first()
 
         // Ordered by number, not by title — sorted as text "10" would come before "2",
         // which is precisely how a series shelf recommends the wrong book.
         assertThat(rows.map { it.id }).containsExactly("two", "ten", "none").inOrder()
+    }
+
+    /**
+     * What the library-series listing buys a series nobody numbered.
+     *
+     * Alphabetical is simply wrong for these — the first book of "The Tidelands" is called
+     * "Zenith" and the second "Aftermath" — and the server's own web client shows them in
+     * an order it will not explain to a client any other way. Laying the page out that way
+     * costs nothing, because a page shows the whole series and lets the reader choose.
+     */
+    @Test
+    fun `a series with no numbers falls back to the order the server gave`() = runTest {
+        db.libraryItemDao().upsertAll(
+            listOf(item("first", title = "Zenith"), item("second", title = "Aftermath")),
+        )
+        db.itemSeriesDao().upsertAll(
+            listOf(
+                membership("first", "The Tidelands", sequence = null, serverRank = 0),
+                membership("second", "The Tidelands", sequence = null, serverRank = 1),
+            ),
+        )
+
+        val rows = db.libraryItemDao().observeBySeries(serverId, userId, "The Tidelands").first()
+
+        assertThat(rows.map { it.id }).containsExactly("first", "second").inOrder()
     }
 
     @Test

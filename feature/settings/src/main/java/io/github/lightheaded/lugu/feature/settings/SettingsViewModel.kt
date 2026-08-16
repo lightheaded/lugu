@@ -247,6 +247,32 @@ class SettingsViewModel @Inject constructor(
 
     fun setResumeInCar(enabled: Boolean) = viewModelScope.launch { prefs.setResumeInCar(enabled) }
 
+    /*
+     * The trim is stored as one value, so each of these three rows reads the current one
+     * and writes it back with a single field changed. Three separate keys would let two
+     * rows tapped in quick succession disagree about what the other two were, and a trim
+     * that half-applied is the kind of setting people report as "it forgot".
+     */
+    fun setDefaultTrimIntro(seconds: Int) = viewModelScope.launch {
+        prefs.setDefaultTrim(state.value.settings.skip.defaultTrim.copy(introSec = seconds))
+    }
+
+    fun setDefaultTrimOutro(seconds: Int) = viewModelScope.launch {
+        prefs.setDefaultTrim(state.value.settings.skip.defaultTrim.copy(outroSec = seconds))
+    }
+
+    fun setDefaultTrimAdverts(enabled: Boolean) = viewModelScope.launch {
+        prefs.setDefaultTrim(state.value.settings.skip.defaultTrim.copy(skipMarkedAdverts = enabled))
+    }
+
+    fun setAnnounceSkips(enabled: Boolean) = viewModelScope.launch { prefs.setAnnounceSkips(enabled) }
+
+    fun setBufferAheadMinutes(minutes: Int) =
+        viewModelScope.launch { prefs.setBufferAheadMinutes(minutes) }
+
+    fun setRetainStreamedMb(megabytes: Int) =
+        viewModelScope.launch { prefs.setRetainStreamedMb(megabytes) }
+
     fun setMediaTypeHidden(mediaType: MediaType, hidden: Boolean) =
         viewModelScope.launch { libraryPrefs.setMediaTypeHidden(mediaType, hidden) }
 

@@ -85,6 +85,44 @@ interface LibraryItemDao {
     @Upsert
     suspend fun upsertAll(items: List<LibraryItemEntity>)
 
+    /**
+     * Re-derives the two series columns on this table from the membership table.
+     *
+     * Those columns are the item's *primary* series and they predate the membership table,
+     * which is why they survive: an author page groups a writer's books by series and the
+     * item screen has room for one line, and both want a single answer. What they cannot
+     * do is stay right on their own — they are written from the joined string as items are
+     * paged in, and for a book in two series that string names neither.
+     *
+     * So this runs after the library-series listing, which is the pass that knows better,
+     * and picks the same membership a series page would put first: the lowest number, then
+     * the server's own order, then the name. An item with no memberships is left with both
+     * columns null, which is the truth about a book in no series.
+     */
+    @Query(
+        """
+        UPDATE library_item SET
+            seriesTitle = (
+                SELECT s.seriesName FROM item_series s
+                WHERE s.serverId = library_item.serverId AND s.userId = library_item.userId
+                  AND s.libraryItemId = library_item.id
+                ORDER BY s.sequence IS NULL, s.sequence,
+                         s.serverRank IS NULL, s.serverRank, s.seriesName
+                LIMIT 1
+            ),
+            seriesSequence = (
+                SELECT s.sequence FROM item_series s
+                WHERE s.serverId = library_item.serverId AND s.userId = library_item.userId
+                  AND s.libraryItemId = library_item.id
+                ORDER BY s.sequence IS NULL, s.sequence,
+                         s.serverRank IS NULL, s.serverRank, s.seriesName
+                LIMIT 1
+            )
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+        """,
+    )
+    suspend fun refreshPrimarySeries(serverId: String, userId: String, libraryId: String)
+
     /** Sweeps rows a full sync pass did not touch — the server dropped them. */
     @Query(
         """
@@ -317,41 +355,56 @@ interface LibraryItemDao {
      * Next in series: for every series with something finished in it, the lowest-numbered
      * volume not yet started.
      *
-     * Ordering is by [LibraryItemEntity.seriesSequence] and never by name — "#10" sorts
-     * before "#2" as text, which is precisely how a shelf like this recommends book ten
-     * to someone who just finished book one. Items whose sequence could not be parsed
-     * are left out rather than guessed at.
+     * Reads membership from `item_series` rather than from the two columns on this table,
+     * which is what lets a book in two series be the next book in either of them. The old
+     * shape could not: it held one series per item, and a book in two arrived as a single
+     * string with both in it and was filed under a series that does not exist.
+     *
+     * Ordering is by [ItemSeriesEntity.sequence] and never by name — "#10" sorts before
+     * "#2" as text, which is precisely how a shelf like this recommends book ten to
+     * someone who just finished book one. A membership with no sequence is left out
+     * rather than guessed at, and [ItemSeriesEntity.serverRank] is deliberately not
+     * consulted as a substitute: see its KDoc for why an order the server produced from
+     * nothing is not an order.
+     *
+     * One row per *series*, so a book that is next in two of them comes back twice. The
+     * caller keys these by item id and must collapse them (`LibraryRepository` does),
+     * because Compose throws on a duplicate key rather than merely looking odd.
      */
     @Query(
         """
         SELECT i.* FROM library_item i
+        INNER JOIN item_series s
+            ON s.serverId = i.serverId AND s.userId = i.userId AND s.libraryItemId = i.id
         WHERE i.serverId = :serverId AND i.userId = :userId
           AND (:libraryId IS NULL OR i.libraryId = :libraryId)
-          AND i.seriesTitle IS NOT NULL AND i.seriesSequence IS NOT NULL
+          AND s.sequence IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM progress p
             WHERE p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
               AND (p.currentTimeSec > 0 OR p.isFinished = 1)
           )
           AND EXISTS (
-            SELECT 1 FROM library_item d
+            SELECT 1 FROM item_series d
             INNER JOIN progress q
-                ON q.serverId = d.serverId AND q.userId = d.userId AND q.libraryItemId = d.id
-            WHERE d.serverId = i.serverId AND d.userId = i.userId
-              AND d.seriesTitle = i.seriesTitle AND q.isFinished = 1
-              AND d.seriesSequence IS NOT NULL AND d.seriesSequence < i.seriesSequence
+                ON q.serverId = d.serverId AND q.userId = d.userId
+               AND q.libraryItemId = d.libraryItemId
+            WHERE d.serverId = s.serverId AND d.userId = s.userId
+              AND d.seriesName = s.seriesName AND q.isFinished = 1
+              AND d.sequence IS NOT NULL AND d.sequence < s.sequence
           )
-          AND i.seriesSequence = (
-            SELECT MIN(n.seriesSequence) FROM library_item n
-            WHERE n.serverId = i.serverId AND n.userId = i.userId
-              AND n.seriesTitle = i.seriesTitle AND n.seriesSequence IS NOT NULL
+          AND s.sequence = (
+            SELECT MIN(n.sequence) FROM item_series n
+            WHERE n.serverId = s.serverId AND n.userId = s.userId
+              AND n.seriesName = s.seriesName AND n.sequence IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1 FROM progress r
-                WHERE r.serverId = n.serverId AND r.userId = n.userId AND r.libraryItemId = n.id
+                WHERE r.serverId = n.serverId AND r.userId = n.userId
+                  AND r.libraryItemId = n.libraryItemId
                   AND (r.currentTimeSec > 0 OR r.isFinished = 1)
               )
           )
-        GROUP BY i.serverId, i.userId, i.seriesTitle
+        GROUP BY s.serverId, s.userId, s.seriesName
         ORDER BY i.title COLLATE NOCASE
         LIMIT :limit
         """,
@@ -409,19 +462,23 @@ interface LibraryItemDao {
      */
     @Query(
         """
-        SELECT DISTINCT seriesTitle FROM library_item
-        WHERE serverId = :serverId AND userId = :userId AND seriesTitle IS NOT NULL
-        ORDER BY seriesTitle COLLATE NOCASE
+        SELECT DISTINCT seriesName FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND TRIM(seriesName) != ''
+        ORDER BY seriesName COLLATE NOCASE
         """,
     )
     suspend fun seriesTitles(serverId: String, userId: String): List<String>
 
-    /** One series, in reading order — by sequence, never by title. */
+    /** One series, in reading order — see [observeBySeries] for what that order is. */
     @Query(
         """
-        SELECT * FROM library_item
-        WHERE serverId = :serverId AND userId = :userId AND seriesTitle = :seriesTitle
-        ORDER BY seriesSequence IS NULL, seriesSequence, title COLLATE NOCASE
+        SELECT i.* FROM library_item i
+        INNER JOIN item_series s
+            ON s.serverId = i.serverId AND s.userId = i.userId AND s.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId AND s.seriesName = :seriesTitle
+        ORDER BY s.sequence IS NULL, s.sequence,
+                 s.serverRank IS NULL, s.serverRank,
+                 i.title COLLATE NOCASE
         """,
     )
     suspend fun bySeries(serverId: String, userId: String, seriesTitle: String): List<LibraryItemEntity>
@@ -460,18 +517,23 @@ interface LibraryItemDao {
     fun observeNarrators(serverId: String, userId: String, libraryId: String? = null): Flow<List<BrowseGroup>>
 
     /**
-     * Series by [LibraryItemEntity.seriesTitle], never by `seriesName` — the latter has
-     * the number baked into it, so two books in one series do not compare equal and
-     * grouping by it groups nothing.
+     * Series from the membership table, one row per series and never one per book.
+     *
+     * The item's own `seriesName` column is no use for this: it has the number baked into
+     * it, so two books in one series do not compare equal, and for a book in two series it
+     * is not even a name. Grouping the memberships instead also counts a book once in
+     * each series it is actually in, which is the count somebody expects to see.
      */
     @Query(
         """
-        SELECT seriesTitle AS name, COUNT(*) AS itemCount FROM library_item
-        WHERE serverId = :serverId AND userId = :userId
-          AND (:libraryId IS NULL OR libraryId = :libraryId)
-          AND seriesTitle IS NOT NULL AND TRIM(seriesTitle) != ''
-        GROUP BY seriesTitle
-        ORDER BY seriesTitle COLLATE NOCASE
+        SELECT s.seriesName AS name, COUNT(*) AS itemCount FROM item_series s
+        INNER JOIN library_item i
+            ON i.serverId = s.serverId AND i.userId = s.userId AND i.id = s.libraryItemId
+        WHERE s.serverId = :serverId AND s.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
+          AND TRIM(s.seriesName) != ''
+        GROUP BY s.seriesName
+        ORDER BY s.seriesName COLLATE NOCASE
         """,
     )
     fun observeSeries(serverId: String, userId: String, libraryId: String? = null): Flow<List<BrowseGroup>>
@@ -495,12 +557,25 @@ interface LibraryItemDao {
     )
     fun observeByNarrator(serverId: String, userId: String, name: String): Flow<List<LibraryItemEntity>>
 
-    /** Reading order, so a series page is a queue rather than an alphabetical list. */
+    /**
+     * Reading order, so a series page is a queue rather than an alphabetical list.
+     *
+     * Three keys, in descending confidence. The sequence first, because it is a stated
+     * position. Then [ItemSeriesEntity.serverRank], which puts the rest of the series in
+     * the order the server's own web client shows — worth more than alphabetical for a
+     * series nobody numbered, and used here rather than for a recommendation precisely
+     * because a page shows the whole list and leaves the choosing to the reader. The
+     * title last, so the order is at least stable when neither is known.
+     */
     @Query(
         """
-        SELECT * FROM library_item
-        WHERE serverId = :serverId AND userId = :userId AND seriesTitle = :name
-        ORDER BY seriesSequence IS NULL, seriesSequence, title COLLATE NOCASE
+        SELECT i.* FROM library_item i
+        INNER JOIN item_series s
+            ON s.serverId = i.serverId AND s.userId = i.userId AND s.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId AND s.seriesName = :name
+        ORDER BY s.sequence IS NULL, s.sequence,
+                 s.serverRank IS NULL, s.serverRank,
+                 i.title COLLATE NOCASE
         """,
     )
     fun observeBySeries(serverId: String, userId: String, name: String): Flow<List<LibraryItemEntity>>
@@ -547,15 +622,17 @@ interface LibraryItemDao {
     @Query(
         """
         SELECT n.* FROM library_item n
+        INNER JOIN item_series s
+            ON s.serverId = n.serverId AND s.userId = n.userId AND s.libraryItemId = n.id
         WHERE n.serverId = :serverId AND n.userId = :userId
-          AND n.seriesTitle = :seriesTitle
-          AND n.seriesSequence IS NOT NULL AND n.seriesSequence > :afterSequence
+          AND s.seriesName = :seriesTitle
+          AND s.sequence IS NOT NULL AND s.sequence > :afterSequence
           AND NOT EXISTS (
             SELECT 1 FROM progress p
             WHERE p.serverId = n.serverId AND p.userId = n.userId AND p.libraryItemId = n.id
               AND (p.currentTimeSec > 0 OR p.isFinished = 1)
           )
-        ORDER BY n.seriesSequence
+        ORDER BY s.sequence
         LIMIT 1
         """,
     )
@@ -565,6 +642,130 @@ interface LibraryItemDao {
         seriesTitle: String,
         afterSequence: Double,
     ): LibraryItemEntity?
+}
+
+/**
+ * Series membership, written by three sources of differing authority.
+ *
+ * Every write goes through one of the two `replace` methods, because a membership is a
+ * *set* per item rather than a row: a book dropped from a series has to lose the row, and
+ * an upsert alone would leave it there forever. Both take the whole set for the items they
+ * touch and swap it wholesale.
+ */
+@Dao
+interface ItemSeriesDao {
+    @Query(
+        """
+        SELECT * FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        ORDER BY sequence IS NULL, sequence, serverRank IS NULL, serverRank, seriesName
+        """,
+    )
+    suspend fun forItem(serverId: String, userId: String, itemId: String): List<ItemSeriesEntity>
+
+    @Query(
+        """
+        SELECT * FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        ORDER BY sequence IS NULL, sequence, serverRank IS NULL, serverRank, seriesName
+        """,
+    )
+    fun observeForItem(serverId: String, userId: String, itemId: String): Flow<List<ItemSeriesEntity>>
+
+    /**
+     * Which of these items the server has already spoken for.
+     *
+     * Asked in one query rather than per item on purpose: the paged library sync calls
+     * this once per page of two hundred, and it is the guard that stops the cheapest
+     * source overwriting the best one on every app open.
+     */
+    @Query(
+        """
+        SELECT DISTINCT libraryItemId FROM item_series
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId IN (:itemIds) AND origin >= :minOrigin
+        """,
+    )
+    suspend fun itemsAtOrAbove(
+        serverId: String,
+        userId: String,
+        itemIds: List<String>,
+        minOrigin: Int,
+    ): List<String>
+
+    @Upsert
+    suspend fun upsertAll(rows: List<ItemSeriesEntity>)
+
+    @Query(
+        """
+        DELETE FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId IN (:itemIds)
+        """,
+    )
+    suspend fun deleteForItems(serverId: String, userId: String, itemIds: List<String>)
+
+    /**
+     * Swaps the memberships of the named items for exactly these.
+     *
+     * The delete has to cover the items rather than the rows being written, or a book
+     * removed from a series on the server would keep its old row: the new set simply
+     * would not mention it.
+     */
+    @Transaction
+    suspend fun replaceForItems(
+        serverId: String,
+        userId: String,
+        itemIds: List<String>,
+        rows: List<ItemSeriesEntity>,
+    ) {
+        if (itemIds.isEmpty()) return
+        deleteForItems(serverId, userId, itemIds)
+        if (rows.isNotEmpty()) upsertAll(rows)
+    }
+
+    /**
+     * Drops rows a completed library-series pass did not see.
+     *
+     * Only ever called after a pass that finished, because the listing is authoritative
+     * for a whole library and this deletes on that authority. Running it after a pass that
+     * failed halfway would read a lost connection as "the server has no series any more"
+     * and empty every series page on the phone.
+     */
+    @Query(
+        """
+        DELETE FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+          AND syncedAtMs < :before
+        """,
+    )
+    suspend fun deleteStale(serverId: String, userId: String, libraryId: String, before: Long)
+
+    /** Follows a deleted item, so a series page cannot list something that is gone. */
+    @Query(
+        """
+        DELETE FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+        """,
+    )
+    suspend fun deleteForItem(serverId: String, userId: String, itemId: String)
+
+    /**
+     * Drops rows whose item no longer exists, after the item sweep removed stale rows.
+     *
+     * The same hazard the full-text index has: a membership pointing at a row that is
+     * gone puts a book on a series page that opens a blank screen when tapped.
+     */
+    @Query(
+        """
+        DELETE FROM item_series
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+          AND libraryItemId NOT IN (
+            SELECT id FROM library_item
+            WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+          )
+        """,
+    )
+    suspend fun deleteOrphans(serverId: String, userId: String, libraryId: String)
 }
 
 @Dao

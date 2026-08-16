@@ -37,9 +37,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.model.MediaType
+import io.github.lightheaded.lugu.core.model.PodcastTrim
+import io.github.lightheaded.lugu.core.model.formatSpeed
 import io.github.lightheaded.lugu.core.sync.AudioSettings
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.HeadsetAction
@@ -49,6 +51,7 @@ import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.SleepSettings
 import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
+import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 
 /**
@@ -449,6 +452,77 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "trim-intro",
+                category = "Podcast trimming",
+                title = "Skip the intro",
+                keywords = "podcast intro sting theme tune opening skip trim seconds start jingle",
+            ) {
+                ChoiceRow(
+                    title = "Skip the intro",
+                    // The one line that stops this reading as broken. A listener who sets
+                    // 15s here, then hears a show's full intro, has to be able to work out
+                    // why without filing a bug about it.
+                    subtitle = "Where a podcast starts from. Each show can be set differently " +
+                        "from its own page.",
+                    options = PodcastTrim.TRIM_CHOICES_SEC,
+                    selected = settings.skip.defaultTrim.introSec,
+                    format = { if (it == 0) "Off" else "${it}s" },
+                    onSelect = viewModel::setDefaultTrimIntro,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "trim-outro",
+                category = "Podcast trimming",
+                title = "Skip the outro",
+                keywords = "podcast outro credits ending closing skip trim seconds end signoff",
+            ) {
+                ChoiceRow(
+                    title = "Skip the outro",
+                    subtitle = null,
+                    options = PodcastTrim.TRIM_CHOICES_SEC,
+                    selected = settings.skip.defaultTrim.outroSec,
+                    format = { if (it == 0) "Off" else "${it}s" },
+                    onSelect = viewModel::setDefaultTrimOutro,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "trim-adverts",
+                category = "Podcast trimming",
+                title = "Skip marked adverts",
+                keywords = "podcast advert ads advertising sponsor commercial promo skip chapters marked",
+            ) {
+                SwitchRow(
+                    title = "Skip marked adverts",
+                    subtitle = "Only where the episode says where they are, with a chapter " +
+                        "named as advertising. An unmarked advert is not found.",
+                    checked = settings.skip.defaultTrim.skipMarkedAdverts,
+                    onChange = viewModel::setDefaultTrimAdverts,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "announce-skips",
+                category = "Podcast trimming",
+                title = "Say when something was skipped",
+                keywords = "podcast skip notice announce undo silent tell notification trim advert",
+            ) {
+                SwitchRow(
+                    title = "Say when something was skipped",
+                    subtitle = "A silent skip and a lost minute of audio look the same. The " +
+                        "notice carries an Undo.",
+                    checked = settings.skip.announceSkips,
+                    onChange = viewModel::setAnnounceSkips,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "sleep-survives-pause",
                 category = "Sleep timer",
                 title = "Keep the timer through a pause",
@@ -655,6 +729,48 @@ private fun settingEntries(
                         "span everything you are part-way through.",
                     checked = library.shelvesFollowLibrary,
                     onChange = viewModel::setShelvesFollowLibrary,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "stream-buffer",
+                category = "Streaming",
+                title = "Read ahead while streaming",
+                keywords = "stream buffer ahead tunnel lift dropout signal network data lag stall " +
+                    "underground offline gap",
+            ) {
+                ChoiceRow(
+                    title = "Read ahead while streaming",
+                    subtitle = "How long a gap in the signal a book can play through. Spoken " +
+                        "word is small, so minutes cost a couple of megabytes.",
+                    options = StreamSettings.BUFFER_CHOICES_MIN,
+                    selected = settings.stream.bufferAheadMinutes,
+                    format = { "$it min" },
+                    onSelect = viewModel::setBufferAheadMinutes,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "stream-retain",
+                category = "Streaming",
+                title = "Keep what you have streamed",
+                keywords = "stream cache keep disk storage retain replay reuse space megabytes " +
+                    "temporary scratch offline",
+            ) {
+                ChoiceRow(
+                    title = "Keep what you have streamed",
+                    // Said plainly because the two look identical on disk and are not the
+                    // same promise: a download was asked for and is kept until it is
+                    // deleted, this is scratch space that disappears on its own.
+                    subtitle = "Disposable, and never a download. The oldest goes first when " +
+                        "this fills, and nothing you downloaded is deleted to make room.",
+                    options = StreamSettings.RETAIN_CHOICES_MB,
+                    selected = settings.stream.retainStreamedMb,
+                    format = ::formatRetainedAudio,
+                    onSelect = viewModel::setRetainStreamedMb,
                 )
             },
         )
@@ -1300,6 +1416,19 @@ private fun mediaTypeLabel(type: MediaType): String = when (type) {
     MediaType.PODCAST -> "Podcasts"
 }
 
+/**
+ * "Keep none" rather than "0 MB", and gigabytes once there are whole ones.
+ *
+ * Zero is the choice most likely to be misread: a chip reading "0 MB" looks like a figure
+ * that failed to load rather than a decision, and this is the one option that changes what
+ * the setting does rather than how much of it there is.
+ */
+internal fun formatRetainedAudio(megabytes: Int): String = when {
+    megabytes <= 0 -> "Keep none"
+    megabytes % 1024 == 0 -> "${megabytes / 1024} GB"
+    else -> "$megabytes MB"
+}
+
 /** "After a week" rather than "After 7d" — a setting should read like a sentence. */
 internal fun formatAutoDeleteDelay(days: Int): String = when (days) {
     0 -> "Never"
@@ -1309,8 +1438,3 @@ internal fun formatAutoDeleteDelay(days: Int): String = when (days) {
     30 -> "After a month"
     else -> "After $days days"
 }
-
-/** "2x" rather than "2.0x", which wraps onto two lines in a narrow chip. */
-internal fun formatSpeed(speed: Float): String =
-    if (kotlin.math.abs(speed - speed.toInt()) < 0.01f) "${speed.toInt()}x"
-    else "${(speed * 100).toInt() / 100.0}x"

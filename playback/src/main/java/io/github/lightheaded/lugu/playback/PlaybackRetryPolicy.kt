@@ -16,6 +16,27 @@ import androidx.media3.common.PlaybackException
  *
  * The attempt count is bounded because an unbounded retry is a battery and data leak that
  * looks like a hang: a phone genuinely out of signal must be allowed to give up.
+ *
+ * ## Why the bound moved once [ReconnectPolicy] existed
+ *
+ * This used to be three attempts inside about seven seconds, and the reason was that nothing
+ * else would ever try again: the ladder had to cover a tunnel because giving up meant giving
+ * up for good. Now a network genuinely returning is caught separately, and the obvious
+ * inference — that the ladder can therefore be shorter — is the wrong one.
+ *
+ * What the connectivity callback sees is the *default network changing*. It says nothing
+ * about the commonest failure of all, which is a connection that never went away: one bar of
+ * cell service where the socket opens, stalls and times out, with the phone insisting
+ * throughout that it is online. No callback ever fires for that, so the ladder is still the
+ * only thing covering it — and it is the case where trying again actually works, because the
+ * next attempt may land on a better moment.
+ *
+ * So the ladder was lengthened rather than shortened: five attempts over about thirty
+ * seconds. That is cheap in the situation it now covers — a phone that believes it has a
+ * network is not burning its radio hunting for one — and it is long enough to outlast the
+ * kind of stall that resolves itself. It still terminates, because a server that is down
+ * fails identically for ever, and half a minute of trying followed by an honest stop is a
+ * diagnosis where an endless one is a flat battery.
  */
 class PlaybackRetryPolicy(
     private val maxAttempts: Int = MAX_ATTEMPTS,
@@ -45,10 +66,16 @@ class PlaybackRetryPolicy(
     fun isTransient(errorCode: Int): Boolean = errorCode in TRANSIENT_CODES
 
     companion object {
-        /** Three attempts covers a tunnel; a fourth is a phone with no signal. */
-        const val MAX_ATTEMPTS = 3
+        /** Five attempts at 1, 2, 4, 8 and 16 seconds: about half a minute of trying. */
+        const val MAX_ATTEMPTS = 5
         const val BASE_DELAY_MS = 1_000L
-        const val MAX_DELAY_MS = 8_000L
+
+        /**
+         * Nothing waits longer than this between attempts. The ladder doubles, so with five
+         * attempts it is never reached — it is here so that raising [MAX_ATTEMPTS] cannot
+         * silently turn the last gap into minutes.
+         */
+        const val MAX_DELAY_MS = 30_000L
 
         private const val EXPONENT_CAP = 4
 

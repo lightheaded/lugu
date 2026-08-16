@@ -60,11 +60,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import io.github.lightheaded.lugu.core.model.formatClock
+import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.playback.PositionJump
@@ -132,7 +134,14 @@ fun PlayerScreen(
         jump?.let { pending ->
             val result = withTimeoutOrNull(noticeMillis) {
                 snackbarHostState.showSnackbar(
-                    message = "Jumped from ${formatTime(pending.fromSec)} to ${formatTime(pending.toSec)}",
+                    // Where the app knows why it moved the position, it says why, and the
+                    // numbers stay on as the supporting detail. "Jumped from 0:00 to
+                    // 0:15" is a true account of an intro being skipped that explains
+                    // none of it, and an unexplained correction is indistinguishable from
+                    // the app having lost the listener's place. A jump with no better
+                    // account than its own numbers keeps the original wording.
+                    message = "${pending.reason ?: "Jumped"} from " +
+                        "${formatClock(pending.fromSec)} to ${formatClock(pending.toSec)}",
                     actionLabel = "Undo",
                     withDismissAction = true,
                     duration = SnackbarDuration.Indefinite,
@@ -311,8 +320,8 @@ fun PlayerScreen(
                     if (hasChapterList) {
                         Text(
                             "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
-                                "${formatTime(state.chapterPositionSec)} / " +
-                                formatTime(state.chapterDurationSec),
+                                "${formatClock(state.chapterPositionSec)} / " +
+                                formatClock(state.chapterDurationSec),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -333,11 +342,11 @@ fun PlayerScreen(
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    formatTime(scrubbing?.toDouble() ?: state.positionSec),
+                    formatClock(scrubbing?.toDouble() ?: state.positionSec),
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
-                    "-${formatTime(state.durationSec - (scrubbing?.toDouble() ?: state.positionSec))}",
+                    "-${formatClock(state.durationSec - (scrubbing?.toDouble() ?: state.positionSec))}",
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -428,7 +437,7 @@ fun PlayerScreen(
                     // confirmation is honest even with no signal.
                     scope.launch {
                         snackbarHostState.showSnackbar(
-                            "Bookmarked at ${formatTime(state.positionSec)}",
+                            "Bookmarked at ${formatClock(state.positionSec)}",
                             withDismissAction = true,
                         )
                     }
@@ -593,9 +602,9 @@ private fun PositionHistorySheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(formatTime(jump.fromSec), style = MaterialTheme.typography.bodyLarge)
+                        Text(formatClock(jump.fromSec), style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "jumped to ${formatTime(jump.toSec)}",
+                            "jumped to ${formatClock(jump.toSec)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -627,11 +636,6 @@ private fun SeekIcon(seconds: Int, icon: androidx.compose.ui.graphics.vector.Ima
     }
 }
 
-/** Drops a trailing ".0" so a chip reads "2x" rather than wrapping onto two lines. */
-internal fun trimSpeed(speed: Float): String =
-    if (kotlin.math.abs(speed - speed.toInt()) < 0.01f) speed.toInt().toString()
-    else ((speed * 100).toInt() / 100.0).toString()
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SpeedSheet(
@@ -654,7 +658,7 @@ private fun SpeedSheet(
                     FilterChip(
                         selected = kotlin.math.abs(current - speed) < 0.01f,
                         onClick = { onPick(speed) },
-                        label = { Text("${trimSpeed(speed)}x", maxLines = 1, softWrap = false) },
+                        label = { Text("${formatSpeedNumber(speed)}x", maxLines = 1, softWrap = false) },
                     )
                 }
             }
@@ -662,7 +666,7 @@ private fun SpeedSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { onPick(current - 0.05f) }) { Text("−") }
                 Text(
-                    "${trimSpeed(current)}x",
+                    "${formatSpeedNumber(current)}x",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
