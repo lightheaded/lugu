@@ -8,6 +8,7 @@ import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
@@ -25,10 +26,15 @@ import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.playback.CompanionDevices
 import io.github.lightheaded.lugu.playback.PairedDevices
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -43,6 +49,15 @@ data class SettingsUiState(
     val query: String = "",
     /** What went wrong the last time a device was being chosen, if anything. */
     val autoPlayMessage: String? = null,
+    /**
+     * Whether a browser sent to this server would get there under its own steam.
+     *
+     * False when a custom header or a client certificate is what gets lugu in, because
+     * neither can be handed to another app — see `core.model.WebClient`. Worth saying before
+     * the link is followed rather than after, since the failure arrives as the proxy's own
+     * refusal and says nothing about lugu.
+     */
+    val webClientReachable: Boolean = true,
 )
 
 /**
@@ -57,6 +72,7 @@ private data class StoredSettings(
     val downloads: DownloadSettings,
     val queue: QueueSettings,
     val library: LibrarySettings,
+    val webClientReachable: Boolean,
 )
 
 @HiltViewModel
@@ -69,6 +85,7 @@ class SettingsViewModel @Inject constructor(
     private val libraryPrefs: LibraryPrefs,
     private val companionDevices: CompanionDevices,
     private val pairedDevices: PairedDevices,
+    private val connectionPrefs: ConnectionPrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -91,12 +108,37 @@ class SettingsViewModel @Inject constructor(
     val autoPlaySupported: Boolean
         get() = companionDevices.isSupported || pairedDevices.isSupported
 
+    /**
+     * Whether anything is configured that only this app can present.
+     *
+     * Not keyed to the signed-in address, and deliberately: lugu holds one account, so "a
+     * header is stored for some address" and "a header is stored for this one" are the same
+     * question in every real case — and the wrong answer of the two is the safe one, since it
+     * warns rather than staying quiet. Read off `observeCertificate`, whose revision counter
+     * ticks for header writes too, on the IO dispatcher because the first read of an
+     * encrypted preference file is not free.
+     */
+    private val webClientReachable: Flow<Boolean> = connectionPrefs.observeCertificate()
+        .map { certificate -> certificate == null && connectionPrefs.configuredAddresses().isEmpty() }
+        // The store is encrypted, so reading it opens the Android keystore — and that can
+        // fail: it is absent under Robolectric, and `EncryptedSharedPreferences` is known to
+        // throw on some devices after a restore or a key rotation. Unguarded, one throw here
+        // takes the whole settings screen down, which is a wildly disproportionate outcome for
+        // a sentence of warning text. `true` is the right fallback rather than a shrug: if
+        // this cannot be read, lugu is not presenting a header or a certificate either, so a
+        // browser is on equal terms with the app.
+        .catch { emit(true) }
+        .flowOn(Dispatchers.IO)
+
     private val storedSettings = combine(
         prefs.settings,
         downloadPrefs.settings,
         queuePrefs.settings,
         libraryPrefs.settings,
-    ) { player, downloads, queue, library -> StoredSettings(player, downloads, queue, library) }
+        webClientReachable,
+    ) { player, downloads, queue, library, reachable ->
+        StoredSettings(player, downloads, queue, library, reachable)
+    }
 
     val state: StateFlow<SettingsUiState> = combine(
         storedSettings,
@@ -114,6 +156,7 @@ class SettingsViewModel @Inject constructor(
             library = stored.library,
             query = text,
             autoPlayMessage = message,
+            webClientReachable = stored.webClientReachable,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
