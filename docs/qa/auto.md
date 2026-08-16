@@ -26,6 +26,22 @@ If lugu never appears in the launcher, the fault is almost always one of three t
 `android.media.browse.MediaBrowserService` action missing from the service, or unknown
 sources still off.
 
+The first two are answerable from the phone in one command, and answering them first saves
+hunting through Android Auto's settings for a fault that is not there:
+
+```sh
+adb shell cmd package query-services -a android.media.browse.MediaBrowserService \
+  | grep -i lugu
+adb shell dumpsys package io.github.lightheaded.lugu | grep -i "versionName\|versionCode"
+```
+
+A hit on the first means the installed build is advertising itself correctly and the fault
+is on the Android Auto side — unknown sources, or its app list not rescanned since (force
+stop Android Auto, or reboot). No hit means the build on the phone predates the car work,
+whatever the store page says; check the version against the release that introduced it.
+Android Auto shows no error either way, which is why this is worth checking before anything
+else.
+
 ## The browse tree
 
 - [ ] lugu appears in the DHU app launcher with its icon and name
