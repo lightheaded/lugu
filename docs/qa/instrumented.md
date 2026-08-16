@@ -13,6 +13,14 @@ build from the one the JVM links.
 
 Needs an emulator or a device attached. CI runs the same command on API 26 and API 36.
 
+It is asked of the whole build rather than of the two modules that have these tests, so a
+module that grows some later is picked up without anyone remembering to edit the workflow.
+The root build script switches the instrumented-test APK off for modules with no
+`src/androidTest`: without that, an empty module builds a test APK with no test runner in
+it, and the run dies on the emulator with `ClassNotFoundException:
+androidx.test.runner.AndroidJUnitRunner`, reported as "Instrumentation run failed due to
+Process crashed". Adding a `src/androidTest` is all it takes to opt a module back in.
+
 ## What runs without a server
 
 | Test | Needs a server |

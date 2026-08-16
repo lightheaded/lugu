@@ -30,4 +30,32 @@ subprojects {
         systemProperty("roborazzi.test.record", recording)
         systemProperty("roborazzi.test.verify", !recording)
     }
+
+    /*
+     * A module with no `src/androidTest` still gets an instrumented-test APK built,
+     * installed and started. It contains no tests — but it also contains no test runner,
+     * because nothing pulled androidx.test.runner onto its classpath, so the run dies with
+     * `ClassNotFoundException: androidx.test.runner.AndroidJUnitRunner` and reports itself
+     * as "Instrumentation run failed due to Process crashed". An empty module failing
+     * loudly on an emulator is noise that hides a real failure.
+     *
+     * The fix belongs here rather than in the CI workflow. Naming the two modules that do
+     * have instrumented tests in the `connectedDebugAndroidTest` command would work today
+     * and quietly stop testing the third one somebody adds next year. Asking for every
+     * module and building a test APK only where tests exist keeps that discovery automatic.
+     */
+    plugins.withId("com.android.base") {
+        if (!file("src/androidTest").isDirectory) {
+            extensions.configure<com.android.build.api.variant.AndroidComponentsExtension<*, *, *>>(
+                "androidComponents",
+            ) {
+                beforeVariants { variant ->
+                    (variant as? com.android.build.api.variant.HasDeviceTestsBuilder)
+                        ?.deviceTests
+                        ?.values
+                        ?.forEach { it.enable = false }
+                }
+            }
+        }
+    }
 }
