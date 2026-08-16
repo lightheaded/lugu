@@ -170,29 +170,41 @@ belong to other people: the launcher, the documented automation broadcasts, a me
 and `dumpsys media_session`. A harness that imported the code under test could pass while
 the thing a headset does still failed.
 
-One run looks like this: open lugu, tap the prefilled sign-in button, ask for the title in
-`lugu.test.playQuery` with a `PLAY_SEARCH` broadcast, skip ten minutes in, set a speed the
-book was not already on, end the process, `input keyevent 126`, and read the session back.
+One run looks like this: open lugu, tap the prefilled sign-in button, open the Library tab
+and wait for the title to appear on it, ask for that title with a `PLAY_SEARCH` broadcast,
+put the book back to its beginning and walk it forward to forty-five seconds, set a speed it
+was not already on, end the process, `input keyevent 126`, and read the session back.
 
-### Two kills, and only one of them is the promise
+### It moves the position of the title you nominate
 
-`am force-stop` is not what happens when Android reclaims memory from a book that is
-playing. It additionally puts the package into the **stopped state**, and the platform's rule
-is that only a person launching the app takes it out again — on Android 15 and later the
-system also [cancels every pending intent the app
-owns](https://developer.android.com/about/versions/15/behavior-changes-all) the moment it
-enters that state, the one the media session gave the system to receive media buttons
-included. A media button that does nothing after a force stop is therefore the system
-working as designed, and no amount of correctness in lugu changes it.
+The book is rewound to its start and walked forward every time, so that a run does not
+inherit wherever the run before it stopped. **Whatever place you had in the title named by
+`lugu.test.playQuery` is overwritten**, and on an Audiobookshelf server progress is held
+server-side, so a fresh install does not undo it. That is the third reason that key is
+separate from the credentials.
 
-So the harness kills two ways:
+It is also not paranoia. The first version of this test skipped ten minutes forward in one
+broadcast; against the ninety-second book the seed script builds, that ran off the end,
+which stopped playback, which meant the speed set next was never reported by a session that
+was no longer playing. The book was then stored *finished*, and the next test resumed it at
+its end, where it stopped immediately and reported that nothing had started playing. One
+wrong constant, two failures that looked unrelated, and a poisoned server that outlived the
+uninstall between them.
+
+### Two kills, and they do not behave the same
 
 - **The process dies** — `run-as … kill -9`, falling back to `am crash`. The package's state
   is untouched, and the media button is expected to bring the book back. Asserted strictly:
   same item, within tolerance of the same position, at the same speed.
-- **`am force-stop`** — asserted narrowly, because the platform may legitimately refuse to
-  wake anything. What would be lugu's fault is coming back *wrong*, so that is what is
-  checked on whatever does come back, and nothing coming back is logged rather than failed.
+- **`am force-stop`** — asserted narrowly, and measurement is why. Force stopping also puts
+  the package into the **stopped state**, which the platform holds until a person launches
+  the app, and on Android 15 and later it [cancels the app's pending
+  intents](https://developer.android.com/about/versions/15/behavior-changes-all) as it
+  enters that state. Observed on one API 36 emulator within the same hour: a media button
+  after a force stop *did* wake lugu on two runs and *did not* on a third, on a fresh
+  install. Neither outcome is lugu's to control, so neither can be the assertion. What
+  would be lugu's fault is coming back **wrong**, and that is checked on whatever does come
+  back; nothing coming back is logged and passed.
 
 ### Why `dumpsys media_session` and not a `MediaController`
 
@@ -202,11 +214,19 @@ followed by a controller quietly bringing the app back, and the test would pass 
 proved the opposite of what it claims. Reading the system's own record touches nothing. It
 is also the channel the recipe below uses, so a failure can be reproduced by hand.
 
-Two things the parser has to get right, both found by running it: Android 16 writes
-`state=PLAYING(3)` where older releases write `state=3`, and the published position is a
-stamp with a time on it rather than the position now, so it is extrapolated the way the
-platform's own clients extrapolate it. Comparing raw stamps instead lets a reading that is
-thirty seconds stale look like a resumption that jumped thirty seconds forward.
+Two things about reading it, both learnt by running it. Android 16 writes
+`state=PLAYING(3)` where older releases write `state=3`, so a parser that reads only the
+bare integer returns nothing at all — which is indistinguishable from an app that is not
+running, and would have made every test here green and blind.
+
+And the published position is a stamp with a time on it rather than the position now,
+because a session publishes on events rather than on a timer. The obvious move is to carry
+it forward by the elapsed time, and that is the wrong instrument for this assertion: on one
+API 26 run the session went quiet for ten seconds, the arithmetic invented fifteen seconds
+of progress the player had not made, and the book duly "resumed fifteen seconds behind" a
+position it had never reached. The tests compare **what the platform said**, which a seek
+always makes it say again; a stale reading of that errs towards an earlier position, which
+loosens the "behind" check and tightens the "ahead" one, and both are the safe direction.
 
 ### What the harness never learns
 
@@ -235,24 +255,33 @@ exists to avoid.
 check: it tests the platform's stopped state rather than lugu's resumption. Use it to prove
 the process really is gone, not to expect a media button to bring it back.
 
-### One thing worth checking before trusting a green run
+### What a green run proves, in numbers
 
-With lugu open and a session held, the platform records what it should send a media button
-to when the app is gone:
+The resumption test writes its own evidence to logcat under `LuguHarness`, on a pass as
+well as a failure, because "it resumed" and "it resumed where it was" are different claims:
 
-```sh
-adb shell dumpsys media_session | grep -E 'mediaButtonReceiver|Last MediaButtonReceiver'
+```
+I LuguHarness: killed lugu's process 19887 while it was playing
+I LuguHarness: resumed 9c46b6de at 45209ms x1.5; was 9c46b6de at 45239ms x1.5
 ```
 
-On API 26 this reads `PendingIntent{… startForegroundService}`. On API 36 it reads `null`,
-and `adb shell cmd package query-receivers -a android.intent.action.MEDIA_BUTTON` lists no
-component of lugu's at all — Media3 falls back to a foreground-service pending intent when
-no `MediaButtonReceiver` is declared in the manifest, and newer platforms do not keep one.
-Nothing registered means nothing to send the key to once the process has gone, which would
-make resumption after a real kill impossible on a modern phone no matter what the resolver
-does. This has not been proved end to end — it needs a server, and the two tests that need
-one have never run — but it is the first thing to look at if
-`a_media_button_resumes_the_same_book_after_the_process_is_killed` goes red.
+That is API 36 against the seeded server: the process gone, a media button, and the same
+item back thirty milliseconds from where it stopped, at the speed it was being listened to.
+API 26 lands in the same place. The identity is a digest of the title rather than the
+title, so this line is safe to paste anywhere.
+
+Two things were checked before that pass was believed. Removing the `input keyevent 126`
+makes the test fail — nothing resumes on its own within sixty seconds, so the button is
+what does it, not a service the system restarts by itself. And the speed asserted is never
+the speed already in force: the harness picks 1.5 or 1.2, whichever the book is *not* on,
+so `x1.5` on both sides of that line is a value that had to survive the kill.
+
+It is also what proves the media button receiver in `:playback`'s manifest. Until that
+receiver was declared, the platform had nothing to deliver a headset press to once lugu's
+process was gone — `dumpsys media_session` reported `mediaButtonReceiver=null` on API 36,
+and `adb shell cmd package query-receivers -a android.intent.action.MEDIA_BUTTON` listed no
+component of lugu's. The fix was four lines of manifest and, until this test ran, an
+argument rather than a fact.
 
 ## Reading a failure in CI
 

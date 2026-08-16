@@ -26,6 +26,9 @@ internal object MediaSessionDump {
     /** What produces the text [parse] reads. Named once so the doc and the test agree. */
     const val COMMAND = "dumpsys media_session"
 
+    /** The identity of a session that is holding nothing: a service up with no book in it. */
+    const val NOTHING_LOADED = "none"
+
     /** `PlaybackState.STATE_PLAYING`. Not imported, to keep this module free of media3. */
     private const val STATE_PLAYING = 3
 
@@ -124,7 +127,7 @@ internal object MediaSessionDump {
             ?.substringAfter("description=", missingDelimiterValue = "")
             ?.substringBefore(", ")
             .orEmpty()
-        if (description.isEmpty() || description == "null") return "none"
+        if (description.isEmpty() || description == "null") return NOTHING_LOADED
         val bytes = MessageDigest.getInstance("SHA-256").digest(description.toByteArray())
         return bytes.take(4).joinToString("") { "%02x".format(it) }
     }
@@ -148,12 +151,30 @@ internal object MediaSessionDump {
         val isPlaying: Boolean get() = stateCode == STATE_PLAYING
 
         /**
-         * Where the book actually is, which is what a listener would hear.
+         * Whether a book is loaded, whether or not it is moving.
+         *
+         * The distinction matters because a book can be loaded and stopped — which is what a
+         * book that has been played to its end looks like when it is asked for again.
+         */
+        val hasItem: Boolean get() = identity != NOTHING_LOADED
+
+        /**
+         * Where the book would be if it had kept playing since the session last said so.
          *
          * The published position is a stamp with a time on it, and the platform's own
-         * clients extrapolate it exactly like this. Comparing raw published positions
-         * instead would let a reading that is thirty seconds stale look like a resumption
-         * that jumped thirty seconds forward.
+         * clients carry it forward exactly like this. It is **not** what the tests here
+         * compare, and one API 26 run is the reason: the seek loop and the resumption
+         * assertion both read this, the session stopped publishing for ten seconds, and the
+         * arithmetic quietly invented fifteen seconds of progress that the player had not
+         * made. The book then "resumed fifteen seconds behind" a position it had never
+         * reached.
+         *
+         * An estimate is the wrong instrument for an assertion about somebody's place in a
+         * book. [reportedPositionMs] is what the platform actually said, a seek always makes
+         * it say something new, and a stale reading of it errs on the side of the position
+         * being *earlier* — which is the harmless direction. This is kept because reading a
+         * dump by hand still wants it, and because knowing why it is not used is worth more
+         * than deleting it.
          */
         val positionMs: Long
             get() = if (isPlaying && reportedAt > 0) {
