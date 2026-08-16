@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Repeated from the application's own manifest rather than inherited: the test APK is a
+      separate package, and package visibility is decided per package. Declaring it in only
+      one of the two has the broadcasts silently resolve to nothing on some API levels,
+      which reads as lugu ignoring a command it never received.
+    -->
+    <queries>
+        <package android:name="io.github.lightheaded.lugu.debug" />
+    </queries>
+</manifest>
