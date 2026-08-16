@@ -21,6 +21,7 @@ import io.github.lightheaded.lugu.core.download.DownloadScheduler
 import io.github.lightheaded.lugu.core.sync.Realtime
 import io.github.lightheaded.lugu.core.sync.RealtimeSync
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
+import io.github.lightheaded.lugu.playback.PlaybackConnection
 import io.github.lightheaded.lugu.playback.PlaybackStateHolder
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,13 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
     @Inject lateinit var realtimeSync: RealtimeSync
 
     @Inject lateinit var playbackStateHolder: PlaybackStateHolder
+
+    /**
+     * Held here only to arm the last-played item when the app comes to the foreground.
+     * The connection is a singleton and reading the setting is its job, so nothing is
+     * connected and no service is started unless somebody asked for that behaviour.
+     */
+    @Inject lateinit var playback: PlaybackConnection
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -104,7 +112,17 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
         // one — counting started activities is the same answer from an API that is
         // already here. Realtime waits out a short grace period before disconnecting, so
         // a rotation or a glance at another app does not churn the connection.
-        registerActivityLifecycleCallbacks(ForegroundWatcher(realtime::setForeground))
+        registerActivityLifecycleCallbacks(
+            ForegroundWatcher { onScreen ->
+                realtime.setForeground(onScreen)
+                // Coming to the foreground is also when the last thing played is loaded
+                // into the player, ready for a play press — but only if that was asked
+                // for, and never playing on its own. The connection reads the setting
+                // and does nothing at all under the other two, so this costs nothing to
+                // call unconditionally.
+                if (onScreen) playback.armLastPlayed()
+            },
+        )
 
         // And while something is loaded in the player, on screen or not: a position
         // changed on another device matters most in exactly that case. The same signal

@@ -319,6 +319,14 @@ private fun LibraryRow.fastScrollKey(sort: ItemSort): String =
 /** Long enough to read a short sentence, short enough not to become part of the screen. */
 private const val NOTE_MS = 4_000L
 
+/**
+ * One cover, with what it is under it.
+ *
+ * [title] and [subtitle] default to the item's own, which is what a grid of items wants.
+ * The continue shelf overrides them because what is being continued there may be one
+ * episode of a podcast, and a card headed with the name of the show would be the same card
+ * three times over for somebody with three episodes on the go.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ItemCard(
@@ -327,6 +335,8 @@ internal fun ItemCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
+    title: String = row.item.title,
+    subtitle: String? = row.item.authorName,
     onLongClick: (() -> Unit)? = null,
 ) {
     Column(
@@ -342,7 +352,7 @@ internal fun ItemCard(
         ) {
             AsyncImage(
                 model = coverUrl,
-                contentDescription = row.item.title,
+                contentDescription = title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -377,12 +387,12 @@ internal fun ItemCard(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            row.item.title,
+            title,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        row.item.authorName?.let {
+        subtitle?.let {
             Text(
                 it,
                 style = MaterialTheme.typography.bodySmall,
@@ -397,19 +407,21 @@ internal fun ItemCard(
 /**
  * One shelf.
  *
- * The tap handler takes the whole row rather than an id because what a tap means depends
- * on how far into the item the listener already is, and the shelf is not the place to
- * decide that.
+ * The tap handler takes the whole card rather than an id because what a tap means depends
+ * on how far into the thing the listener already is, and the shelf is not the place to
+ * decide that. Keyed on [ShelfCard.key] rather than on the item id: the continue shelf
+ * lists episodes, so one podcast can be on it several times, and a duplicate key is a
+ * crash in Compose rather than a card that merely looks wrong.
  */
 @Composable
 internal fun ShelfRowView(
     title: String,
-    rows: List<LibraryRow>,
+    cards: List<ShelfCard>,
     coverUrlFor: (String) -> String?,
-    onOpenRow: (LibraryRow) -> Unit,
+    onOpenCard: (ShelfCard) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (rows.isEmpty()) return
+    if (cards.isEmpty()) return
     Column(modifier = modifier) {
         Text(
             title,
@@ -420,11 +432,13 @@ internal fun ShelfRowView(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(rows, key = { it.item.id }) { row ->
+            items(cards, key = { it.key }) { card ->
                 ItemCard(
-                    row = row,
-                    coverUrl = coverUrlFor(row.item.id),
-                    onClick = { onOpenRow(row) },
+                    row = card.row,
+                    coverUrl = coverUrlFor(card.itemId),
+                    onClick = { onOpenCard(card) },
+                    title = card.title,
+                    subtitle = card.secondary,
                     modifier = Modifier.width(140.dp),
                 )
             }

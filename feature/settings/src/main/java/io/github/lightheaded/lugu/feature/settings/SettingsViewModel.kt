@@ -11,6 +11,7 @@ import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.HeadsetAction
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
+import io.github.lightheaded.lugu.core.sync.NotificationPersistence
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
@@ -132,6 +133,9 @@ class SettingsViewModel @Inject constructor(
         val current = state.value.settings.notificationButtons
         prefs.setNotificationButtons(if (button in current) current - button else current + button)
     }
+
+    fun setNotificationPersistence(value: NotificationPersistence) =
+        viewModelScope.launch { prefs.setNotificationPersistence(value) }
 
     fun setHeadsetNextAction(action: HeadsetAction) =
         viewModelScope.launch { prefs.setHeadsetNextAction(action) }

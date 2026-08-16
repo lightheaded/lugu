@@ -64,6 +64,10 @@ class PlaybackPrefs @Inject constructor(
         store.edit { prefs -> prefs[NOTIFICATION_BUTTONS] = buttons.distinct().joinToString(",") { it.id } }
     }
 
+    suspend fun setNotificationPersistence(value: NotificationPersistence) {
+        store.edit { it[NOTIFICATION_PERSISTENCE] = value.id }
+    }
+
     suspend fun setHeadsetNextAction(action: HeadsetAction) {
         store.edit { it[HEADSET_NEXT] = action.id }
     }
@@ -195,6 +199,7 @@ class PlaybackPrefs @Inject constructor(
         skipForwardSec = this[SKIP_FORWARD] ?: DEFAULTS.skipForwardSec,
         playerButtons = this[PLAYER_BUTTONS]?.toButtons()?.toSet() ?: DEFAULTS.playerButtons,
         notificationButtons = this[NOTIFICATION_BUTTONS]?.toButtons() ?: DEFAULTS.notificationButtons,
+        notification = NotificationPersistence.fromId(this[NOTIFICATION_PERSISTENCE]),
         headset = HeadsetSettings(
             nextAction = HeadsetAction.fromId(this[HEADSET_NEXT]) ?: DEFAULTS.headset.nextAction,
             previousAction = HeadsetAction.fromId(this[HEADSET_PREVIOUS]) ?: DEFAULTS.headset.previousAction,
@@ -272,6 +277,7 @@ class PlaybackPrefs @Inject constructor(
         val PAUSE_ON_DISCONNECT = booleanPreferencesKey("pause_on_disconnect")
         val RESUME_HEADPHONES = booleanPreferencesKey("resume_on_headphones")
         val RESUME_CAR = booleanPreferencesKey("resume_in_car")
+        val NOTIFICATION_PERSISTENCE = stringPreferencesKey("notification_persistence")
         val HEADSET_NEXT = stringPreferencesKey("headset_next_action")
         val HEADSET_PREVIOUS = stringPreferencesKey("headset_previous_action")
     }

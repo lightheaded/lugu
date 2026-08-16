@@ -154,6 +154,12 @@ class PlaybackDiary @Inject constructor(
  * Constants rather than free strings because these are read back by a person trying to
  * tell two failures apart, and "paused" written three different ways is how a record
  * stops being searchable.
+ *
+ * These are the ones that describe playback itself, and they are the ones any module may
+ * record. `LuguPlaybackService` names a handful more in its own companion — the headset
+ * button, the audio focus policy, the notification hold, arming — because they describe
+ * what that service is doing rather than what playback is doing, and each is written in
+ * exactly one place. Look there as well as here when reading a record.
  */
 object PlaybackEvent {
     const val PLAY_REQUESTED = "play requested"

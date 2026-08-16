@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
@@ -93,6 +94,7 @@ fun HomeScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
     val startTab by viewModel.startTab.collectAsStateWithLifecycle()
+    val playingNow by viewModel.playingNow.collectAsStateWithLifecycle()
 
     // The stored preference only ever answers "which tab does lugu open on", so it is
     // consulted exactly once — while nobody has chosen a tab in this instance. Seeding the
@@ -154,9 +156,11 @@ fun HomeScreen(
 
             HomeTab.HOME -> HomeTabContent(
                 state = state,
+                playingNow = playingNow,
                 coverUrlFor = { viewModel.coverUrl(it) },
                 onOpenItem = onOpenItem,
                 onPlay = onPlay,
+                onTogglePlayPause = viewModel::togglePlayPause,
                 modifier = Modifier.fillMaxSize().padding(padding),
             )
 
@@ -187,28 +191,42 @@ private fun StartTab.toHomeTab(): HomeTab = when (this) {
 @Composable
 private fun HomeTabContent(
     state: HomeUiState,
+    playingNow: PlayingNow?,
     coverUrlFor: (String) -> String?,
     onOpenItem: (String) -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
+    onTogglePlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // A tap on a shelf card means "carry on" for anything already started, and "tell me
     // about this" for anything not. It is a judgement call: opening the page for a book
     // someone is halfway through adds a step to the one action they almost certainly
     // wanted, while playing something unheard on a single tap is a surprise nobody asked
-    // for. The episode id comes from the progress row, so a podcast resumes the episode
-    // it was left on rather than starting the feed again.
-    val onOpenRow: (LibraryRow) -> Unit = { row ->
-        if (row.progress != null) onPlay(row.item.id, row.progress.episodeId) else onOpenItem(row.item.id)
+    // for. The episode id comes from the card itself, so a podcast episode on the continue
+    // shelf plays that episode rather than the top of the feed.
+    val onOpenCard: (ShelfCard) -> Unit = { card ->
+        if (card.progress != null) onPlay(card.itemId, card.episodeId) else onOpenItem(card.itemId)
     }
 
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
-        state.continueRow?.let { row ->
+        state.continueCard?.let { card ->
             item {
+                // Whether this card is the thing in the player is a question about the
+                // pair, not about the item: several episodes of one show can be on this
+                // shelf at once, and matching on the item alone would have all of them
+                // claiming to be playing together.
+                val loaded = playingNow?.takeIf { it.isLoaded(card) }
                 ContinueCard(
-                    row = row,
-                    coverUrl = coverUrlFor(row.item.id),
-                    onResume = { onPlay(row.item.id, row.progress?.episodeId) },
+                    card = card,
+                    coverUrl = coverUrlFor(card.itemId),
+                    isPlaying = loaded?.isPlaying == true,
+                    onResume = { onPlay(card.itemId, card.episodeId) },
+                    // A card that is already loaded gets the transport; anything else gets
+                    // a start. Sending a start to what is already playing would resolve the
+                    // session again and buffer from the beginning of the resume.
+                    onPlayPause = {
+                        if (loaded != null) onTogglePlayPause() else onPlay(card.itemId, card.episodeId)
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )
             }
@@ -231,13 +249,13 @@ private fun HomeTabContent(
         items(state.shelves, key = { it.kind.name }) { shelf ->
             ShelfRowView(
                 title = shelf.kind.label,
-                rows = shelf.rows,
+                cards = shelf.cards,
                 coverUrlFor = coverUrlFor,
-                onOpenRow = onOpenRow,
+                onOpenCard = onOpenCard,
             )
         }
 
-        if (state.continueRow == null && state.shelves.isEmpty()) {
+        if (state.continueCard == null && state.shelves.isEmpty()) {
             item {
                 Text(
                     "Nothing to pick up yet. The Library tab has everything on the server.",
@@ -253,22 +271,25 @@ private fun HomeTabContent(
 /**
  * The one-tap way back into whatever was last playing.
  *
- * Deliberately larger than a shelf card and above the shelves: it is a single item rather
+ * Deliberately larger than a shelf card and above the shelves: it is a single thing rather
  * than a list because the answer to "where was I" is singular, and anything that makes
- * the reader choose between candidates has already lost the argument.
+ * the reader choose between candidates has already lost the argument. For a podcast that
+ * thing is an episode, so the episode is the title and the show is the line under it.
+ *
+ * [isPlaying] means "this card is what the player has loaded, and it is running" — the
+ * caller decides that, because deciding it needs the episode id as well as the item id.
+ * The button is the only playing-aware part: the card as a whole still means "carry on
+ * with this", which is the same request whether or not it is already under way.
  */
 @Composable
-private fun ContinueCard(
-    row: LibraryRow,
+internal fun ContinueCard(
+    card: ShelfCard,
     coverUrl: String?,
+    isPlaying: Boolean,
     onResume: () -> Unit,
+    onPlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The progress row knows the duration of what was actually being played, which for a
-    // podcast is the episode rather than the whole feed.
-    val duration = row.progress?.durationSec?.takeIf { it > 0.0 } ?: row.item.durationSec
-    val remaining = duration * (1f - row.progressFraction)
-
     Card(modifier = modifier.fillMaxWidth().clickable(onClick = onResume)) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -291,25 +312,38 @@ private fun ContinueCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    row.item.title,
+                    card.title,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                card.secondary?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(
-                    progress = { row.progressFraction },
+                    progress = { card.progressFraction },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "${formatDuration(remaining)} left",
+                    "${formatDuration(card.remainingSec)} left",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            FilledIconButton(onClick = onResume, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Resume ${row.item.title}")
+            FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(56.dp)) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription =
+                        if (isPlaying) "Pause ${card.title}" else "Resume ${card.title}",
+                )
             }
         }
     }

@@ -43,6 +43,7 @@ import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.AudioSettings
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.HeadsetAction
+import io.github.lightheaded.lugu.core.sync.NotificationPersistence
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.SleepSettings
@@ -245,6 +246,27 @@ private fun settingEntries(
                 )
             },
         )
+        add(
+            SettingEntry(
+                id = "notification-persistence",
+                category = "Buttons",
+                title = "How long the notification stays",
+                keywords = "notification persistent disappears vanishes resume ready lock " +
+                    "screen paused shade sticky always",
+            ) {
+                ChoiceRow(
+                    title = "How long the notification stays",
+                    subtitle = "\"Always ready\" also loads the last thing you played when " +
+                        "lugu opens, so a headset button works straight away. It never " +
+                        "starts playing on its own.",
+                    options = NotificationPersistence.entries,
+                    selected = settings.notification,
+                    format = { it.label },
+                    onSelect = viewModel::setNotificationPersistence,
+                )
+            },
+        )
+
         add(
             SettingEntry(
                 id = "headset-next",

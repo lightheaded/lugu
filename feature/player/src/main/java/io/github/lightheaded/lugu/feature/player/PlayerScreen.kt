@@ -32,6 +32,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -56,6 +57,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -464,11 +466,56 @@ fun MiniPlayer(
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val current = nowPlaying ?: return
 
-    Column(modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)) {
+    MiniPlayerBar(
+        title = current.title,
+        subtitle = state.chapter?.title ?: current.author.orEmpty(),
+        coverUrl = current.coverUrl,
+        progress = if (state.durationSec > 0) (state.positionSec / state.durationSec).toFloat() else 0f,
+        isPlaying = state.isPlaying,
+        onOpen = onOpen,
+        onPlayPause = viewModel::togglePlayPause,
+        modifier = modifier,
+    )
+}
+
+/**
+ * The mini player as it is drawn, with no player attached.
+ *
+ * Split from [MiniPlayer] so the bar can be photographed sitting on the tab bar, which is
+ * the whole subject of the separation below and is not testable through a bound media
+ * session.
+ *
+ * On telling it apart from the tab bar. The two used to read as one slab, and honestly so:
+ * `NavigationBar` fills itself with `surfaceContainer` and this bar was painted with the
+ * same colour, so there was no edge between them in either theme. Two things are done
+ * about it, because either alone is thin. The bar is lifted one step to
+ * `surfaceContainerHigh`, which separates it from the tab bar in the direction each theme
+ * expects — lighter in the dark, darker in the light. And a hairline of `outlineVariant`
+ * closes the bottom edge, which is the part that survives an unusual palette: a tonal step
+ * is one step of whatever the scheme happens to be, and dynamic colour can make that step
+ * almost nothing, whereas an outline colour is specified to be visible against the
+ * surfaces around it. The divider belongs to this bar rather than to the shell so that it
+ * appears and disappears with the bar; a line the shell drew would sit above the tab bar
+ * with nothing over it whenever nothing was playing.
+ */
+@Composable
+internal fun MiniPlayerBar(
+    title: String,
+    subtitle: String,
+    coverUrl: String?,
+    progress: Float,
+    isPlaying: Boolean,
+    onOpen: () -> Unit,
+    onPlayPause: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
         LinearProgressIndicator(
-            progress = {
-                if (state.durationSec > 0) (state.positionSec / state.durationSec).toFloat() else 0f
-            },
+            progress = { progress },
             modifier = Modifier.fillMaxWidth().height(2.dp),
         )
         Row(
@@ -479,7 +526,7 @@ fun MiniPlayer(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AsyncImage(
-                model = current.coverUrl,
+                model = coverUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -490,26 +537,27 @@ fun MiniPlayer(
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    current.title,
+                    title,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    state.chapter?.title ?: current.author.orEmpty(),
+                    subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = viewModel::togglePlayPause) {
+            IconButton(onClick = onPlayPause) {
                 Icon(
-                    if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (state.isPlaying) "Pause" else "Play",
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
                 )
             }
         }
+        HorizontalDivider(thickness = Dp.Hairline, color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 

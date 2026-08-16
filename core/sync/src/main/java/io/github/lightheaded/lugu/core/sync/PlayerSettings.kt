@@ -137,6 +137,44 @@ data class SleepSettings(
 }
 
 /**
+ * How long the media notification stays, and whether lugu makes one before being asked.
+ *
+ * The complaint this answers is that a paused book's notification disappears after a couple
+ * of minutes, so getting back to it means opening the app and finding it again — which is
+ * the single most-repeated grievance about the official app. The opposite complaint is just
+ * as real, though: an app that puts itself in the notification shade unbidden, or seizes the
+ * headphones the moment they connect, is the behaviour people uninstall Spotify over. So
+ * this is a choice with the middle option as the default rather than a switch with an
+ * opinion baked in.
+ */
+enum class NotificationPersistence(val id: String, val label: String) {
+    /** Goes as soon as playback stops. The system default, and the quietest. */
+    WHILE_PLAYING("playing", "Only while playing"),
+
+    /**
+     * Stays after a pause until it is swiped away. What every other media app does, and
+     * what makes resuming a press rather than a search.
+     */
+    UNTIL_DISMISSED("paused", "Until you dismiss it"),
+
+    /**
+     * Also loads the last thing played when the app opens, so a headset button works
+     * without opening anything first — but **never starts playing on its own**. Arming is
+     * not the same as taking over, and the difference is the whole reason this is separate
+     * from resuming on a headphone connection, which has its own switch and is off.
+     */
+    ALWAYS_READY("ready", "Always ready to resume"),
+    ;
+
+    val keepsWhilePaused: Boolean get() = this != WHILE_PLAYING
+
+    companion object {
+        fun fromId(id: String?): NotificationPersistence =
+            entries.firstOrNull { it.id == id } ?: UNTIL_DISMISSED
+    }
+}
+
+/**
  * What happens when the audio route changes.
  *
  * Pausing on disconnect is Android's own `becoming noisy` behaviour and is on by
@@ -181,6 +219,7 @@ data class PlayerSettings(
         TransportButton.SKIP_FORWARD,
     ),
     val headset: HeadsetSettings = HeadsetSettings(),
+    val notification: NotificationPersistence = NotificationPersistence.UNTIL_DISMISSED,
     val speed: SpeedSettings = SpeedSettings(),
     /**
      * How long an automatic-correction notice stays up.
