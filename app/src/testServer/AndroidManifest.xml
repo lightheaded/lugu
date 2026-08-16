@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Merged into the debug and minified builds only. Its whole purpose is the one attribute
+    below; see the config it points at for why.
+
+    The suppression is a lint false positive, verified rather than assumed. Lint reports
+    MissingMediaBrowserServiceIntentFilter against whichever manifest declares
+    <application>, which since this overlay exists is this file — but the filter is
+    declared in the main manifest and survives the merge. Checked on the merged debug
+    manifest under app/build/intermediates, where the action is present exactly once.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:ignore="MissingMediaBrowserServiceIntentFilter" />
+
+</manifest>

@@ -101,11 +101,32 @@ jobs:
         # The image differs because the catalogue does. API 26 has a plain `default`
         # x86_64 image; the newer levels are published as `google_apis`, and the Play
         # Services in it are closer to a real phone for a media session anyway.
+        #
+        # The third leg is the same tests against the *shrunk* build. R8 had been on since
+        # 15 August and had never executed anywhere: `assembleRelease` proves only that
+        # nothing is missing at compile time, and everything R8 breaks — Room's generated
+        # code, Hilt's graph, reflectively resolved serializers, a service the system binds
+        # by name — fails at runtime and only in a minified build. One API level is enough
+        # for it, because what it catches is a missing keep rule rather than a platform
+        # difference, and it goes on the newest because that is where the strictest
+        # service and notification rules are.
         include:
           - api-level: 26
             target: default
+            variant: debug
+            gradle-task: connectedDebugAndroidTest
+            gradle-args: ''
           - api-level: 36
             target: google_apis
+            variant: debug
+            gradle-task: connectedDebugAndroidTest
+            gradle-args: ''
+          - api-level: 36
+            target: google_apis
+            variant: minified
+            gradle-task: connectedMinifiedAndroidTest
+            gradle-args: '-Plugu.testMinified'
+    name: instrumented (${{ matrix.api-level }}, ${{ matrix.target }}, ${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v7
 
@@ -146,8 +167,32 @@ jobs:
       #
       # One step now, rather than a create-and-cache step followed by a run step: with
       # nothing to restore, the runner creates the AVD on first use.
+      # A real Audiobookshelf server, provisioned from nothing, because the tests that
+      # matter most have never run. `TestServerConfig` has always been able to read a
+      # server out of BuildConfig and skip when there is none — and CI has never had one,
+      # so `PlaybackResumptionTest` has skipped on every run since it was written. A test
+      # that always skips is a test that does not exist.
+      #
+      # This deliberately fails the job rather than degrading to a skip. A silent skip is
+      # exactly the state being fixed here: it looks green and tests nothing.
+      - name: Seed a test server
+        id: abs
+        run: |
+          command -v ffmpeg >/dev/null 2>&1 || {
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          }
+          scripts/seed-test-server.sh --github-output
+
       - name: Run the instrumented tests
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # Read by app/build.gradle.kts into BuildConfig. The emulator reaches the
+          # container through 10.0.2.2, which is the host's loopback seen from inside an
+          # AVD; the seeding script emits that form rather than localhost for this reason.
+          LUGU_DEV_SERVER_URL: ${{ steps.abs.outputs.server-url }}
+          LUGU_DEV_USER: ${{ steps.abs.outputs.user }}
+          LUGU_DEV_PASS: ${{ steps.abs.outputs.pass }}
+          LUGU_TEST_PLAY_QUERY: ${{ steps.abs.outputs.play-query }}
         with:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.target }}
@@ -155,11 +200,33 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # Animations make Compose's idling resource wait forever on a transition.
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest --stacktrace
+          script: ./gradlew ${{ matrix.gradle-task }} ${{ matrix.gradle-args }} --stacktrace
 
-      # There is no server configured in CI, so the tests that need one skip. The report
-      # is uploaded even on a green run, because "skipped" and "passed" are different
-      # answers and the log does not distinguish them at a glance.
+      # The guard that keeps the step above honest. Every one of these tests skips rather
+      # than fails when it cannot find a server, which is right for a developer with no
+      # container running and wrong for CI: if the seeding step ever half-works, or the
+      # BuildConfig wiring is broken by a rename, the run goes green while testing nothing.
+      # That is the failure this whole job was added to end, so it is asserted rather than
+      # assumed.
+      - name: No test may skip in CI
+        if: success()
+        run: |
+          shopt -s globstar nullglob
+          results=(**/build/outputs/androidTest-results/connected/**/*.xml)
+          if [ ${#results[@]} -eq 0 ]; then
+            echo "::error::No instrumented test results were produced at all."
+            exit 1
+          fi
+          skipped=$(grep -ho '<skipped' "${results[@]}" | wc -l | tr -d ' ')
+          if [ "$skipped" != "0" ]; then
+            echo "::error::$skipped instrumented test(s) skipped. CI has a server, so a skip means the wiring is broken, not that the test is unrunnable."
+            grep -h -B2 '<skipped' "${results[@]}" | head -40
+            exit 1
+          fi
+          echo "No skips across ${#results[@]} result file(s)."
+
+      # Uploaded even on a green run, because "skipped" and "passed" are different answers
+      # and the log does not distinguish them at a glance.
       - name: Upload instrumented test reports
         if: always()
         uses: actions/upload-artifact@v7

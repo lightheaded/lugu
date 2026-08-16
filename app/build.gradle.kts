@@ -18,7 +18,13 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
-fun devProp(key: String): String = localProps.getProperty(key).orEmpty()
+// CI has no local.properties and never will — it is gitignored precisely because it holds
+// somebody's own server. So the same four values are also read from the environment, which
+// is how the Audiobookshelf container that `scripts/seed-test-server.sh` provisions reaches
+// the instrumented tests. The file wins when both exist, so a developer's own server is
+// never quietly replaced by a stray variable.
+fun devProp(key: String, env: String): String =
+    localProps.getProperty(key) ?: System.getenv(env).orEmpty()
 
 // CI stamps a monotonic build number so every build is a distinct version; local
 // builds keep the bare base version. Obtainium compares the installed versionName
@@ -39,6 +45,19 @@ val buildNumber: Int? = System.getenv("LUGU_BUILD_NUMBER")?.toIntOrNull()
 // measure — that is a rate limit and spike protection on the Sentry side.
 val sentryDsn: String = System.getenv("LUGU_SENTRY_DSN")
     ?: localProps.getProperty("lugu.sentry.dsn").orEmpty()
+
+// Where the instrumented tests find a server, if there is one. Applied to the build types
+// tests can run against; the release build gets the empty strings below instead, so a
+// shipped APK never carries anybody's address even by accident.
+fun com.android.build.api.dsl.ApplicationBuildType.applyTestServer() {
+    buildConfigField("String", "DEV_SERVER_URL", "\"${devProp("lugu.dev.serverUrl", "LUGU_DEV_SERVER_URL")}\"")
+    buildConfigField("String", "DEV_USER", "\"${devProp("lugu.dev.user", "LUGU_DEV_USER")}\"")
+    buildConfigField("String", "DEV_PASS", "\"${devProp("lugu.dev.pass", "LUGU_DEV_PASS")}\"")
+    // What the instrumented playback tests ask the library for. Not a secret and not a
+    // credential — a title, which is why it is a separate key: whoever has a server still
+    // has to say what on it is safe for a test to play.
+    buildConfigField("String", "TEST_PLAY_QUERY", "\"${devProp("lugu.test.playQuery", "LUGU_TEST_PLAY_QUERY")}\"")
+}
 
 android {
     namespace = "io.github.lightheaded.lugu"
@@ -77,13 +96,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            buildConfigField("String", "DEV_SERVER_URL", "\"${devProp("lugu.dev.serverUrl")}\"")
-            buildConfigField("String", "DEV_USER", "\"${devProp("lugu.dev.user")}\"")
-            buildConfigField("String", "DEV_PASS", "\"${devProp("lugu.dev.pass")}\"")
-            // What the instrumented playback tests ask the library for. Not a secret and
-            // not a credential — a title, which is why it is a separate key: a developer
-            // who has a server still has to say what on it is safe to play.
-            buildConfigField("String", "TEST_PLAY_QUERY", "\"${devProp("lugu.test.playQuery")}\"")
+            applyTestServer()
         }
         release {
             // R8 on, with the keep rules in proguard-rules.pro. Note that a clean build
@@ -106,6 +119,47 @@ android {
             if (System.getenv("LUGU_KEYSTORE_PATH") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+
+        // The release build, R8 and resource shrinking and all, that instrumented tests can
+        // actually be run against.
+        //
+        // This exists because of the oldest uncomfortable line in the backlog: R8 is on and
+        // has never run on a device. A clean `assembleRelease` proves only that nothing is
+        // missing at compile time, and every path R8 can break — Room's generated code,
+        // Hilt's graph, kotlinx-serialization's reflectively resolved serializers, the media
+        // service the *system* binds by name — fails at runtime and only in a shrunk build.
+        // So the alpha everyone installs has always been the least-tested thing shipped.
+        //
+        // `initWith(release)` rather than a copy of its settings, so the two cannot drift:
+        // whatever release does to R8, this inherits. The differences are the three that
+        // have to differ — debug signing so no keystore is needed, its own application id so
+        // it can sit beside a debug install, and a server for the tests to reach.
+        create("minified") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            applicationIdSuffix = ".minified"
+            versionNameSuffix = "-minified"
+            signingConfig = signingConfigs.getByName("debug")
+            applyTestServer()
+        }
+    }
+
+    // Instrumented tests run against `debug` unless asked otherwise. `-Plugu.testMinified`
+    // switches them to the shrunk build above, which is what CI does on main — an R8 failure
+    // is worth finding on a runner rather than in somebody's car.
+    testBuildType = if (project.hasProperty("lugu.testMinified")) "minified" else "debug"
+
+    // Shared by both build types tests run against, rather than living in `src/debug` and
+    // being copied: two copies of a security policy is how one of them ends up wrong.
+    sourceSets {
+        getByName("debug") {
+            manifest.srcFile("src/testServer/AndroidManifest.xml")
+            res.srcDir("src/testServer/res")
+        }
+        getByName("minified") {
+            manifest.srcFile("src/testServer/AndroidManifest.xml")
+            res.srcDir("src/testServer/res")
         }
     }
 
