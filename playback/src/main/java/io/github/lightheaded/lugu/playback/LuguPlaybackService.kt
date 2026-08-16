@@ -5,6 +5,7 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Build
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.core.content.IntentCompat
@@ -178,6 +179,20 @@ class LuguPlaybackService : MediaLibraryService() {
     private var pausedAtWallClockMs: Long? = null
     private val buttonClassifier = MediaButtonClassifier()
 
+    /**
+     * Whether anything has actually played since this service was created.
+     *
+     * The foreground hold is spent on a session somebody is listening to, not on one that
+     * was merely armed — see [PersistencePolicy.holdsForegroundWhilePaused].
+     */
+    private var hasPlayedSinceCreate = false
+
+    /** Whether the service is currently being held in the foreground past a pause. */
+    private var foregroundHeld = false
+
+    /** The arming in flight, so a second request does not start a second resolution. */
+    private var armingJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         diary.record(PlaybackEvent.SERVICE_CREATED)
@@ -272,6 +287,11 @@ class LuguPlaybackService : MediaLibraryService() {
                 // notifies controllers when the list has really changed, so an unnecessary
                 // push costs nothing and a missed one costs the whole feature.
                 pushNotificationLayout()
+                // The persistence setting is read at the moment Media3 asks about the
+                // notification, and it may not ask again for ten minutes. Someone who turns
+                // persistence on while looking at a paused book expects it to apply to that
+                // book, not to the next one.
+                triggerNotificationUpdate()
             }
         }
 
@@ -485,6 +505,120 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
+
+    /** The player's state as [PersistencePolicy] understands it. */
+    private fun phase(): PlaybackPhase = when {
+        player.mediaItemCount == 0 -> PlaybackPhase.EMPTY
+        player.playbackState == Player.STATE_IDLE -> PlaybackPhase.IDLE
+        player.playbackState == Player.STATE_ENDED -> PlaybackPhase.ENDED
+        else -> PlaybackPhase.LOADED
+    }
+
+    /**
+     * Keeps the notification through a pause, by keeping the service in the foreground.
+     *
+     * This is Media3's own hook rather than a hand-rolled `stopForeground(STOP_FOREGROUND_DETACH)`
+     * and re-post, and using it matters: the detach-and-re-post *is* what Media3 already does
+     * on a pause, so doing it again here would be two owners fighting over one notification.
+     * What Media3 will not do is stay in the foreground indefinitely — its own grace period is
+     * capped at ten minutes — and past that the process is reclaimable, which is what takes
+     * the notification with it. So the only thing overridden is the foreground decision, and
+     * everything about building, posting, updating and removing the notification is left where
+     * it was.
+     *
+     * The framework's answer is kept as a floor rather than replaced: while something is
+     * playing, or inside the grace period, Media3 already wants the foreground and the reasons
+     * it wants it are not ours to second-guess.
+     *
+     * A refused foreground start is not a crash here — Media3 catches it and reports it
+     * through the service listener, which writes it to the diary.
+     */
+    override fun onUpdateNotificationAsync(
+        session: MediaSession,
+        startInForegroundRequired: Boolean,
+    ): ListenableFuture<Void> {
+        val held = PersistencePolicy.holdsForegroundWhilePaused(
+            persistence = currentSettings.notification,
+            phase = phase(),
+            hasPlayed = hasPlayedSinceCreate,
+            foregroundNotificationIsDismissible = FOREGROUND_NOTIFICATION_IS_DISMISSIBLE,
+        )
+        if (held != foregroundHeld) {
+            foregroundHeld = held
+            // "The notification vanished" is a complaint with nothing in it unless the record
+            // says whether lugu was still holding on to it at the time.
+            diary.record(
+                NOTIFICATION_PERSISTENCE,
+                playbackDetail(if (held) "held through the pause" else "let go"),
+            )
+        }
+        return super.onUpdateNotificationAsync(session, startInForegroundRequired || held)
+    }
+
+    /**
+     * Loads the last thing played, paused, at its stored position.
+     *
+     * The point is that a headset press or the notification's play button then starts it with
+     * nothing to navigate first — the complaint being answered is having to find the book
+     * again after the app has been closed for a while. It is emphatically not a resume:
+     * nothing here calls `play`, and an arming that started playing would be the exact
+     * behaviour — an app seizing the audio on being opened — that the setting next to this one
+     * exists to refuse.
+     *
+     * Silent in every case where there is nothing to do. Resolution failure is one of those
+     * cases rather than an error: with no connection and no download there is genuinely
+     * nothing to arm, and saying so on the screen would be an error message for something the
+     * listener never asked for. [MediaResolver] prefers a downloaded copy, so a downloaded
+     * book arms with the network off.
+     */
+    private fun armLastPlayed() {
+        val phase = phase()
+        val wanted = PersistencePolicy.armsOnOpen(
+            persistence = currentSettings.notification,
+            phase = phase,
+            wantsToPlay = player.playWhenReady,
+            alreadyArming = armingJob?.isActive == true,
+        )
+        if (!wanted) return
+
+        if (phase == PlaybackPhase.IDLE) {
+            // The item is still in the player; it was only stopped, most likely by the
+            // notification being swiped away. Preparing it again costs nothing and does not
+            // start it, because `playWhenReady` is false and has just been checked.
+            player.prepare()
+            diary.record(ARMED, playbackDetail("prepared again"))
+            return
+        }
+
+        armingJob = scope.launch {
+            val resolved = withContext(Dispatchers.IO) {
+                runCatching { resumptionResolver.resolveLastPlayed() }.getOrNull()
+            }
+            if (resolved == null) {
+                diary.record(ARMED, "nothing to arm")
+                return@launch
+            }
+            // Resolving takes a round trip, and a play request can arrive inside it. That
+            // request wins: replacing a book somebody has just started with a different one
+            // would be the worst thing this feature could do.
+            if (player.mediaItemCount > 0 || player.playWhenReady) {
+                diary.record(ARMED, "dropped, something else started first")
+                return@launch
+            }
+            stateHolder.set(resolved.nowPlaying)
+            player.setMediaItems(
+                resolved.mediaItems,
+                resolved.startTrackIndex,
+                resolved.startPositionMs,
+            )
+            // Prepared, never played. Buffering the first bytes is what makes the press
+            // that follows instant, and it is the whole difference between armed and loaded.
+            player.prepare()
+            // Written down because something appearing in the notification shade that the
+            // listener did not ask for is exactly the kind of thing they will want to check.
+            diary.record(ARMED, playbackDetail())
+        }
+    }
 
     /**
      * Position is persisted on a 5 s tick while playing, and on every pause, seek and
@@ -871,6 +1005,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 applySleepTimerPauseRule()
                 SyncScheduler.flushNow(this@LuguPlaybackService)
             } else {
+                hasPlayedSinceCreate = true
                 applyRewindOnResume()
                 lastTickWallClockMs = System.currentTimeMillis()
             }
@@ -1188,6 +1323,11 @@ class LuguPlaybackService : MediaLibraryService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
             carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
             NotificationLayout.allCommands().forEach { commands.add(it) }
+            // Not a button anywhere. It is how the app tells the service it has come to the
+            // foreground, which is the one thing the service cannot see for itself.
+            commands.add(
+                SessionCommand(PersistencePolicy.COMMAND_ARM_LAST_PLAYED, android.os.Bundle.EMPTY),
+            )
 
             val result = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands.build())
@@ -1241,6 +1381,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 NotificationLayout.COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
                 NotificationLayout.COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
                 COMMAND_SPEED_CYCLE -> cycleSpeed()
+                PersistencePolicy.COMMAND_ARM_LAST_PLAYED -> armLastPlayed()
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -1404,13 +1545,27 @@ class LuguPlaybackService : MediaLibraryService() {
         }
     }
 
+    /**
+     * The app has been swiped out of Recents.
+     *
+     * Whether that ends the session is the persistence setting's business — see
+     * [PersistencePolicy.stopsWhenTaskRemoved]. The position is written down first either
+     * way: swiping the app away must never be the thing that loses somebody's place.
+     */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Swiping the app away while paused should not silently lose the position.
-        diary.record(PlaybackEvent.TASK_REMOVED, playbackDetail("wanted to play: ${player.playWhenReady}"))
+        val stops = PersistencePolicy.stopsWhenTaskRemoved(
+            persistence = currentSettings.notification,
+            phase = phase(),
+            wantsToPlay = player.playWhenReady,
+        )
+        diary.record(
+            PlaybackEvent.TASK_REMOVED,
+            playbackDetail(
+                "wanted to play: ${player.playWhenReady}, ${if (stops) "stopping" else "staying"}",
+            ),
+        )
         persistPosition(reason = "task-removed")
-        if (!player.playWhenReady || player.mediaItemCount == 0) {
-            stopSelf()
-        }
+        if (stops) stopSelf()
     }
 
     override fun onDestroy() {
@@ -1496,6 +1651,30 @@ class LuguPlaybackService : MediaLibraryService() {
          * because a duck itself is silent in every record the platform keeps.
          */
         const val AUDIO_FOCUS = "audio focus policy"
+
+        /**
+         * The moment lugu started holding the notification past a pause, and the moment it
+         * let go again. Without them "the notification vanished" cannot be told from "lugu
+         * never tried to keep it".
+         */
+        const val NOTIFICATION_PERSISTENCE = "notification persistence"
+
+        /**
+         * Something was loaded into the player without anybody pressing play. The other half
+         * of the same complaint — "it armed something I did not ask for" — and the only
+         * record that a book in the shade was put there by the app rather than by a press.
+         */
+        const val ARMED = "armed the last thing played"
+
+        /**
+         * Whether a foreground service's notification can be swiped away.
+         *
+         * Android 14 made them dismissible; before that they cannot be, which is why Media3
+         * leaves the foreground on a pause at all. See
+         * [PersistencePolicy.holdsForegroundWhilePaused] for what follows from it.
+         */
+        val FOREGROUND_NOTIFICATION_IS_DISMISSIBLE =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
     }
 }
 

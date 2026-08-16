@@ -245,6 +245,59 @@ The remaining delay is still worth measuring. Resolving an episode goes out to t
 for a play session before the player has anything to hold, and if the episode is already
 downloaded that round trip should not be on the critical path at all.
 
+## Always one press from resuming
+
+Reported 16 Aug, and the largest of these is not a feature request but praise with a gap in
+it: *this was one of my biggest gripes with the official app — after it was closed, after a
+while or sometimes right away, I had to find again what I had been playing.*
+
+| Item | Status |
+|---|---|
+| The mini player and the tab bar read as one slab | fixed 16 Aug |
+| **The Continue card's play button never changes state** — cannot pause from there | fixed 16 Aug |
+| **Arm the last-played item when the app opens**, so play is one press away | done 16 Aug — opt in |
+| **The media notification disappears after a pause** | fixed 16 Aug |
+| **Continue listening should be per episode**, not per podcast | done 16 Aug |
+
+**The notification is the load-bearing one.** `MediaSessionService` leaves the foreground
+when playback pauses and Android then reclaims the notification, usually within a couple of
+minutes and sometimes at once — so a paused book becomes something you have to go and find,
+which is precisely the complaint. Upstream has the same thing open twice (app#1800,
+app#1571).
+
+It is now a choice of three rather than a switch with an opinion baked in, because the
+opposite complaint is equally real and was raised in the same breath: *some people might
+find it annoying, like Spotify taking over playback when headphones are connected — that's
+super annoying.*
+
+- **Only while playing** — goes as soon as playback stops. The quietest, and what the system
+  does by default.
+- **Until you dismiss it** — the new default. Stays after a pause until it is swiped, which
+  is what every other media app does.
+- **Always ready to resume** — also loads the last thing played when lugu opens, so a headset
+  button works without opening anything first.
+
+The third one earns its own paragraph, because the line it must not cross is thin. Arming is
+**not** resuming: lugu loads the item, paused, at its stored position, and waits. It never
+starts playing on its own. That is a different act from resuming when headphones connect,
+which has its own switch and is off by default — and the distinction is the whole reason the
+two are not one setting.
+
+**Per-episode continue listening.** The shelf grouped by item, which is the right question
+for a book and the wrong one for a podcast: three part-heard episodes of one show collapsed
+into a single card, and reaching the other two meant going to the show's page and finding
+them. The shelf now lists what is being *listened to* rather than which items are in
+progress, so each episode is its own entry, named by the episode with the show beneath it.
+
+That also fixed a latent unit error. A podcast entry's progress must be measured against the
+episode's duration, not the feed's — the two differ by orders of magnitude, so reading the
+wrong one reports three minutes into a three-hundred-hour feed. The shelf row now carries
+the played duration explicitly rather than leaving each screen to guess which it meant.
+
+**The Continue card** compares on the item *and* the episode before deciding it is the thing
+playing, since a podcast now has several entries on that shelf and they must not all light up
+together.
+
 ## Playback stops on its own
 
 Reported 15 Aug: playback stops occasionally, and there is no way to tell whether the app

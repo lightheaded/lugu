@@ -71,9 +71,23 @@ class BrowseTree @Inject constructor(
         return when (val node = BrowseNode.parse(parentId)) {
             BrowseNode.Root -> rootChildren(account, library)
 
-            BrowseNode.Continue -> itemDao.observeContinueListening(server, user).first()
-                .filter { library.isVisible(mediaTypeOf(it.mediaType)) }
-                .map { it.toMediaItem(account) }
+            // One row per thing being listened to rather than per item: a podcast with three
+            // part-heard episodes offers all three, each addressing its own episode, so the
+            // car can start any of them without going through the show's page first.
+            BrowseNode.Continue -> itemDao.observeInProgress(server, user).first()
+                .filter { library.isVisible(mediaTypeOf(it.item.mediaType)) }
+                .map { row ->
+                    playable(
+                        node = BrowseNode.Playable(row.item.id, row.episodeId),
+                        title = ContinueRows.title(row.item.title, row.episodeTitle),
+                        subtitle = ContinueRows.subtitle(
+                            itemTitle = row.item.title,
+                            author = row.item.authorName,
+                            episodeTitle = row.episodeTitle,
+                        ),
+                        coverUrl = coverUrl(account, row.item.id),
+                    )
+                }
 
             BrowseNode.UpNext -> queueDao.observeRows(server, user).first()
                 .filter { library.isVisible(mediaTypeOf(it.mediaType)) }

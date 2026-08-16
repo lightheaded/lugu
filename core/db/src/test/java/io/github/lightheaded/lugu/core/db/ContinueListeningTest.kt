@@ -14,12 +14,18 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Continue-listening has to survive podcasts.
+ * Continue-listening has to survive podcasts, in two different ways.
  *
- * A book has one progress row; a podcast has one per episode. Joining items to
- * progress on `libraryItemId` alone therefore returns the same podcast once per
- * episode listened to. The UI keys that list by item id, and Compose throws on a
- * duplicate key — so a duplicate row here is an app crash, not a cosmetic glitch.
+ * The grouped query answers "which items are in progress". A book has one progress row; a
+ * podcast has one per episode, so joining on `libraryItemId` alone returns the same podcast
+ * once per episode listened to. Whatever keys that list by item id — Compose, or the car's
+ * browse tree — throws on a duplicate, so a duplicate row there is a crash rather than a
+ * cosmetic glitch.
+ *
+ * The ungrouped query answers a different question: "what am I part-way through". For a
+ * podcast that is each episode separately, which is what somebody with three on the go
+ * actually wants. It carries the *episode's* duration alongside the item's own, and getting
+ * those the wrong way round reports three minutes into a three-hundred-hour feed.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -68,6 +74,21 @@ class ContinueListeningTest {
         coverPath = null,
         rawJson = null,
         syncedAtMs = 0,
+    )
+
+    private fun episode(id: String, itemId: String, title: String) = EpisodeEntity(
+        serverId = serverId,
+        userId = userId,
+        id = id,
+        libraryItemId = itemId,
+        title = title,
+        subtitle = null,
+        description = null,
+        episodeNumber = null,
+        season = null,
+        publishedAtMs = 0,
+        durationSec = 1_800.0,
+        position = 0,
     )
 
     private fun progress(itemId: String, episodeId: String?, lastUpdateMs: Long) = ProgressEntity(
@@ -129,6 +150,73 @@ class ContinueListeningTest {
         )
 
         assertThat(db.libraryItemDao().observeContinueListening(serverId, userId).first()).isEmpty()
+    }
+
+    @Test
+    fun `every part-heard episode of one podcast gets its own row`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("li_pod", "PODCAST", durationSec = 1_080_000.0)))
+        db.episodeDao().upsertAll(
+            listOf(
+                episode("ep_1", "li_pod", "The lighthouse keeper"),
+                episode("ep_2", "li_pod", "What the tide left"),
+            ),
+        )
+        db.progressDao().upsertAll(
+            listOf(
+                progress("li_pod", "ep_1", lastUpdateMs = 100),
+                progress("li_pod", "ep_2", lastUpdateMs = 900),
+            ),
+        )
+
+        val rows = db.libraryItemDao().observeInProgress(serverId, userId).first()
+
+        assertThat(rows.map { it.episodeId }).containsExactly("ep_2", "ep_1").inOrder()
+        assertThat(rows.map { it.episodeTitle })
+            .containsExactly("What the tide left", "The lighthouse keeper").inOrder()
+        // Both rows are the same item, so the item id alone cannot key this list.
+        assertThat(rows.map { it.item.id }.toSet()).containsExactly("li_pod")
+    }
+
+    /**
+     * The duration that matters is the one the progress row carries: for an episode, half an
+     * hour, not the three hundred hours of feed behind it.
+     */
+    @Test
+    fun `an episode row carries the episode's duration, not the feed's`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("li_pod", "PODCAST", durationSec = 1_080_000.0)))
+        db.episodeDao().upsertAll(listOf(episode("ep_1", "li_pod", "The lighthouse keeper")))
+        db.progressDao().upsertAll(listOf(progress("li_pod", "ep_1", lastUpdateMs = 100)))
+
+        val row = db.libraryItemDao().observeInProgress(serverId, userId).first().single()
+
+        assertThat(row.playedDurationSec).isEqualTo(3_600.0)
+        assertThat(row.item.durationSec).isEqualTo(1_080_000.0)
+        assertThat(row.positionSec).isEqualTo(120.0)
+    }
+
+    @Test
+    fun `a book gets one row and no episode`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("li_book", "BOOK")))
+        db.progressDao().upsertAll(listOf(progress("li_book", null, lastUpdateMs = 100)))
+
+        val row = db.libraryItemDao().observeInProgress(serverId, userId).first().single()
+
+        // Empty string is how a book's absent episode is stored; null is how it must read.
+        assertThat(row.episodeId).isNull()
+        assertThat(row.episodeTitle).isNull()
+    }
+
+    @Test
+    fun `the ungrouped query excludes the same rows the grouped one does`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("li_done", "BOOK"), item("li_new", "BOOK")))
+        db.progressDao().upsertAll(
+            listOf(
+                progress("li_done", null, lastUpdateMs = 100).copy(isFinished = true),
+                progress("li_new", null, lastUpdateMs = 200).copy(currentTimeSec = 0.0),
+            ),
+        )
+
+        assertThat(db.libraryItemDao().observeInProgress(serverId, userId).first()).isEmpty()
     }
 
     @Test

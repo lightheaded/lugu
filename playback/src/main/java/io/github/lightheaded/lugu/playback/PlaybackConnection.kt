@@ -2,8 +2,10 @@ package io.github.lightheaded.lugu.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.model.Chapter
@@ -12,6 +14,7 @@ import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
+import io.github.lightheaded.lugu.core.sync.NotificationPersistence
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.await
@@ -211,6 +215,35 @@ class PlaybackConnection @Inject constructor(
             }
             val target = BrowseNode.parse(match.mediaId) as? BrowseNode.Playable ?: return@launch
             play(target.itemId, target.episodeId)
+        }
+    }
+
+    /**
+     * Loads the last thing played into the player, paused, so that it is a press away.
+     *
+     * Called when the app comes to the foreground. Safe to call as often as that happens: it
+     * does nothing at all unless the listener has chosen "Always ready to resume", and the
+     * service refuses a second arming while one is in flight or anything is already loaded.
+     *
+     * **It never starts playing.** The whole of the feature is that the notification and the
+     * headset button have something to act on; taking the audio over on being opened is the
+     * behaviour this is deliberately not.
+     *
+     * The setting and the account are read here, before the controller is built, so that on
+     * the two settings that do not want this nothing is connected and the playback service is
+     * not started at all. Everything after that — whether there is anything to arm, whether
+     * something is already loaded, what the last thing played was — is the service's to
+     * decide, because the service is the only surface that survives the app being killed.
+     */
+    fun armLastPlayed() {
+        scope.launch {
+            val settings = withContext(Dispatchers.IO) { playbackPrefs.settings.first() }
+            if (settings.notification != NotificationPersistence.ALWAYS_READY) return@launch
+            if (authRepository.account() == null) return@launch
+            controller().sendCustomCommand(
+                SessionCommand(PersistencePolicy.COMMAND_ARM_LAST_PLAYED, Bundle.EMPTY),
+                Bundle.EMPTY,
+            )
         }
     }
 

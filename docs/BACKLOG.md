@@ -110,6 +110,14 @@ Recorded so the same question is not re-litigated in six months.
 
 Android TV (app#606) and Wear OS (app#676) are already M4 spikes and are not repeated here.
 
+## Left behind by the notification and continue-listening work
+
+| Item | Note |
+|---|---|
+| **Notification persistence is weaker before Android 14** | From API 34 a foreground-service notification can be swiped, so the service is pinned while a book is paused and the notification stays until dismissed. Below that it cannot be swiped at all — which is exactly why Media3 detaches on a pause — so pinning would trade a notification that vanishes for one that cannot be got rid of, which is the worse complaint. On 8 to 13 persistence therefore rests on the service no longer stopping itself when the app is swiped away, plus Media3's own ten-minute foreground window. How long that lasts is the system's judgement, not ours |
+| **"Which title does a Continue row show" is implemented twice** | `ContinueRows` in `:playback` for the car and `ShelfCard` in `:feature:library` for the phone both decide that an episode names itself and the show becomes the subtitle. Same rule, two homes, and they can drift. It belongs in `:core:model` with the other display helpers |
+| **An armed item does not hold the notification open** | Deliberate: nobody has asked for it yet, and it will be armed again the next time the app opens. Worth revisiting if it turns out that an armed book with no notification is indistinguishable from no book at all |
+
 ## Left behind by the 16 August work
 
 Each of these is a consequence of something that landed, and each is written down because

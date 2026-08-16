@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.core.db
 
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -129,6 +130,47 @@ interface LibraryItemDao {
         libraryId: String? = null,
         limit: Int = 20,
     ): Flow<List<LibraryItemEntity>>
+
+    /**
+     * Continue-listening, one row per thing actually being listened to.
+     *
+     * The grouped query above answers "which items are in progress", which is the right
+     * question for a book and the wrong one for a podcast: three part-heard episodes of one
+     * show collapse into a single card, and picking one of the other two means going to the
+     * podcast's page and finding it. Somebody with several on the go wants several rows.
+     *
+     * So this one does not group. A book has exactly one progress row and is unaffected; a
+     * podcast contributes one row per unfinished episode, each carrying the episode's own id,
+     * title and duration. The caller must key the list on the item *and* the episode —
+     * Compose throws on a duplicate key, and the item id alone is no longer unique here.
+     */
+    @Query(
+        """
+        SELECT i.*,
+               NULLIF(p.episodeKey, '') AS episodeId,
+               e.title AS episodeTitle,
+               p.currentTimeSec AS positionSec,
+               p.durationSec AS playedDurationSec,
+               p.progress AS progressFraction,
+               p.lastUpdateMs AS lastUpdateMs
+        FROM library_item i
+        INNER JOIN progress p
+            ON p.serverId = i.serverId AND p.userId = i.userId AND p.libraryItemId = i.id
+        LEFT JOIN episode e
+            ON e.serverId = p.serverId AND e.userId = p.userId AND e.id = p.episodeKey
+        WHERE i.serverId = :serverId AND i.userId = :userId
+          AND (:libraryId IS NULL OR i.libraryId = :libraryId)
+          AND p.isFinished = 0 AND p.currentTimeSec > 0
+        ORDER BY p.lastUpdateMs DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeInProgress(
+        serverId: String,
+        userId: String,
+        libraryId: String? = null,
+        limit: Int = 20,
+    ): Flow<List<InProgressRow>>
 
     /**
      * Full-text search across the mirror, scoped to one library.
@@ -873,6 +915,25 @@ interface OutboxDao {
  * a single misfiled item.
  */
 data class BrowseGroup(val name: String, val itemCount: Int)
+
+/**
+ * One thing part-heard: a book, or one episode of a podcast.
+ *
+ * [playedDurationSec] is the duration of whatever was being played, which for an episode is
+ * the episode and not the whole feed — the item's own `durationSec` is embedded alongside it
+ * and means something different. Getting those two the wrong way round is how a podcast card
+ * reports three minutes into a three-hundred-hour feed.
+ */
+data class InProgressRow(
+    @Embedded val item: LibraryItemEntity,
+    /** Null for a book. */
+    val episodeId: String?,
+    val episodeTitle: String?,
+    val positionSec: Double,
+    val playedDurationSec: Double,
+    val progressFraction: Double,
+    val lastUpdateMs: Long,
+)
 
 data class QueueRow(
     val libraryItemId: String,

@@ -34,9 +34,7 @@ import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,6 +70,7 @@ import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.sync.BrowseKind
 import io.github.lightheaded.lugu.core.sync.QueueItem
+import io.github.lightheaded.lugu.core.sync.ShelfEntry
 import io.github.lightheaded.lugu.core.sync.ShelfKind
 import org.junit.Rule
 import org.junit.Test
@@ -92,9 +91,9 @@ import org.robolectric.annotation.GraphicsMode
  * On what is being photographed. Every screen in lugu takes a Hilt view model of a final
  * class whose dependencies are final classes over Room, DataStore and Ktor, so none of
  * them can be rendered from fabricated state as it stands. What is rendered here instead
- * is each screen's own components — [ItemCard], [ShelfRowView], [ListControlsBar],
- * [SelectionBar], [DownloadButton], [RowActionsMenu] — arranged the way the screen
- * arranges them. That covers the parts where the design decisions live and where a
+ * is each screen's own components — [ItemCard], [ShelfRowView], [ContinueCard],
+ * [ListControlsBar], [SelectionBar], [DownloadButton], [RowActionsMenu] — arranged the way
+ * the screen arranges them. That covers the parts where the design decisions live and where a
  * regression would actually show; it does not cover the assembly, and a change to the
  * order of blocks in a screen file will not fail these.
  */
@@ -114,6 +113,16 @@ class LibraryScreensScreenshotTest {
     @Test
     fun `the home tab reads correctly in the dark`() {
         capture("home_tab_dark", dark = true) { HomeShellPreview(libraryTab = false) }
+    }
+
+    @Test
+    fun `the continue card reports what is playing and what is not`() {
+        capture("continue_card_light", dark = false) { ContinueCardStatesPreview() }
+    }
+
+    @Test
+    fun `the continue card reports what is playing in the dark`() {
+        capture("continue_card_dark", dark = true) { ContinueCardStatesPreview() }
     }
 
     @Test
@@ -285,6 +294,43 @@ private val EPISODES = listOf(
     EpisodeRow(episode("ep_3", "A quiet hour on 500 kHz", "2", "12", 41), null, null),
 )
 
+/** A book on a shelf: no episode, and the whole book is what is being played. */
+private fun card(row: LibraryRow) = ShelfCard(
+    ShelfEntry(row.item, playedDurationSec = row.item.durationSec),
+    row.progress,
+)
+
+/**
+ * One part-heard episode, which is what the continue shelf is a list of now.
+ *
+ * The played duration is the episode's, not the show's — a podcast has no duration of its
+ * own worth reading, and taking the item's would report minutes left of a feed that never
+ * ends.
+ */
+private fun episodeCard(id: String, title: String, minutes: Int, fraction: Double) = ShelfCard(
+    ShelfEntry(
+        item = PODCAST,
+        episodeId = id,
+        episodeTitle = title,
+        playedDurationSec = minutes * 60.0,
+    ),
+    progress(fraction, minutes * 60.0),
+)
+
+/**
+ * Three episodes of one show and a book, in the order the query returns them.
+ *
+ * The three episodes are the point: a listener with several on the go used to get one card
+ * for the show, and picking either of the other two meant going to the podcast's page and
+ * hunting. They are also why every list here is keyed on the entry rather than the item.
+ */
+private val CONTINUE_CARDS = listOf(
+    episodeCard("ep_1", "The 40-metre band, and who is still on it", 74, 0.33),
+    card(GRID_BOOKS.first()),
+    episodeCard("ep_4", "Coast stations, one by one", 52, 0.61),
+    episodeCard("ep_5", "What the trawlers still send at night", 66, 0.12),
+)
+
 private val QUEUE = listOf(
     QueueItem("li_2", null, "Salt and Shortwave", "Ada Merriweather", MediaType.BOOK, 7 * 3600.0, null, true, 0.0, false),
     QueueItem("li_pod", "ep_2", "Ferry timetables as numbers stations", "Coastal Signal", MediaType.PODCAST, 58 * 60.0, null, false, 0.0, false),
@@ -348,69 +394,63 @@ private fun HomeShellPreview(libraryTab: Boolean) {
 @Composable
 private fun HomeTabPreview() {
     LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
-        item { ContinueCardPreview(GRID_BOOKS.first()) }
         item {
-            ShelfRowView(
-                title = ShelfKind.NEXT_IN_SERIES.label,
-                rows = GRID_BOOKS.drop(1),
-                coverUrlFor = { null },
-                onOpenRow = {},
+            // The head of the continue shelf is an episode here, and it is the one thing
+            // in the player: the card says Pause, which is the whole of the second fix.
+            ContinueCard(
+                card = CONTINUE_CARDS.first(),
+                coverUrl = null,
+                isPlaying = true,
+                onResume = {},
+                onPlayPause = {},
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
         }
         item {
             ShelfRowView(
-                title = ShelfKind.SHORT_LISTENS.label,
-                rows = GRID_BOOKS.reversed(),
+                title = ShelfKind.CONTINUE.label,
+                cards = CONTINUE_CARDS,
                 coverUrlFor = { null },
-                onOpenRow = {},
+                onOpenCard = {},
+            )
+        }
+        item {
+            ShelfRowView(
+                title = ShelfKind.NEXT_IN_SERIES.label,
+                cards = GRID_BOOKS.drop(1).map(::card),
+                coverUrlFor = { null },
+                onOpenCard = {},
             )
         }
     }
 }
 
-/** The one-tap way back into whatever was last playing, as the Home tab renders it. */
+/**
+ * The resume card in both of the states it now has.
+ *
+ * The button used to be a Play icon whatever the player was doing, so pressing it left the
+ * card looking untouched and gave no way to pause from there. The top card is what is
+ * loaded and running; the bottom one is something else entirely, and still offers a start.
+ */
 @Composable
-private fun ContinueCardPreview(row: LibraryRow) {
-    val duration = row.progress?.durationSec ?: row.item.durationSec
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(88.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-            )
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Continue listening",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(row.item.title, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { row.progressFraction },
-                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "${formatDuration(duration * (1f - row.progressFraction))} left",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            FilledIconButton(onClick = {}, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Resume ${row.item.title}")
-            }
-        }
+private fun ContinueCardStatesPreview() {
+    Column {
+        ContinueCard(
+            card = CONTINUE_CARDS.first(),
+            coverUrl = null,
+            isPlaying = true,
+            onResume = {},
+            onPlayPause = {},
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+        ContinueCard(
+            card = CONTINUE_CARDS[1],
+            coverUrl = null,
+            isPlaying = false,
+            onResume = {},
+            onPlayPause = {},
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
     }
 }
 

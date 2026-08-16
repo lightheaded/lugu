@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.model.MediaProgress
+import io.github.lightheaded.lugu.core.model.ProgressKey
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
@@ -11,8 +12,10 @@ import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.Shelf
+import io.github.lightheaded.lugu.core.sync.ShelfEntry
 import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.StartTab
+import io.github.lightheaded.lugu.playback.PlaybackConnection
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,11 +26,65 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
-/** One computed shelf, already paired with whatever progress its items have. */
-data class ShelfRow(val kind: ShelfKind, val rows: List<LibraryRow>)
+/**
+ * One thing on a shelf, paired with the progress of that exact thing.
+ *
+ * The progress is looked up by item *and* episode rather than by item alone. A podcast
+ * with three part-heard episodes is three cards on the continue shelf, and an item-level
+ * lookup would give all three the same position — the position of whichever episode was
+ * touched last.
+ */
+data class ShelfCard(
+    val entry: ShelfEntry,
+    val progress: MediaProgress?,
+) {
+    val key: String get() = entry.key
+    val itemId: String get() = entry.item.id
+    val episodeId: String? get() = entry.episodeId
+
+    /** The episode is what is being continued, so it is the title rather than the show. */
+    val title: String get() = entry.episodeTitle ?: entry.item.title
+
+    /** The show for an episode, the author for anything else: what the title needs placing in. */
+    val secondary: String? get() =
+        if (entry.episodeTitle != null) entry.item.title else entry.item.authorName
+
+    val progressFraction: Float get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+
+    /**
+     * How much of the thing being played is left, which is the episode's duration for a
+     * podcast. Reading the item's own duration instead reports minutes into a feed that
+     * is hundreds of hours long.
+     */
+    val remainingSec: Double get() = playedDurationSec * (1f - progressFraction)
+
+    /** What the grid's card wants, since a shelf card is drawn by the same component. */
+    val row: LibraryRow get() = LibraryRow(entry.item, progress)
+
+    private val playedDurationSec: Double
+        get() = entry.playedDurationSec.takeIf { it > 0.0 } ?: entry.item.durationSec
+}
+
+/** One computed shelf, already paired with whatever progress its entries have. */
+data class ShelfRow(val kind: ShelfKind, val cards: List<ShelfCard>)
+
+/**
+ * What the player has loaded, as a shelf needs to compare against it.
+ *
+ * The comparison is on the pair, never on the item alone: a podcast now has several cards
+ * on the continue shelf, and matching by item id would light every one of them up whenever
+ * any episode of that show was playing.
+ */
+data class PlayingNow(
+    val itemId: String,
+    val episodeId: String?,
+    val isPlaying: Boolean,
+) {
+    fun isLoaded(card: ShelfCard): Boolean = itemId == card.itemId && episodeId == card.episodeId
+}
 
 data class HomeUiState(
-    val continueRow: LibraryRow? = null,
+    val continueCard: ShelfCard? = null,
     val shelves: List<ShelfRow> = emptyList(),
     val shelvesSpanEverything: Boolean = false,
 )
@@ -45,6 +102,11 @@ data class HomeUiState(
  * it to, rather than being handed across by the shell. One screen owning the value and
  * telling the other leaves a frame where the two disagree, which is visible as shelves
  * that span every library and then snap to one.
+ *
+ * The playback connection is here because the resume card carries a transport button, and
+ * a button that reports playback has to read the same state the player does. Anything else
+ * is a second opinion, and the symptom of the second opinion was a Play icon that stayed
+ * Play after playback had started.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -53,6 +115,7 @@ class HomeViewModel @Inject constructor(
     libraryRepository: LibraryRepository,
     progressRepository: ProgressRepository,
     libraryPrefs: LibraryPrefs,
+    private val playback: PlaybackConnection,
 ) : ViewModel() {
 
     private val account: StateFlow<ActiveAccount?> =
@@ -73,12 +136,33 @@ class HomeViewModel @Inject constructor(
         .map { it.startTab }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val progressByItem: StateFlow<Map<String, MediaProgress>> = account
+    /**
+     * Progress keyed by the pair it is stored under, rather than by item.
+     *
+     * Progress rows are per (item, episode) already, and a shelf entry now names its
+     * episode, so the two line up exactly. The old item-level map had to guess which
+     * episode a podcast meant, and could only ever return one answer for a show with
+     * three episodes on the go.
+     */
+    private val progressByThing: StateFlow<Map<ProgressKey, MediaProgress>> = account
         .flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else progressRepository.observeAll(current)
         }
-        .map(ItemProgress::byItem)
+        .map { rows -> rows.associateBy { it.key } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
+     * What the player has loaded, and whether it is running.
+     *
+     * `isPlaying` is taken from the connection untouched. It is deliberately optimistic
+     * while a start is still resolving, so that a press flips the button at once; adding a
+     * second layer of optimism here would only make the button disagree with the player
+     * for longer when a start fails.
+     */
+    val playingNow: StateFlow<PlayingNow?> =
+        combine(playback.nowPlaying, playback.state) { loaded, player ->
+            loaded?.let { PlayingNow(it.libraryItemId, it.episodeId, player.isPlaying) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * The library in view comes from the same store the browse tab writes it to, rather
@@ -104,23 +188,28 @@ class HomeViewModel @Inject constructor(
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val state: StateFlow<HomeUiState> =
-        combine(shelves, progressByItem, settings) { shelfList, progress, prefs ->
+        combine(shelves, progressByThing, settings) { shelfList, progress, prefs ->
             // Hidden shelves never reach here — the repository is told not to query them —
             // so this only puts what is left into the order somebody asked for.
             val visible = prefs.arrangeShelves(shelfList) { it.kind.name }
             val rows = visible.map { shelf ->
-                ShelfRow(shelf.kind, shelf.items.map { LibraryRow(it, progress[it.id]) })
+                ShelfRow(
+                    shelf.kind,
+                    shelf.entries.map { entry ->
+                        ShelfCard(entry, progress[ProgressKey(entry.item.id, entry.episodeId)])
+                    },
+                )
             }
             HomeUiState(
                 // The continue query is ordered by most recent progress already, so the
-                // single most recently played item is the head of that shelf. Working it
+                // single most recently played thing is the head of that shelf. Working it
                 // out a second time here would be a second definition of "most recent"
                 // to disagree with the first.
                 //
                 // Read from the arranged list, so hiding "Continue listening" takes the
                 // resume card with it. Leaving a card of that name on a screen where the
                 // shelf was explicitly turned off would look like the setting failed.
-                continueRow = rows.firstOrNull { it.kind == ShelfKind.CONTINUE }?.rows?.firstOrNull(),
+                continueCard = rows.firstOrNull { it.kind == ShelfKind.CONTINUE }?.cards?.firstOrNull(),
                 shelves = rows,
                 shelvesSpanEverything = !prefs.shelvesFollowLibrary,
             )
@@ -132,19 +221,29 @@ class HomeViewModel @Inject constructor(
      */
     fun coverUrl(itemId: String, width: Int = 400): String? =
         account.value?.let { "${it.baseUrl}/api/items/$itemId/cover?width=$width" }
+
+    /**
+     * Only ever called for the card that is already loaded in the player, so this is a
+     * transport command rather than a request to start something. Starting a fresh play
+     * for the thing already playing would drop the position it is at and buffer again.
+     */
+    fun togglePlayPause() = playback.togglePlayPause()
 }
 
 /**
  * The progress that describes an item as a whole.
  *
  * Progress is stored per (item, episode) pair, and a podcast has no row at the item
- * level — so reading item-level progress alone found nothing for a podcast and the
- * continue shelf showed it with no position at all, which looks like the shelf is
- * broken rather than like the data being shaped differently.
+ * level — so reading item-level progress alone found nothing for a podcast and a card
+ * showed it with no position at all, which looks broken rather than like the data being
+ * shaped differently. Falling back to the item's most recently updated episode is the
+ * best available reading where a podcast has to be shown as one card.
  *
- * Falling back to the item's most recently updated episode is the correct reading: for a
- * podcast, "continue listening" means the episode you were on, and that row also carries
- * the episode id the resume affordance has to play.
+ * The shelves no longer use this. A shelf entry names its own episode now, so
+ * [HomeViewModel] looks progress up by the pair and a show with three episodes on the go
+ * gets three cards with three positions. What is left here is the author, series,
+ * narrator and collection grids, where one item is one card by construction and the most
+ * recent episode is the only sensible thing to draw.
  */
 internal object ItemProgress {
     fun byItem(rows: List<MediaProgress>): Map<String, MediaProgress> =

@@ -9,6 +9,7 @@ import io.github.lightheaded.lugu.core.db.ChapterDao
 import io.github.lightheaded.lugu.core.db.ChapterEntity
 import io.github.lightheaded.lugu.core.db.EpisodeDao
 import io.github.lightheaded.lugu.core.db.EpisodeEntity
+import io.github.lightheaded.lugu.core.db.InProgressRow
 import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryEntity
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
@@ -39,7 +40,31 @@ enum class ShelfKind(val label: String) {
     SHORT_LISTENS("Short listens"),
 }
 
-data class Shelf(val kind: ShelfKind, val items: List<LibraryItem>)
+/**
+ * One thing on a shelf.
+ *
+ * Not simply a [LibraryItem], because "Continue listening" is about what is being listened
+ * to rather than about which items are in progress, and for a podcast those are different
+ * questions — somebody three episodes into a show has three answers, not one. Every other
+ * shelf leaves [episodeId] null, which is also what makes the key below unique on all of
+ * them.
+ */
+data class ShelfEntry(
+    val item: LibraryItem,
+    val episodeId: String? = null,
+    val episodeTitle: String? = null,
+    /** The duration of what is being played: the episode for a podcast, the book otherwise. */
+    val playedDurationSec: Double = 0.0,
+) {
+    /**
+     * Stable across recomposition and unique within a shelf. The item id alone stopped
+     * being unique when the continue shelf started listing episodes, and Compose throws on
+     * a duplicate key rather than merely looking odd.
+     */
+    val key: String get() = "${item.id}#${episodeId.orEmpty()}"
+}
+
+data class Shelf(val kind: ShelfKind, val entries: List<ShelfEntry>)
 
 /**
  * A way of grouping the library other than by title.
@@ -206,22 +231,27 @@ class LibraryRepository @Inject constructor(
         // Declared in the order they are shown. Listing them as pairs rather than as
         // combine() arguments keeps the display order and the query in one place, and
         // sidesteps combine()'s five-flow typed limit.
-        val sources: List<Pair<ShelfKind, Flow<List<LibraryItemEntity>>>> = listOf(
-            ShelfKind.CONTINUE to
-                itemDao.observeContinueListening(account.serverId, account.userId, libraryId),
+        val sources: List<Pair<ShelfKind, Flow<List<ShelfEntry>>>> = listOf(
+            // The one shelf that is not a list of items. A podcast with three part-heard
+            // episodes belongs on it three times, because each is a separate thing somebody
+            // is part-way through and picking the other two should not mean navigating to
+            // the show and finding them.
+            ShelfKind.CONTINUE to itemDao.observeInProgress(account.serverId, account.userId, libraryId)
+                .map { rows -> rows.map { it.toEntry() } },
             ShelfKind.NEXT_IN_SERIES to
-                itemDao.observeNextInSeries(account.serverId, account.userId, libraryId),
+                itemDao.observeNextInSeries(account.serverId, account.userId, libraryId).map { it.toEntries() },
             ShelfKind.ALMOST_FINISHED to
-                itemDao.observeAlmostFinished(account.serverId, account.userId, libraryId),
-            ShelfKind.DOWNLOADED to itemDao.observeDownloaded(account.serverId, account.userId, libraryId),
+                itemDao.observeAlmostFinished(account.serverId, account.userId, libraryId).map { it.toEntries() },
+            ShelfKind.DOWNLOADED to itemDao.observeDownloaded(account.serverId, account.userId, libraryId)
+                .map { it.toEntries() },
             ShelfKind.PICK_IT_BACK_UP to itemDao.observeStale(
                 account.serverId,
                 account.userId,
                 clock.nowMs() - STALE_AFTER_MS,
                 libraryId,
-            ),
+            ).map { it.toEntries() },
             ShelfKind.SHORT_LISTENS to
-                itemDao.observeShortListens(account.serverId, account.userId, libraryId),
+                itemDao.observeShortListens(account.serverId, account.userId, libraryId).map { it.toEntries() },
         )
 
         // A shelf switched off is not computed at all. Some of these are the heaviest
@@ -235,13 +265,25 @@ class LibraryRepository @Inject constructor(
             // Every one of these lists is keyed by id in Compose, where a duplicate key
             // is a crash rather than a cosmetic glitch — the same fan-out that once
             // crashed the continue-listening row (see ContinueListeningTest).
-            wanted.mapIndexed { index, (kind, _) -> Shelf(kind, results[index].toItems()) }
-                .filter { it.items.isNotEmpty() }
+            wanted.mapIndexed { index, (kind, _) -> Shelf(kind, results[index]) }
+                .filter { it.entries.isNotEmpty() }
         }
     }
 
-    private fun List<LibraryItemEntity>.toItems(): List<LibraryItem> =
-        distinctBy { it.id }.map { it.toDomain() }
+    private fun List<LibraryItemEntity>.toEntries(): List<ShelfEntry> =
+        distinctBy { it.id }.map { ShelfEntry(it.toDomain(), playedDurationSec = it.durationSec) }
+
+    /**
+     * The played duration comes from the progress row, not the item: for an episode those
+     * differ by three orders of magnitude, and reading the wrong one reports three minutes
+     * into a three-hundred-hour feed.
+     */
+    private fun InProgressRow.toEntry(): ShelfEntry = ShelfEntry(
+        item = item.toDomain(),
+        episodeId = episodeId,
+        episodeTitle = episodeTitle,
+        playedDurationSec = playedDurationSec.takeIf { it > 0.0 } ?: item.durationSec,
+    )
 
     suspend fun itemCount(account: ActiveAccount): Int = itemDao.count(account.serverId, account.userId)
 
