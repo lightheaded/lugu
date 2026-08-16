@@ -17,8 +17,10 @@ import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import com.google.common.truth.Truth.assertThat
+import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.playback.LuguPlaybackService
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -82,6 +84,7 @@ class PlaybackResumptionTest {
         assumeTrue(TestServerConfig.NO_QUERY, TestServerConfig.canPlay)
 
         signIn()
+        awaitTheLibraryMirrored()
         startPlaying()
 
         val before = awaitAdvancingPosition()
@@ -113,6 +116,7 @@ class PlaybackResumptionTest {
         assumeTrue(TestServerConfig.NO_QUERY, TestServerConfig.canPlay)
 
         signIn()
+        awaitTheLibraryMirrored()
         startPlaying()
         val before = awaitAdvancingPosition()
 
@@ -148,6 +152,46 @@ class PlaybackResumptionTest {
         }
         compose.waitUntil(UI_TIMEOUT_MS) {
             compose.onAllNodes(hasContentDescription("Settings")).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    /**
+     * Waits for the library to reach Room before asking for anything in it by name.
+     *
+     * [startPlaying] searches by title, and that search runs against Room rather than
+     * against the server — so between signing in and the first sync finishing, the right
+     * answer to "play Lighthouse Wakes" is that there is no such book. Without this wait
+     * the race is real and it resolves differently on different machines: on the first CI
+     * run with a server, the API 26 emulator lost it in the first test and won it in the
+     * second, and API 36 lost it in both. What either failure said was "Nothing was playing
+     * after 45000ms", which names the wrong thing entirely.
+     *
+     * Waiting on Room rather than retrying the broadcast is deliberate. A retry loop would
+     * go green either way and tell nobody that the mirror is slow; this fails saying the
+     * library never arrived, which is a different bug from playback never starting and
+     * wants finding separately.
+     */
+    private fun awaitTheLibraryMirrored() {
+        val db = LuguDatabase.build(context)
+        try {
+            val deadline = System.currentTimeMillis() + SYNC_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                val found = runBlocking {
+                    db.serverDao().active()?.let { server ->
+                        db.libraryItemDao()
+                            .searchEverywhereLike(server.serverId, server.userId, TestServerConfig.playQuery)
+                            .isNotEmpty()
+                    } == true
+                }
+                if (found) return
+                Thread.sleep(POLL_MS)
+            }
+            throw AssertionError(
+                "\"${TestServerConfig.playQuery}\" never reached Room after ${SYNC_TIMEOUT_MS}ms. " +
+                    "The sign-in worked, so this is the library mirror, not playback.",
+            )
+        } finally {
+            db.close()
         }
     }
 
@@ -227,6 +271,9 @@ class PlaybackResumptionTest {
         const val SIGN_IN_PROMPT = "Sign in to your Audiobookshelf server"
         const val UI_TIMEOUT_MS = 30_000L
         const val PLAYBACK_TIMEOUT_MS = 45_000L
+
+        /** Generous: a first sync mirrors a whole library, and CI's is tiny but cold. */
+        const val SYNC_TIMEOUT_MS = 60_000L
         const val CONNECT_TIMEOUT_SEC = 20L
         const val POLL_MS = 250L
         const val SERVICE_TEARDOWN_MS = 2_000L

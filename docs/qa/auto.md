@@ -44,13 +44,24 @@ else.
 
 ## The browse tree
 
+**Most of this section is now automated.** `AutoBrowseTreeTest` binds to the playback
+service as an ordinary Media3 `MediaBrowser` — which is exactly how Android Auto reaches
+it — and asserts the structure below without a car, a head unit or a server. The lines
+marked ✅ are checked on every CI run and are here for completeness rather than for doing
+by hand. What no browser client can see is what the car *draws*, so the rest stays.
+
 - [ ] lugu appears in the DHU app launcher with its icon and name
-- [ ] The root shows **Continue** and **Libraries** always; **Up next**, **Downloaded**,
-      **Series** and **Podcasts** only when they have something in them
-- [ ] Every category opens, and none of them opens onto an empty list
-- [ ] **Series** lists series, not books; opening one lists its books in reading order
+- [ ] ✅ The root shows **Continue** and **Libraries** always; **Up next**, **Latest
+      episodes**, **Downloaded**, **Series** and **Podcasts** only when they have something
+      in them. Full order: Continue, Up next, Latest episodes, Downloaded, Series,
+      Podcasts, Libraries
+- [ ] ✅ Every category opens, and none of them opens onto an empty list — **except
+      Continue**, which is offered unconditionally and is legitimately empty for an account
+      that has started nothing. It and Libraries are the way back to everything, so they are
+      always there
+- [ ] ✅ **Series** lists series, not books; opening one lists its books in reading order
       (`#2` before `#10`, which is the whole reason the sequence is stored separately)
-- [ ] A podcast opens onto its episodes, newest first
+- [ ] ✅ A podcast opens onto its episodes, newest first
 - [ ] **A book started from the car plays at its remembered speed.** Set one to 1.5x on the
       phone, force-stop lugu, then start it from the car: a car hands back an id and nothing
       else, so the speed is applied where the session is rebuilt. At 1x, that is this path
@@ -134,11 +145,30 @@ the full one. That is Media3's own default since 1.11 for any app that does not 
 `MEDIA_CONTENT_CONTROL`, and Auto is both. That has been read in the framework source and
 never observed on a head unit, so it is a claim until this passes.
 
+Only half of it can be automated, and the half that can is the half that was never in
+doubt. `AutoBrowseTreeTest` asserts that a **trusted** controller gets the full command
+set — but it cannot construct an untrusted one, and the reason is worth knowing rather than
+rediscovering. Media3 never calls the platform's `isTrustedForMediaControl`; it carries its
+own copy in `androidx.media3.session.legacy.MediaSessionManager`, which answers
+
+```
+uid == SYSTEM_UID || uid == Process.myUid() || STATUS_BAR_SERVICE || MEDIA_CONTENT_CONTROL
+    || an enabled notification listener
+```
+
+Instrumentation runs *inside* the process under test, so `uid == Process.myUid()` is true
+before anything else is consulted. Every controller a test can build is trusted, and no
+amount of granting or revoking over shell subtracts from that. Producing an untrusted one
+needs a second application id — the same separate test module the force-stop case wants.
+
 - [ ] The browse tree still loads at all. If it is empty or the app is refused, this is
       the change to suspect first — restoring the previous behaviour is granting
       `DEFAULT_SESSION_AND_LIBRARY_COMMANDS` regardless of trust
-- [ ] The custom buttons still appear and still work
-- [ ] Voice search still returns results
+- [ ] ✅ The custom buttons still appear (asserted as *advertised*, which is what a head
+      unit reads to draw them; that they still *work* is below)
+- [ ] The custom buttons still work
+- [ ] ✅ Voice search still returns results — by title and by author, and a miss returns
+      nothing rather than an error
 
 ## Before calling M3 done
 
