@@ -25,36 +25,49 @@ data class AutoPlayDevice(val key: String, val name: String)
 /**
  * Starting a book when a chosen device connects.
  *
- * This is the rule set, with no Android in it: which connection counts, how long to wait,
- * and what has to still be true when the wait is over. What notices a device arriving, and
- * what actually presses play, live in the playback module.
+ * This is the rule set, with no Android in it: which connection counts, and what has to be
+ * true before and at the moment of playing. What notices a device arriving, what watches the
+ * audio route, and what actually presses play, live in the playback module.
  *
- * ## Why there is a wait at all
+ * ## What is actually being waited for
  *
  * A headset announces itself before it is ready to be played to. Between the connection and
- * the audio route actually moving there is a gap — a second or two on most devices, longer
- * on ones that chime at you first — and audio started inside that gap goes to the phone's
- * own speaker. The listener then hears the first sentence of their book out loud in a room,
- * or does not hear it at all. The wait is the fix, and it is a setting because the gap is a
- * property of the hardware rather than of Android.
+ * the audio route moving there is a gap — a second or two on most devices, longer on ones
+ * that chime at you first — and audio started inside that gap goes to the phone's own
+ * speaker. The listener hears the first sentence of their book out loud in a room, or does
+ * not hear it at all.
  *
- * The wait is not the only guard: [decide] is asked again when it expires, and refuses if
- * the route never actually arrived. A device that connected and dropped straight out again
- * is common enough — a headset picked up, then put back down — and it must not leave a book
- * playing to nobody.
+ * **That gap is observable, so it is observed rather than guessed at.** The platform reports
+ * output devices arriving, and a book starts when one worth listening through is actually
+ * attached — which on a fast headset is sooner than any fixed delay, and on a slow one is
+ * later than most people would have configured. A timer was the wrong instrument: it is a
+ * guess at a number that the phone already knows.
+ *
+ * [waitSec] survives as a deliberate *extra* on top of that, defaulting to a single second,
+ * because a device appearing in the output list and the audio policy having finished moving
+ * are not quite the same moment. Anyone who wants a book playing as early as it can be sets
+ * it to none; anyone whose first words still clip raises it. Neither is guessing at the
+ * switchover any more — the switchover is waited for either way.
+ *
+ * The wait is not the only guard: [decide] is asked again at the end of it, because a device
+ * that connected and dropped straight out again is common — a headset picked up, then put
+ * back down — and it must not leave a book playing to nobody.
  */
 object AutoPlay {
 
     /**
-     * Long enough for the common case, short enough not to feel broken.
+     * A single second on top of the audio having switched over.
      *
-     * Most headsets route within a second or two. Five leaves room for the slow ones without
-     * anybody wondering whether the setting works.
+     * Not zero, because the two things are close but not identical: the device appearing in
+     * the output list is the policy having somewhere to move to, not the policy having
+     * finished moving. One second is the smallest non-zero answer, and the cost of being
+     * wrong the other way — the first sentence of a book played to a room — is worse than
+     * the cost of a second.
      */
-    const val DEFAULT_WAIT_SEC = 5
+    const val DEFAULT_WAIT_SEC = 1
 
     /** Offered as one-tap choices; any value up to [MAX_WAIT_SEC] can still be stored. */
-    val WAIT_CHOICES_SEC = listOf(0, 2, 5, 10, 15, 30)
+    val WAIT_CHOICES_SEC = listOf(0, 1, 2, 3, 5, 10)
 
     /**
      * Two minutes. Beyond this the connection has stopped being the reason playback started,
@@ -135,6 +148,7 @@ object AutoPlay {
      * book talking over a phone call.
      */
     fun decide(conditions: AutoPlayConditions): AutoPlayOutcome = when {
+        !conditions.audioSwitchedOver -> AutoPlayOutcome.Refuse(AutoPlayRefusal.NO_AUDIO_ROUTE)
         !conditions.deviceStillConnected -> AutoPlayOutcome.Refuse(AutoPlayRefusal.DEVICE_GONE)
         conditions.onACall -> AutoPlayOutcome.Refuse(AutoPlayRefusal.ON_A_CALL)
         conditions.someoneElseHasTheAudio ->
@@ -160,7 +174,16 @@ object AutoPlay {
 
 /** What is true at the moment the wait ends. */
 data class AutoPlayConditions(
-    /** Whether an output that can be listened to is actually attached now. */
+    /**
+     * Whether an output worth listening through ever turned up.
+     *
+     * False means the wait ran out with the audio still on the phone. That is not the same
+     * as a device disconnecting: plenty of Bluetooth devices are not audio devices at all,
+     * and a watch or a keyboard connecting should say so rather than claim the headphones
+     * went away.
+     */
+    val audioSwitchedOver: Boolean,
+    /** Whether that output is still attached now, at the moment of playing. */
     val deviceStillConnected: Boolean,
     val someoneElseHasTheAudio: Boolean,
     val onACall: Boolean,
@@ -181,6 +204,7 @@ sealed interface AutoPlayOutcome {
  * always "why didn't it play", and an empty record answers it with nothing.
  */
 enum class AutoPlayRefusal(val reason: String) {
+    NO_AUDIO_ROUTE("the audio never switched over to it"),
     DEVICE_GONE("the device had disconnected again"),
     ON_A_CALL("a call was in progress"),
     SOMETHING_ELSE_PLAYING("another app had the audio"),

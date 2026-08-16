@@ -730,13 +730,14 @@ private fun settingEntries(
                 SettingEntry(
                     id = "auto-play-wait",
                     category = "Headphones and car",
-                    title = "How long to wait first",
-                    keywords = "wait delay seconds auto play start pause before begin",
+                    title = "Extra wait before it starts",
+                    keywords = "wait delay seconds auto play start pause before begin " +
+                        "immediately switch over route",
                 ) {
                     ChoiceRow(
-                        title = "How long to wait first",
-                        subtitle = "Headphones take a moment to be ready. Start too soon and " +
-                            "the first words go to the phone's speaker",
+                        title = "Extra wait before it starts",
+                        subtitle = "It already waits for the audio to move to the device. " +
+                            "Add a moment on top if the first words still get clipped",
                         options = AutoPlay.WAIT_CHOICES_SEC,
                         selected = settings.autoPlay.waitSec,
                         format = { if (it == 0) "None" else "$it s" },

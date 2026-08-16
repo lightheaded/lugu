@@ -56,10 +56,13 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
   fingerprinting against a database of known adverts, and a skip that removes narration
   is worse than an advert that plays
 - **Start playing when your headphones connect** — the last thing you were listening to,
-  with the app closed and nothing running. Only for the devices you pick, after a wait you
-  set, and never over a call or another app's audio. The notification counts down and
-  offers "Not now". On Android 12 and later the device is chosen through the system's own
-  picker, so lugu asks for no Bluetooth permission and never learns the address
+  with the app closed and nothing running. It waits for the audio to actually move to the
+  device rather than guessing at a delay, so it starts as early as it can and never plays
+  the first sentence to the room; there is an extra wait on top if you want one, and it
+  can be none. Only for the devices you pick, never over a call or another app's audio,
+  and the notification offers "Not now". On Android 12 and later the device is chosen
+  through the system's own picker, so lugu asks for no Bluetooth permission and never
+  learns the address
 - **Streaming that survives a dropout**: minutes of read-ahead rather than seconds,
   retries that come back when the network does, and streamed audio kept in a bounded
   cache of its own — never in the download cache, because a book you asked for must

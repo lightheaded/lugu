@@ -7,8 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationChannelCompat
@@ -62,6 +66,7 @@ import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
+import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +82,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -725,18 +731,22 @@ class LuguPlaybackService : MediaLibraryService() {
      *
      * Resolving what to play happens during the wait; loading it into the player does not.
      * That split is deliberate: the slow part — reading the last position, asking the server
-     * for a play session — is overlapped with the countdown, while the part that would make
-     * Media3 post a notification of its own is left until the moment of playing, so there is
-     * one notification on screen throughout rather than two arguing about it.
+     * for a play session — is overlapped with the wait, while the part that would make Media3
+     * post a notification of its own is left until the moment of playing, so there is one
+     * notification on screen throughout rather than two arguing about it.
+     *
+     * The wait itself is two things in order. First the audio actually moving to the device,
+     * which is watched for rather than guessed at — see [awaitAudioSwitchover]. Then the
+     * listener's own extra seconds on top, which default to one and can be none.
      */
     private fun beginAutoPlay(deviceName: String, waitSec: Int) {
         autoPlayWaiting = true
 
         // A second event from the same connection — the link, then the audio profile, then
         // sometimes the call profile, seconds apart. Each of them starts this service again
-        // and each has to be answered with a foreground notification, but the countdown
-        // already running is the right one: restarting it would push the start further away
-        // every time the hardware felt talkative.
+        // and each has to be answered with a foreground notification, but the wait already
+        // running is the right one: restarting it would push the start further away every
+        // time the hardware felt talkative.
         if (autoPlayJob?.isActive == true) {
             postWaitingNotification(autoPlayDeviceName, autoPlayRemainingSec)
             return
@@ -748,15 +758,73 @@ class LuguPlaybackService : MediaLibraryService() {
 
         autoPlayJob = scope.launch {
             val resolving = async { resolveForAutoPlay() }
-            while (autoPlayRemainingSec > 0) {
-                delay(1_000)
-                autoPlayRemainingSec--
-                if (autoPlayRemainingSec > 0) {
-                    postWaitingNotification(deviceName, autoPlayRemainingSec)
+            val switched = awaitAudioSwitchover(deviceName)
+            if (switched) {
+                while (autoPlayRemainingSec > 0) {
+                    delay(1_000)
+                    autoPlayRemainingSec--
+                    if (autoPlayRemainingSec > 0) {
+                        postWaitingNotification(deviceName, autoPlayRemainingSec)
+                    }
                 }
             }
-            finishAutoPlay(deviceName, resolving.await())
+            finishAutoPlay(deviceName, resolving.await(), switched)
         }
+    }
+
+    /**
+     * Waits for the audio to have somewhere worth going.
+     *
+     * This is the part the listener used to have to guess at with a stopwatch. A device
+     * announces its connection before the audio route has moved, and anything played inside
+     * that gap comes out of the phone's speaker — so rather than picking a number large
+     * enough to cover it, the arrival of an output is watched for directly. On a fast headset
+     * that is sooner than any delay anybody would have configured; on a slow one it is later,
+     * and correct.
+     *
+     * `registerAudioDeviceCallback` is the same permission-free path [AudioRouteWatcher] uses,
+     * and it delivers the devices that are already present as its first callback — so a device
+     * that routed before this ran is not waited for. The explicit check first makes that
+     * obvious rather than relying on it.
+     *
+     * Returns false if nothing arrived within [ROUTE_WAIT_TIMEOUT_MS], which is a real
+     * outcome rather than an error: plenty of Bluetooth devices are not audio devices, and a
+     * watch connecting should end here rather than start a book.
+     */
+    private suspend fun awaitAudioSwitchover(deviceName: String): Boolean {
+        if (hasListenableOutput()) return true
+
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            // No audio manager is not a reason to refuse: nothing can be observed, so the
+            // listener's own wait is all there is, exactly as it was before this existed.
+            ?: return true
+
+        postWaitingNotification(deviceName, autoPlayRemainingSec, waitingForAudio = true)
+
+        val arrived = withTimeoutOrNull(ROUTE_WAIT_TIMEOUT_MS) {
+            suspendCancellableCoroutine { continuation ->
+                val handler = Handler(Looper.getMainLooper())
+                val callback = object : AudioDeviceCallback() {
+                    override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                        val carMode = isCarMode()
+                        val listenable = addedDevices.orEmpty().any {
+                            it.isSink && AudioRoutes.classify(it.type, carMode) != AudioRouteClass.OTHER
+                        }
+                        if (listenable && continuation.isActive) {
+                            audioManager.unregisterAudioDeviceCallback(this)
+                            continuation.resume(true)
+                        }
+                    }
+                }
+                continuation.invokeOnCancellation {
+                    audioManager.unregisterAudioDeviceCallback(callback)
+                }
+                audioManager.registerAudioDeviceCallback(callback, handler)
+            }
+        } == true
+
+        if (arrived) postWaitingNotification(deviceName, autoPlayRemainingSec)
+        return arrived
     }
 
     /**
@@ -780,10 +848,15 @@ class LuguPlaybackService : MediaLibraryService() {
      * The checks are [AutoPlay.decide]'s rather than this method's, so the rule about what
      * may interrupt a start is written once and can be read without a device.
      */
-    private suspend fun finishAutoPlay(deviceName: String, resolved: Resumption?) {
+    private suspend fun finishAutoPlay(
+        deviceName: String,
+        resolved: Resumption?,
+        audioSwitchedOver: Boolean,
+    ) {
         val alreadyLoaded = player.mediaItemCount > 0
         val outcome = AutoPlay.decide(
             AutoPlayConditions(
+                audioSwitchedOver = audioSwitchedOver,
                 deviceStillConnected = hasListenableOutput(),
                 someoneElseHasTheAudio = someoneElseHasTheAudio(),
                 onACall = onACall(),
@@ -882,9 +955,16 @@ class LuguPlaybackService : MediaLibraryService() {
      * that is about to start playing by itself should say so before it does, with a way to
      * stop it, rather than after.
      */
-    private fun postWaitingNotification(deviceName: String, remainingSec: Int) {
+    private fun postWaitingNotification(
+        deviceName: String,
+        remainingSec: Int,
+        waitingForAudio: Boolean = false,
+    ) {
         ensureAutoPlayChannel()
         val text = when {
+            // Said plainly, because this is the phase with no number attached to it and a
+            // notification that only said "starting" would look stuck.
+            waitingForAudio -> "Waiting for the audio to switch over"
             remainingSec <= 0 -> "Starting now"
             remainingSec == 1 -> "Starting in a second"
             else -> "Starting in $remainingSec seconds"
@@ -2211,6 +2291,16 @@ class LuguPlaybackService : MediaLibraryService() {
          */
         const val AUTO_PLAY_NOTIFICATION_ID = 1002
         const val AUTO_PLAY_CHANNEL_ID = "lugu_auto_play"
+
+        /**
+         * How long to wait for the audio to move to the device that connected.
+         *
+         * Generous, because the thing being waited for genuinely varies: a headset that
+         * announces itself and then plays its own connection chime can take several seconds
+         * to finish handing over. Bounded because plenty of Bluetooth devices are not audio
+         * devices at all, and a watch connecting must not leave a notification up for ever.
+         */
+        const val ROUTE_WAIT_TIMEOUT_MS = 20_000L
 
         /** How long after a disconnect a reconnection still means "carry on". */
         const val ROUTE_RESUME_WINDOW_MS = 30 * 60 * 1_000L

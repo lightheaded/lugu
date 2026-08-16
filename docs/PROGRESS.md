@@ -925,11 +925,29 @@ implementation there, and that is what runs — with the paired list as its pick
 
 ### The wait, and the way out of it
 
-The delay in the original Tasker rule looks like a workaround and is not. A headset
+The delay in the original Tasker rule looks like a workaround and is not: a headset
 announces itself before the audio route has moved, and audio started inside that gap goes
-to the phone's speaker. So it is a real setting for a real property of the hardware,
-defaulting to five seconds, and when it expires the route is checked *again* — a headset
-picked up and put down again gets nothing.
+to the phone's speaker. It shipped as a setting, defaulting to five seconds.
+
+Then the better question: *the delay is a workaround for the switchover — can we detect
+when it has switched and start then?* Yes. `AudioManager` reports output devices arriving,
+which is the same permission-free callback `AudioRouteWatcher` already uses, so the
+switchover is now **waited for rather than guessed at**. On a fast headset that is sooner
+than any delay anybody would have configured; on a slow one it is later, and correct. A
+timer was the wrong instrument — a guess at a number the phone already knows.
+
+The setting survives as a deliberate extra on top, default one second, because a device
+appearing in the output list and the audio policy having finished moving are not quite the
+same moment. None is a choice, which is the point: somebody who wants their book as early
+as it can start can have that without also getting a clipped first sentence, because
+nothing is guessing at the switchover any more. What would remove even that second is
+`ExoPlayer.setPreferredAudioDevice`, pinning the track to the device that connected; it is
+in the backlog rather than in, because there is no hardware here to prove it does not pin
+playback to a headset that later walks away.
+
+If no output turns up within twenty seconds the start is abandoned, and that is a refusal
+of its own rather than "the device disconnected" — plenty of Bluetooth devices are not
+audio devices, and a watch connecting is a different problem wearing the same shape.
 
 The wait is spent usefully: what to play is resolved during it, and only loaded into the
 player at the end. That split is deliberate. Loading earlier would make Media3 post a
@@ -944,9 +962,9 @@ suppresses that connection's remaining events for a minute. Connecting a headset
 several of them seconds apart; without the suppression the next one restarts the countdown
 just after the cancel, which reads as a button that does not work.
 
-Three things are never played over — a call, another app already holding the audio, and a
-device that has gone again — and the record says which one refused, because the question
-this feature generates is always "why did it not start".
+Four things are never played over — a call, another app already holding the audio, a device
+that has gone again, and one the audio never moved to — and the record says which refused,
+because the question this feature generates is always "why did it not start".
 
 ### The address never leaves the device
 
@@ -965,8 +983,9 @@ the resumption path did. Fixed for the auto-play path, where the ordering is our
 ### Next
 
 1. **A device pass on a release build**, still owed and now carrying the whole of this: the
-   association picker, a real headset connecting from cold, the wait against real routing
-   latency, "Not now", and a reboot to prove the observation is re-armed. The procedure is
-   [qa/autoplay.md](qa/autoplay.md).
+   association picker, a real headset connecting from cold, "Not now", a reboot to prove the
+   observation is re-armed, and above all **item 7**: whether the extra second on top of the
+   switchover is needed at all, which is a measurement rather than a judgement. The
+   procedure is [qa/autoplay.md](qa/autoplay.md).
 2. Run [qa/auto.md](qa/auto.md) in the DHU.
 3. Read the playback diary after a real stop.

@@ -150,8 +150,10 @@ refused, silently, and the refusal is not the routine's fault or fixable from it
 built-in version goes through a companion-device association, which *is* exempt, and which
 is also why it can start a book with the app closed and the process dead.
 
-It also does the things a routine would have to be told about individually: it refuses over
-a call and over another app's audio, checks the headset is really there when the wait ends,
+It also does the things a routine would have to guess at. The few seconds a rule like that
+waits are really waiting for the audio to move to the headset; lugu watches for that
+directly, so it starts as early as it can rather than as late as the slowest case needs.
+And it refuses over a call and over another app's audio, checks the headset is still there,
 and offers a way to say no. See [qa/autoplay.md](qa/autoplay.md).
 
 ## Things worth knowing
