@@ -24,7 +24,8 @@ foreground-service start being refused — behave differently in release.
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Play a book briefly, pause, then swipe the app away and `adb shell am force-stop` it. Connect the headset | A notification appears naming the device. It reads "waiting for the audio to switch over" until the route moves, then counts down the extra second; the book starts at the position it stopped at, **and at the speed it was last played at** |
+| 1 | Play a book briefly, pause, then swipe the app away and `adb shell am force-stop` it. Connect the headset | A notification comes forward — over whatever is on screen, silently — naming the device and showing **Not now** without being expanded. It reads "waiting for the audio to switch over" until the route moves, then counts down the extra second; the book starts at the position it stopped at, **and at the speed it was last played at** |
+| 1b | Watch the shade once the book is playing | The waiting notification is **gone**, replaced by the player's. Exactly one lugu notification, not two. This one failed the first device pass: the waiting notification is what holds the service in the foreground, and it cannot be removed until the player's has taken over |
 | 2 | Repeat, and press **Not now** during the countdown | Nothing plays. The notification goes. It does not come back a few seconds later when the audio profile connects — that is the suppression window, and it is the most likely thing to be wrong |
 | 3 | Start music in another app, then connect the headset | Nothing happens at all. The service is never started, so there is no notification either |
 | 4 | Take a call, then connect the headset | Nothing plays. The record says "a call was in progress" |
@@ -35,6 +36,8 @@ foreground-service start being refused — behave differently in release.
 | 8 | **Restart the phone**, do not open lugu, and connect the headset | It still works. This is the one that proves the observation was re-armed on boot rather than only on app start |
 | 9 | With a book already playing, connect the headset | Playback carries on untouched. No second notification |
 | 10 | Remove the device from the list, then connect it | Nothing happens. Then check Settings → Apps → lugu → the system's own companion-device list, if the phone exposes one: the association should be gone, not merely unused |
+| 11 | **With earbuds**: add one side, then wear only the *other* side and connect | Nothing plays, and nothing is in the record — the other side was never chosen and is not observed. Then add it too: the list collapses to one row reading **Both sides**, and either ear now starts a book |
+| 12 | Remove that one row | Both sides go, and both associations with them. A pair is one thing to its owner |
 
 ## Reading the record
 

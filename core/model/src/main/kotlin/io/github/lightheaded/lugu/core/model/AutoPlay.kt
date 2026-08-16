@@ -106,6 +106,26 @@ object AutoPlay {
     }
 
     /**
+     * The chosen devices as the listener thinks of them, rather than as the radio does.
+     *
+     * A pair of earbuds is one thing to its owner and two devices to Bluetooth: each side has
+     * its own address, and on many of them each side connects on its own, so starting a book
+     * from either one means choosing both. Listed as they are stored, that is two rows with
+     * the same name and no way to tell which is which — which looks like a bug, and makes
+     * "remove" a guess.
+     *
+     * Grouped by name they are one row again, and removing it removes both sides, which is
+     * what removing something called "Elite 10" can only mean. Two genuinely different devices
+     * that share a name are folded together by this too — and are equally indistinguishable to
+     * the person reading the list, so there is nothing to be gained by separating them.
+     *
+     * Order follows the first appearance of each name, so a list that was sorted stays sorted.
+     */
+    fun group(devices: Collection<AutoPlayDevice>): List<AutoPlayGroup> =
+        devices.groupBy { it.name }
+            .map { (name, sides) -> AutoPlayGroup(name, sides) }
+
+    /**
      * One device as a single line, for a store that holds strings.
      *
      * The separator is the ASCII unit separator, which cannot occur in a key and is stripped
@@ -170,6 +190,18 @@ object AutoPlay {
 
     /** ASCII unit separator, the same one the playback diary uses and for the same reason. */
     private const val SEPARATOR = '\u001F'
+}
+
+/**
+ * One device by name, and every address stored under it.
+ *
+ * [devices] holds more than one entry when the same name was chosen more than once — which in
+ * practice means a pair of earbuds, whose two sides are two devices with one name.
+ */
+data class AutoPlayGroup(val name: String, val devices: List<AutoPlayDevice>) {
+
+    /** True when this is more than one piece of hardware answering to one name. */
+    val isPair: Boolean get() = devices.size > 1
 }
 
 /** What is true at the moment the wait ends. */

@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.playback
 
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.UiModeManager
 import android.content.Context
@@ -32,6 +33,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -936,15 +938,50 @@ class LuguPlaybackService : MediaLibraryService() {
      * waiting notification is removed; removing it first would drop the service out of the
      * foreground for as long as it takes Media3 to notice, and a service that is briefly not
      * foreground is a service the system may reclaim mid-sentence.
+     *
+     * Nothing is playing on the refusing path, so nothing is coming to replace the
+     * notification and the whole foreground goes down with it. On the starting path the
+     * removal has to wait for Media3 to actually post — see [retireWaitingNotification].
      */
     private fun endAutoPlayWait(stopIfIdle: Boolean) {
         autoPlayWaiting = false
         runCatching { triggerNotificationUpdate() }
-        NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
         if (stopIfIdle && player.mediaItemCount == 0 && !player.isPlaying) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
             stopSelf()
+            return
         }
+        scope.launch { retireWaitingNotification() }
+    }
+
+    /**
+     * Removes the waiting notification once the player's has taken over from it.
+     *
+     * Cancelling it directly does nothing, which is why it used to sit there under the player
+     * for the rest of the session. The waiting notification is what [postWaitingNotification]
+     * handed to `startForeground`, and a service's current foreground notification cannot be
+     * cancelled — the system keeps it on screen for exactly as long as the service is in the
+     * foreground under that id. It only becomes an ordinary, removable notification once
+     * `startForeground` has been called again with Media3's id instead.
+     *
+     * `triggerNotificationUpdate` starts that but does not finish it: the notification is
+     * built asynchronously, so the cancel that used to follow it immediately was always racing
+     * a post that had not happened yet, and always lost. So this waits for Media3's
+     * notification to actually appear before removing this one.
+     *
+     * The timeout is the safety net rather than the mechanism. If Media3 never posts, the
+     * cancel still runs — by then the service is no longer foreground under this id either,
+     * because nothing is holding it there, and the notification goes.
+     */
+    private suspend fun retireWaitingNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        withTimeoutOrNull(HANDOVER_TIMEOUT_MS) {
+            while (manager?.activeNotifications?.any { it.id == MEDIA_NOTIFICATION_ID } != true) {
+                delay(HANDOVER_POLL_MS)
+            }
+        }
+        NotificationManagerCompat.from(this).cancel(AUTO_PLAY_NOTIFICATION_ID)
     }
 
     /**
@@ -984,10 +1021,10 @@ class LuguPlaybackService : MediaLibraryService() {
             .setContentIntent(openAppIntent())
             .addAction(0, "Not now", cancel)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            // The countdown updates every second and none of those updates is news.
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // The countdown updates every second and none of those updates is news, so only
+            // the first of them is allowed to come forward.
             .setOnlyAlertOnce(true)
-            .setSilent(true)
             .setOngoing(true)
             .build()
 
@@ -1009,16 +1046,35 @@ class LuguPlaybackService : MediaLibraryService() {
      * These are the only notifications lugu posts that nobody asked for at the moment they
      * appear, so they are the only ones somebody might reasonably want to silence without
      * silencing the player. Separating them is what makes that possible.
+     *
+     * **It is a high-importance channel, and that is the point of it.** In Android's ordinary
+     * notification layout the action buttons live in the *expanded* view: at low importance
+     * the notification arrives collapsed and "Not now" is behind a two-finger pull, which is
+     * longer than the thing it is offering to interrupt. High importance brings it forward
+     * over whatever is on screen with the button already showing, which is the only way a
+     * one-second offer can be taken.
+     *
+     * Coming forward is not the same as making a noise, and this makes none: no sound, no
+     * vibration, and only the first post of a countdown is allowed to alert at all.
+     *
+     * The id is versioned because a channel's importance belongs to the listener once it
+     * exists — `createNotificationChannel` cannot raise it afterwards, by design, since that
+     * is how an app would undo someone turning it down. The old channel is deleted rather
+     * than left behind, so settings does not list a channel that nothing posts to.
      */
     private fun ensureAutoPlayChannel() {
+        val notifications = NotificationManagerCompat.from(this)
+        notifications.deleteNotificationChannel(RETIRED_AUTO_PLAY_CHANNEL_ID)
         val channel = NotificationChannelCompat.Builder(
             AUTO_PLAY_CHANNEL_ID,
-            NotificationManagerCompat.IMPORTANCE_LOW,
+            NotificationManagerCompat.IMPORTANCE_HIGH,
         )
             .setName("Starting playback")
             .setDescription("Shown for a few seconds when a book is about to start by itself")
+            .setSound(null, null)
+            .setVibrationEnabled(false)
             .build()
-        NotificationManagerCompat.from(this).createNotificationChannel(channel)
+        notifications.createNotificationChannel(channel)
     }
 
     /** Whether anything worth playing to is attached — headphones, a car, a cable. */
@@ -2290,7 +2346,22 @@ class LuguPlaybackService : MediaLibraryService() {
          * update of its own mid-wait and silently takes the cancel button away with it.
          */
         const val AUTO_PLAY_NOTIFICATION_ID = 1002
-        const val AUTO_PLAY_CHANNEL_ID = "lugu_auto_play"
+
+        /**
+         * Media3's own notification id, which this module does not choose and must not guess
+         * at: [LuguNotificationProvider] extends the default provider without changing it, so
+         * the constant is read from the class that owns it. It is what the waiting
+         * notification waits to see before taking itself down.
+         */
+        const val MEDIA_NOTIFICATION_ID = DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID
+
+        /** Suffixed, because the importance of a channel cannot be raised once it exists. */
+        const val AUTO_PLAY_CHANNEL_ID = "lugu_auto_play_prompt"
+        const val RETIRED_AUTO_PLAY_CHANNEL_ID = "lugu_auto_play"
+
+        /** How long to wait for Media3's notification before removing this one regardless. */
+        private const val HANDOVER_TIMEOUT_MS = 5_000L
+        private const val HANDOVER_POLL_MS = 100L
 
         /**
          * How long to wait for the audio to move to the device that connected.
