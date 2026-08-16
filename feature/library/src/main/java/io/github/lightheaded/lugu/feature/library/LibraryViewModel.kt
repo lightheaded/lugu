@@ -338,11 +338,30 @@ class LibraryViewModel @Inject constructor(
             syncing.value = true
             error.value = null
 
-            libraryRepository.syncLibraries(current)
+            val libraries = libraryRepository.syncLibraries(current)
                 .onFailure { error.value = it.message ?: "Could not reach the server" }
+                .getOrDefault(emptyList())
 
             // Sync the library in view first; the rest catch up on the periodic sweep.
-            val targets = listOfNotNull(selectedLibraryId.value)
+            //
+            // The fallback is what makes a fresh sign-in work at all. There is no selection
+            // yet the first time this runs: the picker's default is chosen by the collector
+            // above, which cannot have run before this line, because the libraries it waits
+            // on are fetched on the line above it. With `listOfNotNull(selectedLibraryId)`
+            // alone the list was empty, so the very first sync after signing in mirrored the
+            // libraries and **none of their items** — measured on a device: `library` held 2
+            // rows and `library_item` held 0, and it stayed 0 through opening the Library
+            // tab, because nothing calls this again. Only restarting the app fixed it, by
+            // which point the selection had been persisted.
+            //
+            // Which meant a new account's first sight of lugu was an empty grid, and
+            // anything reading Room in the meantime — Home's shelves, the car's browse tree,
+            // "play X on lugu" — found nothing there either.
+            val targets = listOfNotNull(
+                selectedLibraryId.value
+                    ?: current.defaultLibraryId?.takeIf { id -> libraries.any { it.id == id } }
+                    ?: libraries.firstOrNull()?.id,
+            )
             targets.forEach { id ->
                 libraryRepository.syncLibraryItems(current, id) { synced, total ->
                     syncMessage.value = "Syncing $synced of $total"

@@ -30,13 +30,21 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
-fun devProp(key: String): String = localProps.getProperty(key).orEmpty()
+// Same precedence as :app — the environment wins, so CI's seeded container reaches here
+// too. Without this the harness read local.properties alone, which a runner does not have,
+// and its two playback tests skipped on every CI run: green, and testing nothing. That is
+// the exact failure the seeded server was added to end, so it is not repeated here.
+fun devProp(key: String, env: String): String =
+    System.getenv(env)?.takeIf { it.isNotBlank() } ?: localProps.getProperty(key).orEmpty()
 
 fun quoted(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-val hasServer = listOf("lugu.dev.serverUrl", "lugu.dev.user", "lugu.dev.pass")
-    .all { devProp(it).isNotBlank() }
+val hasServer = listOf(
+    "lugu.dev.serverUrl" to "LUGU_DEV_SERVER_URL",
+    "lugu.dev.user" to "LUGU_DEV_USER",
+    "lugu.dev.pass" to "LUGU_DEV_PASS",
+).all { (key, env) -> devProp(key, env).isNotBlank() }
 
 android {
     namespace = "io.github.lightheaded.lugu.harness"
@@ -54,7 +62,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("boolean", "HAS_SERVER", hasServer.toString())
-        buildConfigField("String", "PLAY_QUERY", quoted(devProp("lugu.test.playQuery")))
+        buildConfigField("String", "PLAY_QUERY", quoted(devProp("lugu.test.playQuery", "LUGU_TEST_PLAY_QUERY")))
     }
 
     buildFeatures {
