@@ -505,6 +505,29 @@ companion-device association is the supported path and grants exactly the exempt
 required. Below Android 12 neither restriction exists, so the straightforward version is
 also the correct one, and that is what runs there.
 
+## lugu was not in the car at all
+
+Reported 16 Aug: *I can't see lugu on my Android Auto at all, and I can't add it as an app.*
+
+| Item | Status |
+|---|---|
+| Diagnosed — Android Auto's **unknown sources** was off | done 16 Aug |
+| The requirement is stated where someone installing will read it | done 16 Aug — README |
+| The two `adb` commands that separate the causes | done 16 Aug — [qa/auto.md](qa/auto.md) |
+
+Not a defect, and worth recording anyway, because **every** person who installs lugu from
+Releases will hit it. Android Auto lists only apps installed from the Play Store, and says
+nothing when it hides one: the app is missing from the car and missing from the "customise
+launcher" list, which looks exactly like an app with no car support. Turning on unknown
+sources is a developer setting behind ten taps on a version number, and Android Auto does
+not rescan afterwards without being force-stopped.
+
+Everything on lugu's side was checked first and was correct — the automotive descriptor, the
+legacy `android.media.browse.MediaBrowserService` action, and a session that accepts the
+projection host — which is what made it certain the fault was outside. That check is now two
+commands in the QA doc rather than a hunt, since the same three causes will come up again on
+the next phone.
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport
