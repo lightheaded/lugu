@@ -13,6 +13,8 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import io.github.lightheaded.lugu.core.api.AbsClient
+import io.github.lightheaded.lugu.core.download.CoverId
+import io.github.lightheaded.lugu.core.download.CoverStore
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -46,11 +48,17 @@ import java.io.IOException
  * nothing, and no token, address or account detail is reachable through any path here. The
  * thing exposed is a book cover.
  *
- * ## What it does not do
+ * ## Where the bytes come from
  *
- * Covers are not part of a download, so a book on the phone still needs the server for its
- * picture. The cache below softens that — a cover looked at once survives — but a car in a
- * garage with no signal and a cold cache gets blank tiles, and the titles have to carry it.
+ * Three places, in order. A downloaded item has its cover stored beside its audio by
+ * [CoverStore], and that is answered first and without a network in sight — it is what makes
+ * a fully downloaded book look like itself in a garage with no signal. Failing that, the
+ * cache here, which keeps whatever a browse session has already looked at. Failing that, the
+ * server.
+ *
+ * So the remaining gap is narrow and worth naming: an item that was never downloaded and
+ * never looked at, on a phone with no connection, still shows a blank tile and has to be
+ * recognised by its title.
  */
 class CoverProvider : ContentProvider() {
 
@@ -104,6 +112,14 @@ class CoverProvider : ContentProvider() {
         val itemId = itemIdOf(uri) ?: return null
         val width = uri.getQueryParameter(WIDTH)?.toIntOrNull() ?: DEFAULT_WIDTH
 
+        // A downloaded item answers from its own stored cover, before anything considers the
+        // network. This is the case the cache below could never cover: a car in a garage with
+        // no signal, opening a book that is entirely on the phone. Served at whatever width it
+        // was stored at, because a downscale is invisible and a missing picture is not.
+        downloadedCover(context, itemId)?.let {
+            return ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
+
         val cached = cacheFile(context, itemId, width)
         if (!cached.isFresh()) {
             runCatching { download(context, itemId, width, cached) }.getOrElse { return null }
@@ -111,6 +127,17 @@ class CoverProvider : ContentProvider() {
         if (!cached.isFile || cached.length() == 0L) return null
         return ParcelFileDescriptor.open(cached, ParcelFileDescriptor.MODE_READ_ONLY)
     }
+
+    /**
+     * Wrapped because this runs before Hilt is guaranteed to have anything: a provider is
+     * created early in process start, and a car asking for artwork is one of the things that
+     * can start the process. A failure here is the same as no download — fall through.
+     */
+    private fun downloadedCover(context: Context, itemId: String): File? = runCatching {
+        EntryPointAccessors.fromApplication(context.applicationContext, CoverDependencies::class.java)
+            .coverStore()
+            .file(itemId)
+    }.getOrNull()
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? =
         throw UnsupportedOperationException("Covers come from the server")
@@ -170,11 +197,17 @@ class CoverProvider : ContentProvider() {
     private fun File.isFresh(): Boolean =
         isFile && length() > 0 && System.currentTimeMillis() - lastModified() < CACHE_TTL_MS
 
-    /** The id out of `content://…/cover/<itemId>`, or null for anything else. */
+    /**
+     * The id out of `content://…/cover/<itemId>`, or null for anything else.
+     *
+     * The id becomes part of a file name, and this provider is exported, so what arrives here
+     * is whatever another process chose to write — see [CoverId.isValid]. Without that check,
+     * a segment of `..` names a file outside the cache directory.
+     */
     private fun itemIdOf(uri: Uri): String? {
         val segments = uri.pathSegments
         if (segments.size != 2 || segments[0] != COVER_PATH) return null
-        return segments[1].takeIf { it.isNotBlank() }
+        return segments[1].takeIf(CoverId::isValid)
     }
 
     @EntryPoint
@@ -183,6 +216,8 @@ class CoverProvider : ContentProvider() {
         fun okHttpClient(): OkHttpClient
 
         fun absClient(): AbsClient
+
+        fun coverStore(): CoverStore
     }
 
     companion object {

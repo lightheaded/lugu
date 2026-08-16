@@ -13,6 +13,7 @@ import coil3.disk.directory
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import dagger.hilt.android.HiltAndroidApp
+import io.github.lightheaded.lugu.core.download.CoverStore
 import io.github.lightheaded.lugu.core.download.DownloadEngine
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.sync.AuthRepository
@@ -43,6 +44,8 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
     @Inject lateinit var downloadEngine: DownloadEngine
 
     @Inject lateinit var downloadRepository: DownloadRepository
+
+    @Inject lateinit var coverStore: CoverStore
 
     @Inject lateinit var authRepository: AuthRepository
 
@@ -97,6 +100,9 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
             runCatching {
                 authRepository.account()?.let { downloadRepository.sweepFinished(it) }
             }
+            // Cover files whose downloads no longer exist — the leftovers of a sign-out, or
+            // of anything that removed rows without going through the repository.
+            runCatching { downloadRepository.sweepCovers() }
         }
 
         // Turning the setting off has to stop the reporting there and then, not at the
@@ -160,10 +166,18 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
      * Covers are served by the user's own server behind auth, so image loading shares
      * the app's OkHttp client — the same interceptor that tokens media requests.
      * No third-party image CDN is ever contacted.
+     *
+     * [DownloadedCoverInterceptor] sits in front of all of that, so a downloaded item shows
+     * its cover with no server involved. It has to be an interceptor rather than a fetcher:
+     * the screens pass a URL, and the substitution is a decision about *which source*, which
+     * is the one thing a fetcher is chosen by rather than able to change.
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
-            .components { add(OkHttpNetworkFetcherFactory(callFactory = { okHttpClient })) }
+            .components {
+                add(DownloadedCoverInterceptor(coverStore))
+                add(OkHttpNetworkFetcherFactory(callFactory = { okHttpClient }))
+            }
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("covers"))
