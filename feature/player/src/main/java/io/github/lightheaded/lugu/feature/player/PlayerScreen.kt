@@ -265,13 +265,19 @@ fun PlayerScreen(
             Spacer(Modifier.height(16.dp))
             AsyncImage(
                 model = nowPlaying?.coverUrl,
-                contentDescription = null,
+                contentDescription = nowPlaying?.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth(0.8f)
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    // The cover is the biggest thing on the screen and looks like the
+                    // book, so it goes where the book does. Clipped first, so the ripple
+                    // follows the corners rather than the square behind them.
+                    .clickable(enabled = nowPlaying != null) {
+                        nowPlaying?.libraryItemId?.let(onOpenItem)
+                    },
             )
 
             Spacer(Modifier.height(24.dp))

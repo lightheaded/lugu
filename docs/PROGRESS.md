@@ -989,3 +989,42 @@ the resumption path did. Fixed for the auto-play path, where the ordering is our
    procedure is [qa/autoplay.md](qa/autoplay.md).
 2. Run [qa/auto.md](qa/auto.md) in the DHU.
 3. Read the playback diary after a real stop.
+
+## 2026-08-16 (afterwards) — a green run, and a cover that opens the book
+
+### The instrumented job was failing on modules that have no tests
+
+CI had been red since `f67844a6` for two unrelated reasons. The first — screenshot baselines
+recorded on macOS never pixel-matching CI's Linux runner — was fixed by re-recording them
+on Linux, and the `build` job went green with it.
+
+The second was in the instrumented job, and the error blamed the wrong thing. `:core:sync`
+and `:core:download` both failed with "Instrumentation run failed due to Process crashed",
+which reads as a test crashing. Neither module has a single instrumented test. What actually
+happens is that AGP builds, installs and starts an instrumented-test APK for *every* Android
+module, and for a module with no `src/androidTest` nothing ever put `androidx.test.runner`
+on the classpath — so the APK it installs does not contain the runner named in its own
+manifest, and the process dies with `ClassNotFoundException` before a single test can be
+counted. An empty module failing loudly is noise that hides a real failure.
+
+The obvious fix is to name the two modules that do have instrumented tests in the workflow's
+`connectedDebugAndroidTest` command. It was not taken. It works today and quietly stops
+running the third module somebody adds next year, and a test suite that silently stops being
+run is worse than one that was never written. Instead the root build script switches the
+instrumented-test APK off for any module with no `src/androidTest` directory, and CI carries
+on asking the whole build for it. Adding a test directory opts a module back in, with
+nothing to remember.
+
+### The cover is a link now
+
+The now-playing title has led to the book since M1; the cover under it did not, and the cover
+is the biggest thing on the screen and is the picture *of* the book. It now goes exactly
+where the title goes — for a podcast episode, the show's page, because that is where an
+episode lives. Clipped before it is made clickable, so the ripple follows the rounded corners
+rather than the square behind them.
+
+### Still owed
+
+The device pass on a release build, unchanged and still carrying the whole of the auto-play
+work — above all [qa/autoplay.md](qa/autoplay.md) item 7, whether the extra second on top of
+the audio switchover is needed at all.
