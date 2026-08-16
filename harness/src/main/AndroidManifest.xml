@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      An application with no code in it. It exists so that the instrumented tests beside it
+      have a package of their own to run in — one that survives `am force-stop` on lugu.
+      There is no activity, no service and no receiver here on purpose: anything this app
+      did would be a second thing to explain when a test failed.
+    -->
+
+    <!--
+      Package visibility. Without this the harness cannot address a broadcast to lugu at
+      all on Android 11 and later: the intent resolves to nothing and the call returns
+      quietly, which looks exactly like lugu ignoring the command. Only lugu's debug
+      application id is named, so this grants no wider view of the device.
+    -->
+    <queries>
+        <package android:name="io.github.lightheaded.lugu.debug" />
+    </queries>
+
+    <!--
+      No icon, because there is nothing to launch: this app has no activity and never
+      appears anywhere a person would look for one. `allowBackup` is left unset for the
+      same reason — it holds no data to back up, and setting it would only bring the
+      Android 12 data-extraction-rules warning with it.
+    -->
+    <application
+        android:label="lugu harness"
+        tools:ignore="MissingApplicationIcon" />
+</manifest>

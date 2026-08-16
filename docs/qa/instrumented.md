@@ -21,6 +21,11 @@ it, and the run dies on the emulator with `ClassNotFoundException:
 androidx.test.runner.AndroidJUnitRunner`, reported as "Instrumentation run failed due to
 Process crashed". Adding a `src/androidTest` is all it takes to opt a module back in.
 
+`:harness` is the exception to "the module installs what it tests", because it tests another
+module: it depends on `:app:installDebug`, and orders that install *after* `:app`'s own
+connected tests, which uninstall lugu when they finish. Both rules are in
+`harness/build.gradle.kts`, so the command above is still the whole story.
+
 ## What runs without a server
 
 | Test | Needs a server |
@@ -28,6 +33,9 @@ Process crashed". Adding a `src/androidTest` is all it takes to opt a module bac
 | `LaunchSmokeTest` | No |
 | `core:db` `DeviceMigrationTest` | No |
 | `PlaybackResumptionTest` | Yes |
+| `harness` `the_harness_outlives_a_force_stop_of_lugu` | No |
+| `harness` `..._after_the_process_is_killed` | Yes |
+| `harness` `a_force_stop_never_resumes_the_wrong_thing` | Yes |
 
 The two that need nothing are not filler. `LaunchSmokeTest` catches the three ways lugu can
 fail to start that no unit test sees — Hilt's graph failing to build, WorkManager's
@@ -59,33 +67,106 @@ play something on it, and whoever sets this chooses what.
 Never put any of these anywhere else. Not in a workflow file, not in a comment, not in a
 commit message.
 
-## The one thing these tests cannot do
+## The kill, and the second process that does it
 
 The plan asks for the app to be killed mid-book, then for play to be pressed on a headset.
-The second half is covered. The first half is not, and cannot be from here.
+`PlaybackResumptionTest` cannot do the first half and never could: instrumentation runs
+**inside** the process under test, so `am force-stop` on this package would take the test
+runner with it. What it does instead is destroy the playback service, which is what Android
+does when it reclaims memory, and then reach the resumption path from Room exactly as a cold
+start would. Same code under test; not the same kill.
 
-Instrumentation runs **inside** the process under test. `am force-stop` on this package
-takes the test runner with it, and there is no second process to issue it from — a
-`com.android.test` module with its own application id would provide one, and that is the
-change to make if this becomes worth automating.
+`:harness` is the second process. It is an application module with its own application id
+(`io.github.lightheaded.lugu.harness`) whose instrumented tests **target itself**, so ending
+lugu's process leaves the runner standing. It depends on nothing of lugu's — not `:app`, not
+`:playback`, not a shared constant — and talks to it only through surfaces that already
+belong to other people: the launcher, the documented automation broadcasts, a media button,
+and `dumpsys media_session`. A harness that imported the code under test could pass while
+the thing a headset does still failed.
 
-What `PlaybackResumptionTest` does instead is destroy the playback service, which is what
-Android actually does when it reclaims memory, and then reach the resumption path from
-`Room` exactly as a cold start would. It is the same code under test; it is not the same
-kill.
+One run looks like this: open lugu, tap the prefilled sign-in button, ask for the title in
+`lugu.test.playQuery` with a `PLAY_SEARCH` broadcast, skip ten minutes in, set a speed the
+book was not already on, end the process, `input keyevent 126`, and read the session back.
 
-To do the real thing by hand:
+### Two kills, and only one of them is the promise
+
+`am force-stop` is not what happens when Android reclaims memory from a book that is
+playing. It additionally puts the package into the **stopped state**, and the platform's rule
+is that only a person launching the app takes it out again — on Android 15 and later the
+system also [cancels every pending intent the app
+owns](https://developer.android.com/about/versions/15/behavior-changes-all) the moment it
+enters that state, the one the media session gave the system to receive media buttons
+included. A media button that does nothing after a force stop is therefore the system
+working as designed, and no amount of correctness in lugu changes it.
+
+So the harness kills two ways:
+
+- **The process dies** — `run-as … kill -9`, falling back to `am crash`. The package's state
+  is untouched, and the media button is expected to bring the book back. Asserted strictly:
+  same item, within tolerance of the same position, at the same speed.
+- **`am force-stop`** — asserted narrowly, because the platform may legitimately refuse to
+  wake anything. What would be lugu's fault is coming back *wrong*, so that is what is
+  checked on whatever does come back, and nothing coming back is logged rather than failed.
+
+### Why `dumpsys media_session` and not a `MediaController`
+
+A controller would give typed values instead of parsed text. It would also *bind the
+service*, which starts lugu's process — so a media button that did nothing at all would be
+followed by a controller quietly bringing the app back, and the test would pass having
+proved the opposite of what it claims. Reading the system's own record touches nothing. It
+is also the channel the recipe below uses, so a failure can be reproduced by hand.
+
+Two things the parser has to get right, both found by running it: Android 16 writes
+`state=PLAYING(3)` where older releases write `state=3`, and the published position is a
+stamp with a time on it rather than the position now, so it is extrapolated the way the
+platform's own clients extrapolate it. Comparing raw stamps instead lets a reading that is
+thirty seconds stale look like a resumption that jumped thirty seconds forward.
+
+### What the harness never learns
+
+The server address, the username and the password do not cross into it. Its `BuildConfig`
+carries a boolean saying whether all three are set, and the title to play — nothing else.
+lugu signs itself in from its own `BuildConfig`, and the harness taps the button that is
+already filled in. Item titles read back out of `dumpsys` are compared as short digests and
+never printed, because a failure message ends up in a CI log and nothing in this repository
+may name what is on somebody's shelf.
+
+### Doing it by hand
 
 ```sh
 # with something playing
-adb shell am force-stop io.github.lightheaded.lugu.debug
+adb shell 'run-as io.github.lightheaded.lugu.debug /system/bin/kill -9 $(pidof io.github.lightheaded.lugu.debug)'
 # then press play on a headset, or:
 adb shell input keyevent 126
-adb shell dumpsys media_session | grep -A5 lugu
+adb shell dumpsys media_session | grep -A12 'package=io.github.lightheaded.lugu.debug'
 ```
 
-Playback should resume the same item within a few seconds of where it stopped. If it starts
-from zero, or starts something else, that is the bug the whole app exists to avoid.
+Playback should resume the same item within a few seconds of where it stopped, at the speed
+it was on. If it starts from zero, or starts something else, that is the bug the whole app
+exists to avoid.
+
+`am force-stop` used to be the first line here, and it is the wrong instruction for this
+check: it tests the platform's stopped state rather than lugu's resumption. Use it to prove
+the process really is gone, not to expect a media button to bring it back.
+
+### One thing worth checking before trusting a green run
+
+With lugu open and a session held, the platform records what it should send a media button
+to when the app is gone:
+
+```sh
+adb shell dumpsys media_session | grep -E 'mediaButtonReceiver|Last MediaButtonReceiver'
+```
+
+On API 26 this reads `PendingIntent{… startForegroundService}`. On API 36 it reads `null`,
+and `adb shell cmd package query-receivers -a android.intent.action.MEDIA_BUTTON` lists no
+component of lugu's at all — Media3 falls back to a foreground-service pending intent when
+no `MediaButtonReceiver` is declared in the manifest, and newer platforms do not keep one.
+Nothing registered means nothing to send the key to once the process has gone, which would
+make resumption after a real kill impossible on a modern phone no matter what the resolver
+does. This has not been proved end to end — it needs a server, and the two tests that need
+one have never run — but it is the first thing to look at if
+`a_media_button_resumes_the_same_book_after_the_process_is_killed` goes red.
 
 ## Reading a failure in CI
 
