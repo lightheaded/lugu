@@ -92,3 +92,29 @@ from zero, or starts something else, that is the bug the whole app exists to avo
 The emulator job uploads `**/build/reports/androidTests/connected/**` as an artifact. Start
 there rather than in the log: the HTML report has the stack trace and the device's own
 logcat excerpt for each failure.
+
+### A red job with no failing test
+
+The job is capped at **20 minutes**, and one of the ways it reaches that cap is not a test
+failure at all. The emulator can hang on the way *out*: on 16 August the API 26 leg reached
+`BUILD SUCCESSFUL in 2m 12s` with every test green, ran `adb emu kill`, printed
+
+```
+INFO | Wait for emulator (pid 2888) 20 seconds to shutdown gracefully before kill
+```
+
+and then never killed it. It happened on two consecutive runs. The first one ran for 99
+minutes and stopped only because the next push cancelled it — before the timeout existed,
+the ceiling was GitHub's default of six hours.
+
+So when this job goes red, **check where the log stops before assuming a test broke**. If
+the last real line is `BUILD SUCCESSFUL`, the tests passed and the emulator failed to exit;
+nothing in this repository caused it and nothing here can fix it. Re-run the job. If it
+becomes frequent rather than occasional, the emulator-runner's own shutdown handling is the
+thing to replace, not anything under test.
+
+There is no AVD snapshot cache to suspect, and that is deliberate — see the comment in
+`.github/workflows/ci.yml`. Cold-booting costs about a minute per leg, which is roughly what
+restoring the cache cost anyway, and a saved machine image restored into a runner image that
+moves weekly had been the first suspect for two separate failures without ever being proved
+guilty of either.
