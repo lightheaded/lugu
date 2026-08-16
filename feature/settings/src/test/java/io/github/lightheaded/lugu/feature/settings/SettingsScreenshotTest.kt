@@ -110,6 +110,12 @@ class SettingsScreenshotTest {
             // from the baseline, which is also what an emulator without Bluetooth shows.
             companionDevices = CompanionDevices(context),
             pairedDevices = PairedDevices(context),
+            // Reading this opens the Android keystore, which Robolectric does not provide, so
+            // it throws here exactly as it would on a device whose keystore is unusable. That
+            // is the point: the view model has to survive it, and the baseline below is the
+            // proof — the row appears in its ordinary wording rather than the screen going
+            // blank. Take the guard out of `webClientReachable` and these pictures stop.
+            connectionPrefs = ConnectionPrefs(context),
         )
     }
 

@@ -16,6 +16,7 @@ import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 import io.github.lightheaded.lugu.core.model.SeriesRef
+import io.github.lightheaded.lugu.core.model.WebClient
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CollectionRepository
@@ -119,6 +120,14 @@ data class ItemDetailUiState(
     /** The book's own finished flag; a podcast's lives on each episode row instead. */
     val isFinished: Boolean = false,
     val coverUrl: String? = null,
+    /**
+     * This item's page in the server's own web client.
+     *
+     * Here rather than built in the screen because it needs the server address, and a screen
+     * that knows the address is a screen that has to be given an account. Null until one is
+     * signed in, which is also when there is nothing to link to.
+     */
+    val webUrl: String? = null,
     /** The item-level download; podcasts carry theirs per episode instead. */
     val download: DownloadStatus? = null,
     /** The collections of this item's library, each saying whether it holds this item. */
@@ -213,6 +222,7 @@ class ItemDetailViewModel @Inject constructor(
                         positionSec = itemProgress?.currentTimeSec ?: 0.0,
                         isFinished = itemProgress?.isFinished == true,
                         coverUrl = "${current.baseUrl}/api/items/$itemId/cover?width=600",
+                        webUrl = WebClient.item(current.baseUrl, itemId),
                         download = downloadsByEpisode[""],
                         message = note,
                     )

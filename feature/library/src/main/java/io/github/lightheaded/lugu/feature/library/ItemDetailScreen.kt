@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Close
@@ -67,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -141,6 +143,7 @@ fun ItemDetailScreen(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
+                    actions = { state.webUrl?.let { WebClientAction(url = it) } },
                 )
             }
         },
@@ -536,6 +539,26 @@ private fun EpisodeRowView(
                 onSetFinished = onSetFinished,
             )
         }
+    }
+}
+
+/**
+ * The way out to the server's own web client, for what lugu cannot do yet.
+ *
+ * A plain button rather than an overflow menu, because it is the only action this bar has and
+ * hiding a single item behind three dots is a tap spent on nothing. It is described as "open
+ * in your browser" rather than named after the web client: leaving the app is the surprise
+ * worth announcing, and which client is at the other end is not what anyone is deciding.
+ *
+ * See [io.github.lightheaded.lugu.core.model.WebClient] for what does not survive the journey.
+ */
+@Composable
+private fun WebClientAction(url: String) {
+    // Wrapped because a phone with no browser installed throws rather than declining, and a
+    // link out is not worth crashing a book's page over.
+    val uriHandler = LocalUriHandler.current
+    IconButton(onClick = { runCatching { uriHandler.openUri(url) } }) {
+        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in your browser")
     }
 }
 

@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -55,6 +56,7 @@ import io.github.lightheaded.lugu.core.model.AutoPlay
 import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastTrim
+import io.github.lightheaded.lugu.core.model.WebClient
 import io.github.lightheaded.lugu.core.model.formatSpeed
 import io.github.lightheaded.lugu.core.sync.AudioSettings
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
@@ -177,6 +179,11 @@ private fun settingEntries(
     val downloads = state.downloads
     val queue = state.queue
     val library = state.library
+
+    // Wrapped because a phone with no browser installed throws rather than declining, and a
+    // link to a web page is not worth crashing the settings screen over.
+    val uriHandler = LocalUriHandler.current
+    val openLink: (String) -> Unit = { address -> runCatching { uriHandler.openUri(address) } }
 
     return buildList {
         add(
@@ -1058,7 +1065,8 @@ private fun settingEntries(
                 id = "account",
                 category = "Account",
                 title = "Account",
-                keywords = "server sign out log out user session address",
+                keywords = "server sign out log out user session address web client browser " +
+                    "website open in browser audiobookshelf",
             ) {
                 state.account?.let { account ->
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
@@ -1076,6 +1084,20 @@ private fun settingEntries(
                         "proxy, and a client certificate",
                     onClick = onOpenConnection,
                 )
+                state.account?.let { account ->
+                    LinkRow(
+                        title = "Open the web client",
+                        subtitle = if (state.webClientReachable) {
+                            "Everything lugu cannot do yet, on the same server, in your " +
+                                "browser. You may have to sign in there."
+                        } else {
+                            "Opens your server in your browser. The custom header or client " +
+                                "certificate set up here stays in lugu, so the browser may " +
+                                "be turned away before it reaches Audiobookshelf."
+                        },
+                        onClick = { openLink(WebClient.home(account.baseUrl)) },
+                    )
+                }
                 TextButton(
                     onClick = {
                         viewModel.signOut()
