@@ -194,6 +194,17 @@ class PlaybackResumptionTest {
      * wants finding separately.
      */
     private fun awaitTheLibraryMirrored() {
+        // Open the Library tab first, because that is what starts the mirror.
+        //
+        // The first sync runs from `LibraryViewModel`'s init, and that view model is not
+        // built until the Library tab is composed. Signing in lands on Home, so an account
+        // that has just been created has an empty Room until something opens the other tab.
+        // Measured: sitting on Home after a fresh sign-in, the title never arrived in three
+        // minutes. Whether a user should have to do this is a separate question and is in
+        // the backlog — a car asked to play something right after sign-in would find the
+        // same emptiness. Here it is simply what a person does, so the test does it.
+        compose.onNodeWithText(LIBRARY_TAB).performClick()
+
         val db = LuguDatabase.build(context)
         try {
             val deadline = System.currentTimeMillis() + SYNC_TIMEOUT_MS
@@ -291,6 +302,7 @@ class PlaybackResumptionTest {
 
     private companion object {
         const val SIGN_IN_PROMPT = "Sign in to your Audiobookshelf server"
+        const val LIBRARY_TAB = "Library"
         const val UI_TIMEOUT_MS = 30_000L
         const val PLAYBACK_TIMEOUT_MS = 45_000L
 
