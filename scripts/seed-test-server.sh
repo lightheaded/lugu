@@ -27,6 +27,11 @@ ABS_USER="${ABS_USER:-lugu-ci}"
 # Generated, not chosen. This account exists for the lifetime of one container and is
 # reachable only from the machine that made it, but a password in a repository is a
 # password in a repository, so there is not one.
+#
+# Whether it was *supplied* matters on a second run: the config volume outlives the
+# container, so a server that already has a root user needs the password it was given the
+# first time, not a fresh one. It is kept beside the config it belongs to.
+ABS_PASS_SUPPLIED="${ABS_PASS:+yes}"
 ABS_PASS="${ABS_PASS:-$(head -c 18 /dev/urandom | base64 | tr -d '/+=' )}"
 ABS_IMAGE="${ABS_IMAGE:-ghcr.io/advplyr/audiobookshelf:latest}"
 ABS_CONTAINER="${ABS_CONTAINER:-lugu-test-abs}"
@@ -132,16 +137,43 @@ wait_for_server() {
 # it refuses once a root user exists, which is what makes this safe to re-run.
 # --------------------------------------------------------------------------------------
 TOKEN=""
+CRED_FILE="$ROOT/.abs-password"
+
 initialise() {
   if python3 -c "import sys,json,urllib.request as u; sys.exit(0 if json.load(u.urlopen('$ABS_URL/status'))['isInit'] else 1)"; then
-    say "already initialised"
+    # A second run against a config volume that survived the first. `POST /init` refuses
+    # once a root user exists, so the only way in is the password that made it.
+    if [ -z "$ABS_PASS_SUPPLIED" ] && [ -f "$CRED_FILE" ]; then
+      ABS_PASS=$(cat "$CRED_FILE")
+      say "already initialised, reusing the account from a previous run"
+    else
+      say "already initialised"
+    fi
   else
     api POST /init "{\"newRoot\":{\"username\":\"$ABS_USER\",\"password\":\"$ABS_PASS\"}}" >/dev/null
+    printf '%s' "$ABS_PASS" > "$CRED_FILE"
+    chmod 600 "$CRED_FILE"
     say "created the root user"
   fi
-  TOKEN=$(api POST /login "{\"username\":\"$ABS_USER\",\"password\":\"$ABS_PASS\"}" \
+
+  local response
+  # Not `api POST` directly into python: curl failing there produced a JSON traceback
+  # rather than the one sentence that says what to do about it.
+  if ! response=$(api POST /login "{\"username\":\"$ABS_USER\",\"password\":\"$ABS_PASS\"}"); then
+    cat >&2 <<MSG
+Could not log in as $ABS_USER at $ABS_URL.
+
+The server already has a root user and this script does not have its password. That
+happens when $ROOT/config outlived the run that created it. Either:
+
+  rm -rf "$ROOT/config"      # start the server over from nothing
+  ABS_PASS=... $0            # or supply the password it was given
+MSG
+    exit 1
+  fi
+  TOKEN=$(printf '%s' "$response" \
     | python3 -c 'import sys,json; u=json.load(sys.stdin)["user"]; print(u.get("accessToken") or u["token"])')
-  [ -n "$TOKEN" ] || { echo "Logged in but got no token" >&2; exit 1; }
+  [ -n "$TOKEN" ] || { echo "Logged in but got no token back" >&2; exit 1; }
 }
 
 library_id() { # library_id NAME
