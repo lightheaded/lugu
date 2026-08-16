@@ -58,7 +58,10 @@ import org.junit.runner.RunWith
 @LargeTest
 class PlaybackResumptionTest {
 
-    @get:Rule
+    @get:Rule(order = 0)
+    val notifications = grantNotificationPermission()
+
+    @get:Rule(order = 1)
     val compose = createAndroidComposeRule<MainActivity>()
 
     private val context: Context
