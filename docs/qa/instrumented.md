@@ -11,7 +11,8 @@ build from the one the JVM links.
 ./gradlew connectedDebugAndroidTest
 ```
 
-Needs an emulator or a device attached. CI runs the same command on API 26 and API 36.
+Needs an emulator or a device attached. CI runs this on API 26 and API 36, and a third leg
+on API 36 against the shrunk build — see *Testing the build that actually ships* below.
 
 It is asked of the whole build rather than of the two modules that have these tests, so a
 module that grows some later is picked up without anyone remembering to edit the workflow.
@@ -37,8 +38,13 @@ chain against Android's own SQLite, which is the only place a migration is actua
 a migration that fails there is an app that will not open after an update.
 
 `PlaybackResumptionTest` needs a server because a saved position only exists once something
-has played. Without one it **skips** rather than fails, so a CI emulator with no server
-stays green.
+has played. Without one it **skips** rather than fails, so a developer with no container
+running still gets a green suite.
+
+That skip used to apply to CI too, which meant the most valuable test in the repository had
+never once executed there — it looked green and proved nothing. CI now seeds its own server
+before the emulator starts, and a step after the run **fails the job if any test skipped at
+all**. A skip on a runner no longer means "unrunnable"; it means the wiring broke.
 
 ## Pointing the tests at a server
 
@@ -51,6 +57,55 @@ lugu.dev.user=...
 lugu.dev.pass=...
 lugu.test.playQuery=...
 ```
+
+The same four values are also read from the environment as `LUGU_DEV_SERVER_URL`,
+`LUGU_DEV_USER`, `LUGU_DEV_PASS` and `LUGU_TEST_PLAY_QUERY`. The file wins where both
+exist, so a stray variable cannot quietly redirect your own tests at something else. The
+release build ignores both and always compiles these in empty — a shipped APK never
+carries an address.
+
+### Getting a server without having one
+
+```sh
+scripts/seed-test-server.sh
+```
+
+Builds one from nothing: an Audiobookshelf container, a generated root account, two
+libraries and a small invented catalogue — a chaptered 90-second book, a two-file book so
+that "crosses a file boundary" has a boundary, and three podcast episodes. It prints the
+four properties to paste into `local.properties` and takes about ninety seconds. Stop it
+with `docker rm -f lugu-test-abs`.
+
+The library is three sine waves and the invented names AGENTS.md reserves. No real title,
+author, address or credential is ever involved, and the password is generated per run.
+
+**From an emulator the address is `http://10.0.2.2:13378`, not localhost** — inside an AVD,
+localhost is the AVD. Cleartext to that host and to localhost is permitted by
+`src/testServer/network_security_config.xml`, which is merged into the debug and minified
+builds only. It is not an answer to "my own server is plain HTTP on the LAN"; that is a
+real question with a different answer, and it is in the backlog.
+
+This is what CI now does before every emulator run, which is why these tests stopped
+skipping there.
+
+## Testing the build that actually ships
+
+R8 is on for release, and until the shrunk build could be run on a device, nothing proved
+its keep rules — `assembleRelease` proves only that nothing is missing at *compile* time,
+while everything R8 breaks fails at runtime and only in a minified build.
+
+The `minified` build type is `release` with `initWith`, so it cannot drift from what ships:
+same R8, same resource shrinking, same keep rules. It differs in the three things that have
+to differ — debug signing so no keystore is needed, its own application id so it can sit
+beside a debug install, and a test server to reach.
+
+```sh
+./gradlew connectedMinifiedAndroidTest -Plugu.testMinified
+```
+
+The property switches `testBuildType`; without it instrumented tests run against `debug` as
+before. CI runs one leg this way on API 36, because what it catches is a missing keep rule
+rather than a platform difference.
 
 `lugu.test.playQuery` is the title the playback tests ask the library for. It is separate
 from the credentials on purpose: having a server is not the same as agreeing that a test may

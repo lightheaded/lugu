@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Lets a test build reach the Audiobookshelf container on the machine running the
+    emulator, and nothing else.
+
+    Cleartext is refused by default from Android 9 onwards, so an emulator dialling the
+    seeded test server over plain HTTP fails before a request is made. Rather than turn
+    cleartext on for the whole app, this permits exactly two names: 10.0.2.2, which is how
+    an AVD addresses its host's loopback, and localhost.
+
+    Both are unroutable from anywhere else, so this cannot widen what a real build will
+    talk to — and it is applied only to the debug and minified source sets, never to
+    release. It is deliberately not the answer to "my server is plain HTTP on the LAN",
+    which is a real question with a different answer; see the backlog.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
