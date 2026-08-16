@@ -919,12 +919,20 @@ class LuguPlaybackService : MediaLibraryService() {
     /**
      * The speed this item was last listened at.
      *
-     * Applied here because nothing else on this path does it. A book loaded through
-     * `PlaybackConnection.play` gets its speed from the same store, but one loaded straight
-     * into the player — by this, or by a headset press through `onPlaybackResumption` — comes
-     * up at whatever speed the player happens to hold, which on a fresh service is 1x. A book
-     * that starts by itself at the wrong speed is a worse first impression than one that does
-     * not start at all. The resumption path has the same gap and is recorded in the backlog.
+     * A book loaded through `PlaybackConnection.play` gets its speed from the same store, but
+     * one loaded straight into the player comes up at whatever speed the player happens to
+     * hold, which on a fresh service is 1x. There are three such paths and every one of them
+     * belongs to somebody who is not looking at the screen: a device connecting, a headset
+     * press through `onPlaybackResumption`, and a car handing back an id through
+     * `onSetMediaItems`. All three call this.
+     *
+     * A book that starts by itself at the wrong speed is a worse first impression than one
+     * that does not start at all — and it is worst in the car, where the listener has to
+     * find a speed control while driving to undo it.
+     *
+     * Setting the speed before the items are handed back is deliberate and safe: playback
+     * parameters belong to the player rather than to an item, and survive the list being
+     * replaced. Doing it afterwards would mean a spoken word or two at the wrong speed.
      */
     private suspend fun applyRememberedSpeed(nowPlaying: NowPlaying) {
         val type = if (nowPlaying.episodeId != null) MediaType.PODCAST else MediaType.BOOK
@@ -2310,6 +2318,7 @@ class LuguPlaybackService : MediaLibraryService() {
             } ?: return@future MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
 
             stateHolder.set(resolved.nowPlaying)
+            applyRememberedSpeed(resolved.nowPlaying)
             MediaSession.MediaItemsWithStartPosition(
                 resolved.mediaItems,
                 resolved.startTrackIndex,
@@ -2332,6 +2341,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 ?: return@future MediaSession.MediaItemsWithStartPosition(emptyList(), 0, C.TIME_UNSET)
 
             stateHolder.set(resolved.nowPlaying)
+            applyRememberedSpeed(resolved.nowPlaying)
             MediaSession.MediaItemsWithStartPosition(
                 resolved.mediaItems,
                 resolved.startTrackIndex,
