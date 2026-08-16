@@ -197,6 +197,17 @@ Reported 15 August. The record now exists; the cause does not.
 | **`createComposeRule` is deprecated across every screenshot test** | The replacement swaps `Unconfined` for `StandardTestDispatcher`, so it is a repo-wide migration with real behavioural consequences rather than an import change. Not started inside one module on purpose |
 | **`onPlaybackResumption(session, controller)` is deprecated** | The three-argument version takes `isForPlayback`, which alters resumption semantics — the one path M0 rests on. Worth doing deliberately, with the device pass behind it |
 
+## Left behind by the auto-play work
+
+| Item | Note |
+|---|---|
+| **`onPlaybackResumption` does not restore the remembered speed** | A book loaded straight into the player comes up at whatever speed the player holds, which on a fresh service is 1x. `PlaybackConnection.play` reads `speedFor`; the resumption path does not, so a headset press after the app was killed plays a 1.5x book at 1x. The auto-play path now applies it, because the ordering there is ours — the fix for resumption wants the speed carried on `Resumption` and applied after Media3 populates the player |
+| **Android 12 exactly gives a chosen device no name** | `AssociationInfo` and its display name arrived in Android 13; Android 12 has only `getAssociations()` and a list of addresses. Devices chosen there show as "Bluetooth device", and two of them are indistinguishable in the list. Deliberately not filled in with part of the address, which is displayed and recorded |
+| **A device with no classic Bluetooth profile will not be offered** | The association request filters on `BluetoothDeviceFilter`, which is classic-only. An LE-audio-only headset would not appear in the picker. Nothing tested this either way; adding `BluetoothLeDeviceFilter` alongside is a one-line change once there is a device to try it on |
+| **Two notifications for a moment, in one case** | If a book is already loaded but paused when the device connects, the waiting notification and the player's own are both up until playback starts. Media3's id was deliberately not reused: sharing it would give one tidy notification that Media3 could overwrite mid-wait, silently taking the "Not now" button with it |
+| **Nothing tells the UI a start is pending** | The wait is only visible in the notification. A listener with the app open sees nothing until the book begins. Not obviously wrong — the app being open is the case where pressing play is easy — but it is a gap |
+| **The companion observation is re-armed hopefully rather than knowingly** | `startObservingDevicePresence` is re-issued on app start and on boot, because there is no way to ask the system whether an observation is still live. Re-issuing is documented as harmless. If it turns out not to survive something else — a force stop, an update — there is no signal that would say so |
+
 ## Known behaviour gaps
 
 | Item | Note |
@@ -210,7 +221,7 @@ Reported 15 August. The record now exists; the cause does not.
 
 | Item | Note |
 |---|---|
-| **R8 is on, and has never run on a device** | Turned on 15 August with hand-written keep rules for Media3, Room, Hilt, kotlinx-serialization, Ktor, OkHttp, Coil and Sentry. A clean `assembleRelease` proves only that nothing is missing at compile time — every path R8 can break fails at runtime and only in a release build. **A device pass on a release APK is owed before the next release is treated as trustworthy**: sign in, play a streamed book, play a downloaded one, open Android Auto, and change a setting |
+| **R8 is on, and has never run on a device** | Turned on 15 August with hand-written keep rules for Media3, Room, Hilt, kotlinx-serialization, Ktor, OkHttp, Coil and Sentry. A clean `assembleRelease` proves only that nothing is missing at compile time — every path R8 can break fails at runtime and only in a release build. **A device pass on a release APK is owed before the next release is treated as trustworthy**: sign in, play a streamed book, play a downloaded one, open Android Auto, change a setting, and run [qa/autoplay.md](qa/autoplay.md) — which reaches a service the *system* binds by name, the kind of entry point R8 is most likely to strip |
 | **Release stack traces are obfuscated with nowhere to send the mapping** | R8 renames everything, so a crash report from a release build is unreadable until `mapping.txt` reaches Sentry. The Gradle plugin does this but fails the build without an auth token. Either gate the plugin on the token in CI, or attach `mapping.txt` to the GitHub release and retrace by hand |
 | `:core:queue` and `:core:testing` modules not created | M3 shipped the queue without either. `QueueRepository` lives in `:core:sync` with the other repositories, its DAO in `:core:db` with the other DAOs; a module holding one repository that depends on `:core:sync` anyway would be structure without substance. `QueueEntity` was already in schema v1, so the plan's real requirement — no migration for M3 — held |
 | ~~Speed formatting duplicated~~ | Done 16 Aug — `:core:model/Formatting.kt`, along with the clock and length formatters and the Continue-row rule |

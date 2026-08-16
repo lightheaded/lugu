@@ -877,3 +877,96 @@ The jump notice also carries a reason now, so a skip reads "Skipped the intro fr
 2. Run [qa/auto.md](qa/auto.md) in the DHU — and confirm car browse specifically, because
    the session's connection result is now trust-aware.
 3. Read the playback diary after a real stop.
+
+## 2026-08-16 (last) — a book that starts itself, and a version you can quote
+
+Two asks. The small one first: **the app version now appears in Settings → About**, read
+from the package manager rather than `BuildConfig` — the settings module's own constant is
+the library's and carries no version at all, and even in `:app` the constant is what was
+compiled rather than what is installed. It reads `1.4 (7)`, and a debug build says so in
+the name.
+
+### Starting a book when the headphones connect
+
+Asked as: *for the official app I use Tasker to start playing x seconds after the headset
+with a given name or MAC connects — can we build that in, and always start whatever was
+last playing?*
+
+The setting that looks like this already existed and is not it. "Resume when headphones
+reconnect" continues something a *disconnection* interrupted — it needs the player still
+loaded, a disconnect on record as the cause, and half an hour or less since — and it fires
+for any headphones at all. What was asked for starts from nothing: app closed, process
+dead, hours since anybody listened, and only for a named device. Both now exist and the
+settings say which is which.
+
+### Why this could not be a Bluetooth receiver
+
+The obvious implementation is a manifest receiver for `ACL_CONNECTED` and a check on the
+device address. On Android 12 and later it fails twice over, and the second failure is the
+one that would have wasted the day:
+
+1. Reading which device connected needs `BLUETOOTH_CONNECT`, a runtime permission whose
+   prompt offers to *find, connect to and determine the relative position of nearby
+   devices*. `AudioRouteWatcher` had already refused that trade for a smaller feature.
+2. **An app in the background may not start a foreground service, and a Bluetooth broadcast
+   is not one of the documented exemptions.** The receiver would be delivered the broadcast
+   and then refused the service — a feature that appears to work and never plays anything.
+
+Checked against the documentation rather than assumed, because the memory of an exemption
+existing was quite strong and it is not on the list.
+
+The companion-device association answers both. The system shows its own picker, so lugu
+learns about one device and asks for no Bluetooth permission at all; associating grants
+`REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND`, which *is* on the exemption
+list; and `CompanionDeviceService` is bound by the platform when the device turns up, which
+is what starts a dead process. Below Android 12 neither restriction exists and
+`BLUETOOTH` is a normal permission, so the straightforward receiver is also the correct
+implementation there, and that is what runs — with the paired list as its picker.
+
+### The wait, and the way out of it
+
+The delay in the original Tasker rule looks like a workaround and is not. A headset
+announces itself before the audio route has moved, and audio started inside that gap goes
+to the phone's speaker. So it is a real setting for a real property of the hardware,
+defaulting to five seconds, and when it expires the route is checked *again* — a headset
+picked up and put down again gets nothing.
+
+The wait is spent usefully: what to play is resolved during it, and only loaded into the
+player at the end. That split is deliberate. Loading earlier would make Media3 post a
+notification of its own, and there would be two on screen arguing about which is holding
+the service in the foreground.
+
+Which is the other half of this. The service is started with `startForegroundService`, so a
+notification has to go up within a few seconds **including on the paths that end in
+refusing** — the notification is posted first and before anything else can fail. It carries
+a "Not now" button, which is something the Tasker rule could not offer, and refusing
+suppresses that connection's remaining events for a minute. Connecting a headset fires
+several of them seconds apart; without the suppression the next one restarts the countdown
+just after the cancel, which reads as a button that does not work.
+
+Three things are never played over — a call, another app already holding the audio, and a
+device that has gone again — and the record says which one refused, because the question
+this feature generates is always "why did it not start".
+
+### The address never leaves the device
+
+On Android 12 and later lugu never learns it: the association carries a display name, and
+that is what is stored and what the diary records. On older versions it comes from the
+paired list and is only ever a key. The playback diary can be sent from the feedback
+screen, and an address identifies hardware a person carries around.
+
+### Found on the way
+
+A book loaded straight into the player comes up at whatever speed the player holds, which
+on a fresh service is 1x. `PlaybackConnection.play` reads the remembered speed; nothing on
+the resumption path did. Fixed for the auto-play path, where the ordering is ours;
+`onPlaybackResumption` has the same gap and is in the backlog.
+
+### Next
+
+1. **A device pass on a release build**, still owed and now carrying the whole of this: the
+   association picker, a real headset connecting from cold, the wait against real routing
+   latency, "Not now", and a reboot to prove the observation is re-armed. The procedure is
+   [qa/autoplay.md](qa/autoplay.md).
+2. Run [qa/auto.md](qa/auto.md) in the DHU.
+3. Read the playback diary after a real stop.

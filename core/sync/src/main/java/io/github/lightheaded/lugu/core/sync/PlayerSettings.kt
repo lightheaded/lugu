@@ -1,5 +1,7 @@
 package io.github.lightheaded.lugu.core.sync
 
+import io.github.lightheaded.lugu.core.model.AutoPlay
+import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 
 /** A button that can appear in the player, the notification, or both. */
@@ -242,6 +244,29 @@ data class RouteSettings(
 )
 
 /**
+ * Starting a book by itself when a chosen device connects.
+ *
+ * Deliberately separate from [RouteSettings.resumeOnHeadphones], which answers a different
+ * question. That setting continues something a disconnection interrupted, from a player
+ * that is still loaded, and only within a few minutes of the disconnection. This one starts
+ * the last thing played from nothing at all — with the app closed, the process dead, and
+ * hours since anybody listened — and only for devices named here.
+ *
+ * Off by default, and empty by default, which are two separate guards: an app that takes
+ * over the audio of every headset that connects to the phone is the behaviour this is
+ * carefully not. Nothing happens until a listener has both switched it on and said which
+ * device they mean. See [io.github.lightheaded.lugu.core.model.AutoPlay] for the rules.
+ */
+data class AutoPlaySettings(
+    val enabled: Boolean = false,
+    val waitSec: Int = AutoPlay.DEFAULT_WAIT_SEC,
+    val devices: List<AutoPlayDevice> = emptyList(),
+) {
+    /** Both halves said yes, so a connection from one of [devices] is worth acting on. */
+    val armed: Boolean get() = enabled && devices.isNotEmpty()
+}
+
+/**
  * Everything about the transport controls.
  *
  * Defaults follow the observed usage order: seeking back to catch a missed sentence is
@@ -287,6 +312,7 @@ data class PlayerSettings(
     val audio: AudioSettings = AudioSettings(),
     val sleep: SleepSettings = SleepSettings(),
     val route: RouteSettings = RouteSettings(),
+    val autoPlay: AutoPlaySettings = AutoPlaySettings(),
     val skip: SkipSettings = SkipSettings(),
     val stream: StreamSettings = StreamSettings(),
 ) {

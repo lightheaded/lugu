@@ -27,6 +27,8 @@ import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
+import io.github.lightheaded.lugu.playback.CompanionDevices
+import io.github.lightheaded.lugu.playback.PairedDevices
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueuePrefs
 import io.github.lightheaded.lugu.core.sync.WallClock
@@ -103,6 +105,11 @@ class SettingsScreenshotTest {
             crashReportingPrefs = CrashReportingPrefs(context),
             queuePrefs = QueuePrefs(context),
             libraryPrefs = LibraryPrefs(context),
+            // Both answer from the platform, which under Robolectric reports no companion
+            // device support and no Bluetooth feature — so the auto-play rows are absent
+            // from the baseline, which is also what an emulator without Bluetooth shows.
+            companionDevices = CompanionDevices(context),
+            pairedDevices = PairedDevices(context),
         )
     }
 
