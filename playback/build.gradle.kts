@@ -41,6 +41,9 @@ dependencies {
     api(libs.media3.session)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
+    // Directly, not transitively: the session's bitmap loader is built here so that
+    // artwork can be a content:// URI — see CoverProvider.
+    implementation(libs.media3.datasource)
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.okhttp)
 

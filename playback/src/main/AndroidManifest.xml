@@ -87,6 +87,20 @@
             </intent-filter>
         </receiver>
 
+        <!--
+          Cover images for the processes that cannot authenticate to the server themselves —
+          Android Auto fetches artwork in its own process, and an https URL to a covers
+          endpoint behind auth is a blank tile there. Exported because a browse result cannot
+          carry a URI permission grant; CoverProvider explains what that does and does not
+          expose.
+        -->
+        <provider
+            android:name=".CoverProvider"
+            android:authorities="${applicationId}.covers"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            tools:ignore="ExportedContentProvider" />
+
         <receiver
             android:name=".AutoPlayBootReceiver"
             android:exported="true">

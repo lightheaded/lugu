@@ -1110,3 +1110,56 @@ side match for the other.
 The rest of [qa/autoplay.md](qa/autoplay.md), now with the three cases this pass produced —
 including **item 7**, still the measurement that decides whether the extra second on top of
 the switchover is needed at all.
+
+## 2026-08-16 (in the car) — covers that never arrived, and a notification that means no
+
+Android Auto driven for real, with a video of the screen to check against. The structure was
+right — the tree, the Continue section ordered by recency, and playback starting the instant
+play is pressed, which is the thing the whole offline-first design was for. Two faults.
+
+### Every cover in the car was blank
+
+Browse rows and the now-playing screen alike, and nothing in any log.
+
+**Android Auto fetches artwork in its own process.** Handed `https://…/api/items/:id/cover`,
+it makes an anonymous request, gets a 401, and draws a blank tile. lugu's own screens show
+covers because they go through the app's OkHttp client, where an interceptor attaches the
+token — invisible from the inside, and total from the outside. From lugu's side nothing
+happened at all, which is why this was reported by a person in a car rather than by anything
+here.
+
+Artwork now goes out as a `content://` URI served by `CoverProvider`, so reading it comes back
+into this process where the authentication is, and what crosses the boundary is a picture.
+The provider fetches through the same client as everything else, caches to disk, and prunes
+oldest-first.
+
+Two things had to be right beyond the provider itself. It is **exported**, because a browse
+result cannot carry a URI permission grant — there is no scoped way to hand a car a read, so
+the surface is stated plainly in the class rather than hidden: an app that already knows an
+item id can fetch that item's cover, `query` enumerates nothing, and no token or address is
+reachable through any path. And the session's **bitmap loader is now stated rather than
+inherited**: the notification loads its artwork in *this* process, so a loader that only spoke
+http would have drawn nothing on the phone while the car drew everything.
+
+### "Not now" left the notification on screen
+
+A second bug in the same place as the morning's, with a different cause. The prompt was only
+taken down when the player had nothing loaded — so cancelling while a book sat paused from
+earlier left the countdown up. The two ways out of the wait want opposite handling, and
+confusing them was the whole of it: when a book starts, something is coming to replace the
+notification and the foreground has to change hands first; when nothing starts, nothing is
+coming, and waiting for it leaves a question on screen that has already been answered.
+
+On top of that, a deliberate change: **tapping the notification now cancels**. Tapping a
+notification usually opens the app, and that is right nearly everywhere — but this one lives
+for a second and asks one question, and opening lugu is not an answer to it. Swiping it away
+cancels too, because dismissing a prompt and then having the book start anyway would make the
+gesture a lie. The labelled button stays, since a tap target nobody can see is not an offer.
+Lint objects to a content intent that reaches a service; the objection is right for an ongoing
+notification and wrong for a prompt, and the suppression says so.
+
+### Next
+
+Covers still are not part of a download, so a car with no signal and a cold cache gets blank
+tiles for books that are fully on the phone. That is in the backlog and is the one place the
+offline claim is currently thinner than it reads.

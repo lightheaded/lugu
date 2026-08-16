@@ -562,6 +562,50 @@ projection host — which is what made it certain the fault was outside. That ch
 commands in the QA doc rather than a hunt, since the same three causes will come up again on
 the next phone.
 
+## The car, driven for real
+
+Reported 16 Aug, from an actual drive with the Desktop Head Unit's verdict finally checked
+against a windscreen. Recorded here with the praise as well as the faults, because what is
+already right is the thing most likely to be broken by accident later.
+
+| Item | Status |
+|---|---|
+| **No cover images anywhere in the car** | fixed 16 Aug |
+| "Not now" should dismiss the notification | fixed 16 Aug |
+| Tapping the notification should cancel and dismiss | done 16 Aug |
+| Continue section, and its ordering by recency | working — *"I love it"* |
+| Responsiveness — playback starts the instant play is pressed | working — *"this is already a win"* |
+
+**Covers were blank everywhere — every browse row and the now-playing screen.** The cause is
+worth writing down because nothing about it is visible from inside the app: Android Auto
+fetches artwork **in its own process**. Handed an `https://` link to
+`/api/items/:id/cover`, it makes an anonymous request, is refused, and draws a blank tile.
+lugu's own screens show covers perfectly, because they go through the app's OkHttp client
+where the token is attached. There was nothing to see in a log, because from lugu's side
+nothing happened at all.
+
+Artwork now goes out as a `content://` URI served by `CoverProvider`, so reading it comes
+back into lugu, where the authentication is. The session's bitmap loader had to be stated
+explicitly as well — the notification loads its own artwork in-process, and a loader that
+only speaks http would have drawn nothing while the car drew everything.
+
+The one thing this does not fix: **covers are not part of a download**, so a car in a garage
+with no signal still gets blank tiles for anything whose cover has not been fetched before.
+The provider caches what it fetches, which covers the ordinary case. In the backlog.
+
+**"Not now" left the notification on screen.** A second bug in the same area as the one fixed
+earlier that day, with a different cause: the prompt was only taken down when the player had
+nothing loaded, so cancelling with a book already sitting paused from earlier left the
+countdown up. Refusing and cancelling now both remove it immediately — nothing is coming to
+replace it, so there is nothing to wait for.
+
+**And then a deliberate change on top:** *let's make tapping the notification cancel the
+auto-play and dismiss it.* Tapping a notification usually opens the app, and that is the
+right default nearly everywhere — but this one lives for a second and asks a single question,
+and opening lugu is not an answer to it. The whole notification now says no. Swiping it away
+does too, because dismissing a prompt and then having the book start anyway would make the
+gesture a lie. The labelled button stays: a tap target nobody can see is not an offer.
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport
