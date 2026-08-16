@@ -154,6 +154,7 @@ class DownloadRepository @Inject constructor(
     private val downloadCache: DownloadCache,
     private val downloadPrefs: DownloadPrefs,
     private val engine: DownloadEngine,
+    private val coverStore: CoverStore,
     private val clock: Clock,
 ) {
     fun observeAll(account: ActiveAccount): Flow<List<DownloadStatus>> =
@@ -297,9 +298,23 @@ class DownloadRepository @Inject constructor(
                 /* foreground = */ false,
             )
         }
+
+        // The picture, kept for as long as the audio is. Last, and unable to fail the
+        // download: a cover is how a book is recognised offline, but a book with no cover
+        // still plays, and an item whose server simply has no artwork is an ordinary state
+        // rather than an error. Doing it here rather than in the engine is deliberate — this
+        // is the one place that already holds the item id and knows a download was accepted.
+        runCatching { coverStore.fetch(itemId) }
     }
 
-    /** Removes the bytes and the row. Progress is untouched — deleting a file is not forgetting a book. */
+    /**
+     * Removes the bytes and the row. Progress is untouched — deleting a file is not forgetting
+     * a book.
+     *
+     * The cover goes only when the last download for the item does. One podcast has one cover
+     * and many episodes, so deleting an episode must leave the picture for the eleven still
+     * on the phone.
+     */
     suspend fun remove(account: ActiveAccount, itemId: String, episodeId: String?) {
         val episodeKey = episodeKeyOf(episodeId)
         val row = downloadDao.get(account.serverId, account.userId, itemId, episodeKey)
@@ -317,6 +332,7 @@ class DownloadRepository @Inject constructor(
             }
         }
         downloadDao.delete(account.serverId, account.userId, itemId, episodeKey)
+        if (downloadDao.countForItem(itemId) == 0) coverStore.remove(itemId)
     }
 
     /**
@@ -345,6 +361,15 @@ class DownloadRepository @Inject constructor(
         }
         return removed
     }
+
+    /**
+     * Drops cover files whose downloads are gone, and returns how many.
+     *
+     * Run at startup rather than at every deletion, because the deletions worth catching are
+     * the ones that do not go through [remove] at all — a sign-out, or anything cascading from
+     * the server row. Costs a directory listing and one query.
+     */
+    suspend fun sweepCovers(): Int = coverStore.retainOnly(downloadDao.itemsWithDownloads().toSet())
 
     /**
      * Size to charge against the cap: the files about to be fetched, and only those.

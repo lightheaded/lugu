@@ -861,6 +861,20 @@ interface DownloadDao {
     @Query("SELECT COALESCE(SUM(bytesDownloaded), 0) FROM download")
     suspend fun bytesUsed(): Long
 
+    /**
+     * How many downloads exist for one item, across every account on the device.
+     *
+     * Deliberately not scoped: this answers whether the item's *cover file* is still needed,
+     * and that file is keyed by item id alone. A podcast with a dozen downloaded episodes has
+     * one cover, and removing the eleventh episode must not take the picture with it.
+     */
+    @Query("SELECT COUNT(*) FROM download WHERE libraryItemId = :itemId")
+    suspend fun countForItem(itemId: String): Int
+
+    /** Every item with a download, for the same reason and with the same scoping as above. */
+    @Query("SELECT DISTINCT libraryItemId FROM download")
+    suspend fun itemsWithDownloads(): List<String>
+
     @Upsert
     suspend fun upsert(download: DownloadEntity)
 

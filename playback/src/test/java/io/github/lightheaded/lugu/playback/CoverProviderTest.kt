@@ -47,14 +47,34 @@ class CoverProviderTest {
     }
 
     /**
-     * An id is whatever the server made it, and some of them contain characters that mean
-     * something in a URI. Going through the builder is what keeps that from breaking the path.
+     * Characters that mean something in a URI survive being written into one. The builder is
+     * what does that, and it matters even though such an id is then refused below — a request
+     * that arrives malformed must be turned away by the id check, not by a mangled path.
      */
     @Test
     fun `an awkward id survives the round trip`() {
         val uri = CoverProvider.uri(context, "a b/c?d")
 
         assertThat(uri.pathSegments).containsExactly("cover", "a b/c?d").inOrder()
+    }
+
+    /**
+     * The provider is exported, so the id is whatever another process wrote. It becomes part
+     * of a file name, and `..` in a file name is how a cover reader turns into a file reader.
+     *
+     * Answered as "no such cover" rather than with an error: an id that is not an id is not a
+     * request worth distinguishing from one for a book that was never downloaded.
+     */
+    @Test
+    fun `an id that is not an id is refused`() {
+        val authority = "${context.packageName}.covers"
+        val notIds = listOf("..", "%2E%2E", "a%2Fb", "item%201", "a.b")
+
+        notIds.forEach { segment ->
+            val uri = Uri.parse("content://$authority/cover/$segment")
+            assertThat(provider.query(uri, null, null, null, null)).isNull()
+            assertThat(provider.openFile(uri, "r")).isNull()
+        }
     }
 
     @Test
