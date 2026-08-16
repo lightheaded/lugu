@@ -73,6 +73,31 @@ class ShelfQueryTest {
         syncedAtMs = 0,
     )
 
+    /**
+     * The series a book is in, as its own row.
+     *
+     * Series membership moved out of `library_item` in schema 6, so a test that only
+     * inserts an item now describes a book in no series at all — which is why every case
+     * below states the membership separately, and why two of them can state two.
+     */
+    private fun membership(
+        itemId: String,
+        seriesName: String,
+        sequence: Double? = null,
+        serverRank: Int? = null,
+    ) = ItemSeriesEntity(
+        serverId = serverId,
+        userId = userId,
+        libraryItemId = itemId,
+        libraryId = "lib1",
+        seriesName = seriesName,
+        seriesId = null,
+        sequence = sequence,
+        serverRank = serverRank,
+        origin = SeriesOrigin.SERVER,
+        syncedAtMs = 0,
+    )
+
     private fun progress(
         itemId: String,
         progress: Double,
@@ -155,11 +180,12 @@ class ShelfQueryTest {
      */
     @Test
     fun `next in series picks the lowest unstarted number, not the lowest name`() = runTest {
-        db.libraryItemDao().upsertAll(
+        db.libraryItemDao().upsertAll(listOf(item("v1"), item("v2"), item("v10")))
+        db.itemSeriesDao().upsertAll(
             listOf(
-                item("v1", seriesName = "Riverton #1", seriesTitle = "Riverton", seriesSequence = 1.0),
-                item("v2", seriesName = "Riverton #2", seriesTitle = "Riverton", seriesSequence = 2.0),
-                item("v10", seriesName = "Riverton #10", seriesTitle = "Riverton", seriesSequence = 10.0),
+                membership("v1", "Riverton", 1.0),
+                membership("v2", "Riverton", 2.0),
+                membership("v10", "Riverton", 10.0),
             ),
         )
         db.progressDao().upsert(progress("v1", 1.0, isFinished = true))
@@ -171,11 +197,9 @@ class ShelfQueryTest {
 
     @Test
     fun `next in series stays quiet until something in the series is finished`() = runTest {
-        db.libraryItemDao().upsertAll(
-            listOf(
-                item("v1", seriesName = "Riverton #1", seriesTitle = "Riverton", seriesSequence = 1.0),
-                item("v2", seriesName = "Riverton #2", seriesTitle = "Riverton", seriesSequence = 2.0),
-            ),
+        db.libraryItemDao().upsertAll(listOf(item("v1"), item("v2")))
+        db.itemSeriesDao().upsertAll(
+            listOf(membership("v1", "Riverton", 1.0), membership("v2", "Riverton", 2.0)),
         )
         // Started but not finished: recommending the next one now would be presumptuous.
         db.progressDao().upsert(progress("v1", 0.4))
@@ -186,12 +210,15 @@ class ShelfQueryTest {
     @Test
     fun `next in series offers one book per series`() = runTest {
         db.libraryItemDao().upsertAll(
+            listOf(item("a1"), item("a2"), item("a3"), item("b1"), item("b2")),
+        )
+        db.itemSeriesDao().upsertAll(
             listOf(
-                item("a1", seriesName = "A #1", seriesTitle = "A", seriesSequence = 1.0),
-                item("a2", seriesName = "A #2", seriesTitle = "A", seriesSequence = 2.0),
-                item("a3", seriesName = "A #3", seriesTitle = "A", seriesSequence = 3.0),
-                item("b1", seriesName = "B #1", seriesTitle = "B", seriesSequence = 1.0),
-                item("b2", seriesName = "B #2", seriesTitle = "B", seriesSequence = 2.0),
+                membership("a1", "The Breakwater", 1.0),
+                membership("a2", "The Breakwater", 2.0),
+                membership("a3", "The Breakwater", 3.0),
+                membership("b1", "Riverton", 1.0),
+                membership("b2", "Riverton", 2.0),
             ),
         )
         db.progressDao().upsertAll(
@@ -206,15 +233,56 @@ class ShelfQueryTest {
     }
 
     /**
-     * Roughly a third of this library's series entries have no parseable number. Guessing
-     * an order for them would be worse than leaving them out — it risks a spoiler.
+     * The case the whole membership table exists for.
+     *
+     * "Lighthouse Falls" is the second Breakwater book and the first Riverton one, which
+     * the server renders as the single string "The Breakwater #2, Riverton #1". Nothing
+     * that stored one series per item could hold that, and the last-resort parse reads it
+     * as volume one of a series called "The Breakwater #2, Riverton" — so this book used
+     * to be missing from both shelves *and* the invention of a third.
      */
     @Test
-    fun `a series with no number is left out rather than guessed at`() = runTest {
+    fun `a book in two series can be the next book in either of them`() = runTest {
         db.libraryItemDao().upsertAll(
+            listOf(item("bw1"), item("falls", title = "Lighthouse Falls"), item("river2")),
+        )
+        db.itemSeriesDao().upsertAll(
             listOf(
-                item("c1", seriesName = "The Tidelands", seriesTitle = "The Tidelands", seriesSequence = null),
-                item("c2", seriesName = "The Tidelands", seriesTitle = "The Tidelands", seriesSequence = null),
+                membership("bw1", "The Breakwater", 1.0),
+                membership("falls", "The Breakwater", 2.0),
+                membership("falls", "Riverton", 1.0),
+                membership("river2", "Riverton", 2.0),
+            ),
+        )
+        db.progressDao().upsert(progress("bw1", 1.0, isFinished = true))
+
+        val rows = db.libraryItemDao().observeNextInSeries(serverId, userId).first()
+
+        assertThat(rows.map { it.id }).containsExactly("falls")
+
+        // And once it has been read, it carries its other series forward on its own.
+        db.progressDao().upsert(progress("falls", 1.0, isFinished = true))
+        val after = db.libraryItemDao().observeNextInSeries(serverId, userId).first()
+        assertThat(after.map { it.id }).containsExactly("river2")
+    }
+
+    /**
+     * Roughly a third of this library's series entries have no number. Guessing an order
+     * for them would be worse than leaving them out — it risks a spoiler.
+     *
+     * The rank the library-series listing supplies is deliberately not a substitute here.
+     * The server produces that order by sorting the sequence strings, so for a series
+     * where none of them exist it is sorting nothing, and what comes back is the order the
+     * scanner inserted the rows in. It is good enough to lay a page out with and not good
+     * enough to tell somebody what to read next.
+     */
+    @Test
+    fun `a series with no number is left out rather than guessed at, rank or no rank`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("c1"), item("c2")))
+        db.itemSeriesDao().upsertAll(
+            listOf(
+                membership("c1", "The Tidelands", sequence = null, serverRank = 0),
+                membership("c2", "The Tidelands", sequence = null, serverRank = 1),
             ),
         )
         db.progressDao().upsert(progress("c1", 1.0, isFinished = true))

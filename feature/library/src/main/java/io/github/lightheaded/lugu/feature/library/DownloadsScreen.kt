@@ -35,7 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.download.formatBytes
@@ -126,6 +126,19 @@ fun DownloadsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // On its own line, below the bar, and never inside the cap figure.
+                    // This is audio kept from streaming: it was not asked for, it does not
+                    // count against the allowance, and it is dropped oldest-first on its
+                    // own bound. Putting it inside the cap total would be a number beside
+                    // the allowance that the allowance does not govern.
+                    if (state.retainedStreamBytes > 0) {
+                        Text(
+                            "${formatBytes(state.retainedStreamBytes)} kept from streaming, " +
+                                "outside the cap",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 HorizontalDivider()
                 ListControlsBar(

@@ -14,11 +14,14 @@ import io.github.lightheaded.lugu.core.model.ListFacts
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
+import io.github.lightheaded.lugu.core.model.PodcastTrim
+import io.github.lightheaded.lugu.core.model.SeriesRef
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.CollectionRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueueRepository
 import javax.inject.Inject
@@ -120,11 +123,44 @@ data class ItemDetailUiState(
     val download: DownloadStatus? = null,
     /** The collections of this item's library, each saying whether it holds this item. */
     val collections: List<CollectionChoice> = emptyList(),
+    /**
+     * Every series this book is in, one entry each.
+     *
+     * Read from the membership table rather than from `LibraryItem.seriesName`, which is
+     * the server's *rendering* of this list: it joins all of a book's series into one
+     * string, so a book in two of them used to draw a single phantom series named after
+     * both, carrying the second one's number.
+     */
+    val series: List<SeriesRef> = emptyList(),
+    /** What this show trims from each episode — its own, or the default it is following. */
+    val trim: PodcastTrim = PodcastTrim.NONE,
+    /**
+     * Whether [trim] belongs to this show or is the default showing through.
+     *
+     * Held apart from the values because the two states are indistinguishable from them: a
+     * show explicitly trimmed to nothing and a show following a default of nothing carry
+     * the same numbers and behave differently the moment the default changes.
+     */
+    val trimIsOwn: Boolean = false,
     val message: String? = null,
 )
 
 /** One collection, and whether this item is in it. */
 data class CollectionChoice(val id: String, val name: String, val contains: Boolean)
+
+/**
+ * The page's facts that come from neither the mirror nor the list controls.
+ *
+ * Carried as one value so the state can be assembled from five flows rather than seven —
+ * `combine` stops taking named parameters past five, and the alternative is an array of
+ * `Any?` and a row of casts.
+ */
+private data class ItemDetailExtras(
+    val collections: List<CollectionChoice> = emptyList(),
+    val series: List<SeriesRef> = emptyList(),
+    val trim: PodcastTrim = PodcastTrim.NONE,
+    val trimIsOwn: Boolean = false,
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -137,6 +173,7 @@ class ItemDetailViewModel @Inject constructor(
     private val queueRepository: QueueRepository,
     private val collectionRepository: CollectionRepository,
     private val libraryPrefs: LibraryPrefs,
+    private val playbackPrefs: PlaybackPrefs,
 ) : ViewModel() {
 
     private val itemId: String = checkNotNull(savedStateHandle["itemId"])
@@ -208,6 +245,29 @@ class ItemDetailViewModel @Inject constructor(
         }
 
     /**
+     * Whether this show has a trim of its own rather than the default showing through.
+     *
+     * `hasOwnTrim` answers once rather than as a flow, so the answer is taken when the page
+     * opens and again after every change made from it. That is enough to keep it true:
+     * this page is the only place a show's own trim is set or cleared, and a listener who
+     * sets one has to be able to see that they have, or "trim nothing" and "follow the
+     * default" become the same-looking state.
+     */
+    private val trimIsOwn = MutableStateFlow(false)
+
+    private val seriesMemberships: Flow<List<SeriesRef>> = account
+        .flatMapLatest { current ->
+            if (current == null) flowOf(emptyList()) else libraryRepository.observeSeriesFor(current, itemId)
+        }
+
+    private val extras: Flow<ItemDetailExtras> = combine(
+        collectionChoices,
+        seriesMemberships,
+        playbackPrefs.observeTrimFor(itemId),
+        trimIsOwn,
+    ) { choices, series, trim, isOwn -> ItemDetailExtras(choices, series, trim, isOwn) }
+
+    /**
      * The list is narrowed here rather than in the screen.
      *
      * A composable that filters recomputes the answer on every recomposition and has
@@ -219,8 +279,8 @@ class ItemDetailViewModel @Inject constructor(
         query,
         libraryPrefs.settings,
         selection,
-        collectionChoices,
-    ) { base, search, settings, picked, choices ->
+        extras,
+    ) { base, search, settings, picked, extra ->
         val visible = ListControls.sortEpisodes(
             base.episodes.filter {
                 ListControls.matches(it.facts, settings.episodeFilter) &&
@@ -237,7 +297,10 @@ class ItemDetailViewModel @Inject constructor(
             episodeFilter = settings.episodeFilter,
             selectionActive = onScreen.active,
             selectedIds = onScreen.ids,
-            collections = choices,
+            collections = extra.collections,
+            series = extra.series,
+            trim = extra.trim,
+            trimIsOwn = extra.trimIsOwn,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
 
@@ -470,6 +533,28 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Gives this show a trim of its own, whatever the numbers in it are.
+     *
+     * Setting every field back to nothing is still a decision about this show, and it is
+     * kept as one: a listener who turns an inherited fifteen-second intro off means "not on
+     * this one", not "go back to whatever the default says next week".
+     */
+    fun setTrim(trim: PodcastTrim) {
+        viewModelScope.launch {
+            playbackPrefs.setTrimFor(itemId, trim)
+            trimIsOwn.value = true
+        }
+    }
+
+    /** Hands the show back to the default, which is the only way out of [setTrim]. */
+    fun useDefaultTrim() {
+        viewModelScope.launch {
+            playbackPrefs.clearTrimFor(itemId)
+            trimIsOwn.value = false
+        }
+    }
+
     fun dismissMessage() {
         message.value = null
     }
@@ -487,6 +572,7 @@ class ItemDetailViewModel @Inject constructor(
             val current = authRepository.account() ?: return@launch
             libraryRepository.syncItemDetail(current, itemId)
         }
+        viewModelScope.launch { trimIsOwn.value = playbackPrefs.hasOwnTrim(itemId) }
     }
 }
 

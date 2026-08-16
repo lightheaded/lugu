@@ -23,12 +23,27 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 
-/** Surfaced to the UI when a session start adopted a newer position from another device. */
+/**
+ * A position moved by the app rather than by the listener, offered back for undoing.
+ *
+ * Originally only ever a newer position adopted from another device, which is why the
+ * default notice reads as a bare "jumped from here to there" — with nothing else able to
+ * cause one, saying so added nothing.
+ *
+ * [reason] exists because that is no longer true: a podcast's trim settings also move the
+ * position, and "Jumped from 0:00 to 0:15" is a true description of an intro being skipped
+ * that explains none of it. A cause the listener cannot see is indistinguishable from the
+ * app losing their place, which is the complaint lugu exists to answer — so where the app
+ * knows why, it says why. Null keeps the original wording for the case that has no better
+ * explanation than the numbers themselves.
+ */
 data class ProgressJump(
     val libraryItemId: String,
     val episodeId: String?,
     val fromSec: Double,
     val toSec: Double,
+    /** A short phrase naming the cause, e.g. "Skipped the intro". Null for a plain jump. */
+    val reason: String? = null,
 )
 
 @Serializable

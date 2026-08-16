@@ -72,6 +72,15 @@ internal object DownloadAggregation {
         val state = when {
             states.all { it == Download.STATE_COMPLETED } -> DownloadState.COMPLETED
             states.any { it == Download.STATE_FAILED } -> DownloadState.FAILED
+
+            // A stopped file is one lugu stopped. Media3 only enters this state when a stop
+            // reason has been set, and [StorageCap] is the one place that sets one, so it
+            // always means the download ran into the storage cap — not that it is waiting
+            // for Wi-Fi or for power, which are unmet *requirements* and read as queued.
+            // Folded to failed rather than queued so the row carries its explanation and
+            // stops claiming it is about to continue, which it is not.
+            states.any { it == Download.STATE_STOPPED } -> DownloadState.FAILED
+
             states.any { it == Download.STATE_DOWNLOADING } -> DownloadState.DOWNLOADING
             // Nothing at all in the index, for any file. The requests never took, and
             // reporting that as "queued" would leave the row waiting for an event that

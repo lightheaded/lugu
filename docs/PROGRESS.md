@@ -708,3 +708,172 @@ at the source, and the test now pins the thing that matters.
 2. Run [qa/auto.md](qa/auto.md) in the DHU. Six of the car items can only be confirmed there.
 3. Read the playback diary after a real stop.
 4. A `com.android.test` module, so process death can be tested from a second process.
+
+---
+
+## 2026-08-16 (later still) — the debt sweep, a stream that survives, and what a podcast trims
+
+Three pieces asked for in one go: collapse the duplicated display logic, make a streamed
+book survive losing its connection, and finish the podcast and browse polish — including
+skipping adverts, "if it's the same mechanism".
+
+### The sweep
+
+Four formatters in three modules had already begun to disagree: a length read "1 h 20 min"
+on the player and "1h 20m" in a list, a speed was "2" on one chip and "2x" on another.
+They are now in `:core:model/Formatting.kt` — collected rather than merged, because the
+difference between a *place* (colons) and a *length* (units), and between a roomy line and
+a dense one, is real. What was not worth keeping is each module deciding that on its own.
+
+The Continue-row rule that the car and the phone had each written out separately is now
+`ContinueLabel` in the same file, which is where the backlog said it belonged.
+
+Writing the tests turned up a defect in the speed formatter, though not one anybody has
+seen. It truncated, so a value like 1.7999992 printed as "1.79x" and 1.9999990 as "1.99x" —
+a chip disagreeing with the button just pressed. It rounds now. Nothing in the app produces
+such a value today, because `SpeedSettings.STEP` is declared and never used and every speed
+arrives from a clean preset; the constant is on the debt list.
+
+Also swept: `hiltViewModel` (the new artifact already arrives through
+`hilt-navigation-compose`, so it was a pure import change across thirteen files),
+`AcceptedResultBuilder`'s deprecated single-argument constructor, `Icons.Filled.PlaylistPlay`,
+and the storage cap, which is now enforced *during* a download rather than only estimated
+before one.
+
+### A stream that survives a dropout
+
+The leading fixable candidate for "it stopped and I did not touch it". Three things were
+missing, and each was necessary on its own.
+
+**Nothing buffered ahead.** The player was built with no `LoadControl` at all, so it held
+Media3's default — tens of seconds, which a tunnel drains. Spoken word is the one case
+where buffering deep is nearly free: at audiobook bitrates, minutes of audio are a couple
+of megabytes. It now reads ahead by a configurable five minutes, under a byte ceiling that
+encodes an assumption of 256 kbps, plus a heap-eighth and an absolute cap so a
+high-bitrate file cannot turn the setting into an out-of-memory kill.
+
+**Nothing came back when the network did.** `PlaybackRetryPolicy` existed and was wired,
+but gave up after three attempts inside about seven seconds — a tunnel, and nothing longer.
+A `ConnectivityManager` callback now re-prepares on reconnect, but only when playback
+stopped for a reason the network explains and the listener had not asked it to stop. Getting
+that wrong is worse than not doing it: a book that starts playing in a pocket an hour after
+being paused is the Spotify complaint this project exists to avoid. The ladder also widened
+to five attempts over thirty seconds, on the argument that the callback only fires when the
+*default network changes* — the flaky-cell case, where the phone insists it is still online,
+has nothing but the ladder.
+
+**Nothing that had been fetched survived a re-prepare.** Streaming deliberately never wrote
+to the download cache, which is right — a download is user-owned and must never be evicted
+to make room for something merely streamed. So streamed audio now goes to a *second*,
+bounded cache with an oldest-first evictor, and the playback source chains: download cache
+first and read-only, retained cache second and writable, network last. The two figures are
+never added together; the downloads screen shows retained bytes on their own line, marked
+as outside the cap.
+
+Both of these are fixed when the service starts — a `LoadControl` is set at player
+construction and a `SimpleCache` holds a folder lock — so they take effect at the next
+service start rather than immediately. That is stated rather than faked.
+
+### What a podcast trims, and the honest answer about adverts
+
+Asked as "skip intro and outro — and maybe ads too, if it's the same mechanism". It is, at
+the point of playing, and it is not, at the point of finding — and the difference decides
+what can be promised.
+
+An intro and an outro are fixed offsets from the ends of an episode, so one number covers
+every episode of a show forever. An advert is somewhere in the middle, at a different place
+and length every week; no offset can find one. So adverts are skipped where the episode
+*marks* them, through a chapter whose title names it as advertising — markers a useful
+number of shows ship, because the same ones drive every podcast app's chapter list, and
+which lugu already parses. Finding an *unmarked* advert needs audio fingerprinting against
+a database of known adverts, and a false positive silently eats a minute of the show. A
+skip that removes narration is worse than an advert that plays.
+
+The matcher is whole-title with punctuation stripped, so "[Ad]" and "Sponsor Message" match
+while "Adam's Return" and "Broad Strokes" do not. Both directions are tested; the second
+direction is the one that matters.
+
+`SkipRegions` in `:core:model` computes the regions — clamped, merged, and dropped entirely
+if they would swallow the episode, because an intro set for hour-long episodes would
+otherwise skip a forty-second trailer end to end and read as a broken file.
+`SkipRegionEnforcer` in `:playback` decides when one is acted on, which is the question with
+all the ways of being wrong in it:
+
+- **Podcasts only, in the type rather than in a comment.** `SkipPlan`'s constructor is
+  private and its factory refuses anything with no episode id. A book's chapters are its
+  content, and an intro offset against chapter one is forty seconds of narration gone.
+- **A manual seek wins.** A listener who scrubs back into the intro stays there. Without
+  it the enforcer is a loop nobody can escape — and it is also what makes Undo work, since
+  Undo seeks back *into* the region just skipped.
+- **The outro at the tail ends the episode rather than seeking to its last sample.** Those
+  are not the same act: seeking there leaves the queue, the continuation and the progress
+  sync all unrun, and the episode sits at its very end marked unfinished forever.
+
+Trim is per show, stored beside the per-podcast speed and for the same reason: the sting
+belongs to the show, and setting it per episode would mean setting it again every week. The
+podcast's own page distinguishes "following the default" from "set for this show" in copy
+and in colour, because a show trimmed to zero and a show following a default of zero carry
+the same numbers and behave differently the moment the default moves.
+
+### The series bug nobody was looking for
+
+The brief was the recorded gap — that roughly a third of series entries have no parseable
+`#N` and are excluded from "Next in series" — and the fix was expected to be the library's
+series endpoint. What turned up first was worse than exclusion.
+
+The server joins *every* series a book is in into one string: `"The Breakwater #1, The
+Tidelands #3"`. The existing parse read the trailing number and called everything before it
+the name — so a two-series book was not merely missing from a shelf, it was **inventing a
+series that nothing else is in, at a number belonging to a different one**. It then labelled
+that book "Book 3" on The Breakwater's own page: the other series' position, on the one
+screen whose entire job is putting a series in order.
+
+Series membership is now its own table (schema v6), populated from three sources in order of
+authority: the library-series listing, the expanded item's structured `series` array, and —
+only for items no server source has spoken for — the old regex. Where the series name is
+already known, the sequence is recovered *anchored on that name*, which resolves both the
+two-series string and a series whose own name contains a comma. An upgrade backfills every
+existing parse, so nothing changes visibly until the first sync replaces it.
+
+Two findings from reading the server source that are worth keeping, because both contradict
+what we expected:
+
+- The structured `series` array is **never** in a minified payload, only an expanded one. An
+  earlier note in this repo recorded it as "empty on every item", which was a correct
+  observation of a list response and a wrong conclusion about the API.
+- **A series with no sequences does not have an order the server knows.** Its comparator has
+  nothing to compare and the array comes back in scanner order. So the server's rank orders
+  *series browse pages*, where the reader sees the whole list and chooses — but it is not
+  allowed to qualify a series for "Next in series", where an order derived from nothing is
+  precisely the spoiler the rule against guessing exists to prevent.
+
+`sequence` is also free text on the server, read there as `CAST(sequence AS FLOAT)` — which
+silently makes "Book Two" into zero. lugu still parses strictly and returns null instead.
+
+### Also
+
+The A–Z rail now runs down the author, series and narrator pages, indexing the list *after*
+the search box so it can never offer a letter the search has removed.
+
+### A bug the integration found
+
+`undoJump` reverted the correct progress row and then seeked whatever was loaded. The notice
+sits on screen long enough for the item to change underneath it — an episode ending hands
+over to the next, and a skip that ends an episode does exactly that — so pressing Undo
+dragged the *new* episode to a position belonging to the old one. The same class of bug as
+the notification rewind that started this project, this time caused by the button offered to
+undo one. The revert still always happens, because it is addressed to the jump's own item;
+the seek is now guarded on the player still holding it.
+
+The jump notice also carries a reason now, so a skip reads "Skipped the intro from 0:00 to
+0:15" rather than "Jumped from 0:00 to 0:15" — a true account that explained none of it.
+
+### Next
+
+1. **A device pass on a release build**, still owed and now carrying more: the socket, real
+   proxy headers, the LAN race, R8's reflective paths, notification persistence on both
+   sides of Android 14, and now the deep buffer against a real tunnel and the retained
+   cache's eviction at its bound.
+2. Run [qa/auto.md](qa/auto.md) in the DHU — and confirm car browse specifically, because
+   the session's connection result is now trust-aware.
+3. Read the playback diary after a real stop.

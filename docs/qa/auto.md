@@ -91,6 +91,21 @@ a garage with no signal. This is the case that matters.
       cycle (androidx/media#3158). Never returning an error from the root is what
       prevents it; a loop means something else is returning one
 
+## The session's trust model — added 16 August, verify first
+
+`onConnect` now hands an untrusted controller Media3's restricted command set rather than
+the full one. That is Media3's own default since 1.11 for any app that does not override
+`onConnect`, and Android Auto's host should be trusted — the platform's
+`isTrustedForMediaControl` grants it to any enabled notification listener or holder of
+`MEDIA_CONTENT_CONTROL`, and Auto is both. That has been read in the framework source and
+never observed on a head unit, so it is a claim until this passes.
+
+- [ ] The browse tree still loads at all. If it is empty or the app is refused, this is
+      the change to suspect first — restoring the previous behaviour is granting
+      `DEFAULT_SESSION_AND_LIBRARY_COMMANDS` regardless of trust
+- [ ] The custom buttons still appear and still work
+- [ ] Voice search still returns results
+
 ## Before calling M3 done
 
 - [ ] The whole checklist run once in the DHU

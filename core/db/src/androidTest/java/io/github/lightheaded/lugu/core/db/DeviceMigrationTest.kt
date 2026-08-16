@@ -20,7 +20,7 @@ import org.junit.runner.RunWith
  * passes on the JVM and fails here is an app that will not open after an update, and the
  * user has already installed the new version by the time it happens.
  *
- * This runs the chain the way a real upgrade does — 1 to 2 to 3 to 4 to 5, one database,
+ * This runs the chain the way a real upgrade does — 1 to 2 to 3 to 4 to 5 to 6, one database,
  * each step over the last — against the schemas Room exported at the time, which are the
  * only honest record of what is on a phone that has not been updated in a while. *
  * The method names here are underscored rather than the backticked sentences the JVM suites
@@ -61,7 +61,7 @@ class DeviceMigrationTest {
         }
 
         // Every step separately, so a failure names the migration that broke rather than
-        // "somewhere between 1 and 5".
+        // "somewhere between 1 and 6".
         for (target in 2..LATEST_VERSION) {
             helper.runMigrationsAndValidate(DB_NAME, target, true, *MIGRATIONS).close()
         }
@@ -109,6 +109,45 @@ class DeviceMigrationTest {
             }
     }
 
+    /**
+     * The upgrade an existing install actually performs, and the thing it must not cost.
+     *
+     * Every query behind "Next in series" and the series pages reads the membership table
+     * from version 6 on. Somebody upgrading has a mirror full of items and no memberships,
+     * so without the backfill their series shelf would be empty until a sync finished —
+     * and on a train that is never. This is that backfill, on the SQLite a phone has.
+     */
+    @Test
+    fun an_upgraded_install_keeps_the_series_it_already_had() {
+        helper.createDatabase(DB_NAME, 5).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO library_item (serverId, userId, id, libraryId, mediaType, title,
+                    subtitle, authorName, narratorName, seriesName, seriesTitle, seriesSequence,
+                    description, durationSec, sizeBytes, numEpisodes, addedAtMs, updatedAtMs,
+                    coverPath, rawJson, syncedAtMs)
+                VALUES ('s', 'u', 'li_1', 'lib_1', 'BOOK', 'The Lighthouse Wakes', NULL,
+                    'James T. R. Corven', 'Jefferson Vale', 'The Breakwater #1', 'The Breakwater',
+                    1.0, NULL, 41400.0, 0, 0, 0, 0, NULL, NULL, 0)
+                """.trimIndent(),
+            )
+        }
+
+        helper.runMigrationsAndValidate(DB_NAME, LATEST_VERSION, true, *MIGRATIONS).use { db ->
+            val names = db.query(
+                "SELECT seriesName, sequence, origin FROM item_series WHERE libraryItemId = 'li_1'",
+            ).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(listOf(cursor.getString(0), cursor.getDouble(1), cursor.getInt(2)))
+                    }
+                }
+            }
+            assertThat(names)
+                .containsExactly(listOf("The Breakwater", 1.0, SeriesOrigin.PARSED))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
 
@@ -117,13 +156,14 @@ class DeviceMigrationTest {
          * readable at runtime. A mismatch fails loudly the moment a new migration is added
          * without being listed below, which is the point.
          */
-        const val LATEST_VERSION = 5
+        const val LATEST_VERSION = 6
 
         val MIGRATIONS = arrayOf(
             LuguDatabase.MIGRATION_1_2,
             LuguDatabase.MIGRATION_2_3,
             LuguDatabase.MIGRATION_3_4,
             LuguDatabase.MIGRATION_4_5,
+            LuguDatabase.MIGRATION_5_6,
         )
     }
 }

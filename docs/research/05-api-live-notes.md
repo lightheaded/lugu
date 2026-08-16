@@ -132,26 +132,70 @@ Also observed:
 - The minified list payload has no `tracks`, `audioFiles` or `chapters` — only
   `numAudioFiles`/`numChapters` counts. Downloading therefore needs the expanded fetch.
 
-## Series metadata (captured live, 2.36.0)
+## Series metadata (captured live, 2.36.0; re-read against the server source)
 
-`metadata.series` came back **empty on every item** in the list payload; the only series
-information an item carries is `metadata.seriesName`, a single string of the form
-`"Example Series #10"`. `GET /api/libraries/:id/series` lists the series themselves,
-but the per-item sequence still only exists inside that string.
+The live capture recorded `metadata.series` as **empty on every item** in the list
+payload, and concluded that the joined `metadata.seriesName` string was the only series
+information a client could have. The first half is right and the second is not, and the
+difference is worth a section because the whole "next in series" feature rested on it.
 
-Measured across the library: about a third of items have a `seriesName`, and **roughly
-two-thirds of those carry a parseable `#N`**. The rest are genuine series with no
-volume number, or metadata noise ("Unabridged").
+**Structured series exist; they are simply not in the minified payload.**
+`Book.oldMetadataToJSONMinified()` lists `seriesName` and does not list `series`, so an
+empty array in a list response means "this payload was minified" rather than "this book
+is in no series". `oldMetadataToJSONExpanded()` spreads `oldMetadataToJSON()`, which does
+carry `series: [{id, name, sequence}]`. So:
 
-Two consequences, both now in the code:
+| Call | Series information |
+|---|---|
+| `GET /api/libraries/:id/items?minified=1` | `metadata.seriesName` only — the joined string |
+| `GET /api/items/:id?expanded=1` | `metadata.series[]` **and** `seriesName` |
+| `GET /api/libraries/:id/series` | every series, each with its members in the server's order |
 
-- The sequence has to be parsed out of the name (`core/model/Series.kt`) and stored as a
-  number. A long-running series here holds "#19", "#21" and "#29" alongside a "#10", so
-  ordering a series by its name string would put #10 before #2 and
-  recommend the wrong book — not a hypothetical.
-- Items whose sequence will not parse are left out of "next in series" rather than
-  guessed at. That is roughly a third of series items here, and the alternative is
-  confidently recommending a volume out of order.
+**`seriesName` joins every series with `", "`.** The getter is
+`series.map(se => sequence ? `${se.name} #${sequence}` : se.name).join(', ')`, so a book
+in two series renders as `"The Breakwater #1, The Tidelands #3"`. A regex that takes the
+trailing `#N` reads that as volume three of a series called "The Breakwater #1, The
+Tidelands" — a series nothing else is in. That is not an entry lost to an unparseable
+name; it is a confidently wrong one, and it was the largest recoverable share of the
+third of series items the shelf was missing.
+
+**`sequence` is a free-text string.** It is a plain `STRING` column on the `bookSeries`
+join row with nothing validating it, so "2", "2.5", "Book Two" and null are all things it
+holds. The server reads it with `CAST(sequence AS FLOAT)`, which silently makes "Book Two"
+zero — lugu will not, for the same reason it never guessed at a name.
+
+**`GET /api/libraries/:id/series` costs what the collections listing costs, and pages
+better.** `getAllSeriesForLibrary` puts `minified` into the payload it echoes back and
+never reads it again; `getFilteredSeries` always emits members as
+`libraryItem.toOldJSONMinified()`. So it is the same defect as collections, one degree
+lighter — minified members rather than expanded ones. Unlike collections, its `limit` and
+`offset` go straight into the Sequelize query, so it is genuinely paged and can be walked
+in bounded requests. Members carry no per-series sequence of their own; the *order* of the
+array is what it contributes.
+
+**That order is only as good as the sequences behind it.** The handler sorts the join rows
+with `localeCompare(..., {numeric: true})` and pushes rows with no sequence to the end. For
+a series where none of them have one, the comparator has nothing to compare and what comes
+back is the order the scanner inserted the rows in. The server's own shelves show the same
+limit: `libraryItemsBookFilters` builds its continue-series query around
+`CAST(bs.sequence AS FLOAT)`, so an unnumbered series is ordered by a cast of null.
+
+Measured across the library, before this: about a third of items have a `seriesName`, and
+**roughly two-thirds of those carry a parseable `#N`**. The rest are books in more than one
+series, genuine series with no volume number, or metadata noise ("Unabridged").
+
+What the code does with all of that:
+
+- Membership is stored per book *and per series* (`item_series`), from the library-series
+  listing for the whole library and from `metadata.series` when an item page is opened.
+  A book in two series is two rows.
+- The sequence comes from the structured field where there is one, and otherwise from the
+  joined string **anchored on a series name already known** — which resolves both
+  "The Breakwater #1, The Tidelands #3" and a series whose own name contains a comma.
+  Blind parsing of the whole string is the last resort and yields at most one membership.
+- Items with no sequence are still left out of "next in series" rather than guessed at,
+  and the server's array order is *not* accepted as a substitute. It orders a series page,
+  where the reader sees the whole list and chooses; it does not make a recommendation.
 
 ## Still to capture live
 

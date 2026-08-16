@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -33,6 +34,15 @@ data class DownloadsUiState(
     /** After the search, the filter and the sort — what the list draws. */
     val visible: List<DownloadStatus> = emptyList(),
     val bytesUsed: Long = 0,
+    /**
+     * Bytes held by audio that was streamed rather than downloaded.
+     *
+     * Shown apart from [bytesUsed] and never added to it. A download was asked for and is
+     * never evicted; retained streamed audio is disposable and drops oldest-first at its
+     * own bound. Adding them would put a figure beside the cap that the cap does not
+     * govern.
+     */
+    val retainedStreamBytes: Long = 0,
     val settings: DownloadSettings = DownloadSettings(),
     val query: String = "",
     val sort: ItemSort = ItemSort.ADDED,
@@ -84,7 +94,7 @@ class DownloadsViewModel @Inject constructor(
                     downloadPrefs.settings,
                 ) { downloads, bytes, settings ->
                     DownloadsUiState(downloads = downloads, bytesUsed = bytes, settings = settings)
-                }
+                }.map { it.copy(retainedStreamBytes = downloadRepository.retainedStreamBytes()) }
             }
         }
 

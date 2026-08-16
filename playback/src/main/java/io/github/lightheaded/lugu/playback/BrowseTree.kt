@@ -11,6 +11,7 @@ import io.github.lightheaded.lugu.core.db.LibraryDao
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.LibraryItemEntity
 import io.github.lightheaded.lugu.core.db.QueueDao
+import io.github.lightheaded.lugu.core.model.ContinueLabel
 import io.github.lightheaded.lugu.core.model.FtsQuery
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
@@ -73,14 +74,21 @@ class BrowseTree @Inject constructor(
 
             // One row per thing being listened to rather than per item: a podcast with three
             // part-heard episodes offers all three, each addressing its own episode, so the
-            // car can start any of them without going through the show's page first.
+            // car can start any of them without going through the show's page first. This
+            // node used to group by item, and picking either of the other two episodes then
+            // meant opening the podcast and finding it — several glances at a screen while
+            // driving, which is the cost a car node exists to avoid.
+            //
+            // A row per episode is only useful if it says which episode it is, and that rule
+            // is [ContinueLabel]'s: the same one the phone's own Continue shelf draws, held
+            // in one place since the two had a copy each and were free to drift apart.
             BrowseNode.Continue -> itemDao.observeInProgress(server, user).first()
                 .filter { library.isVisible(mediaTypeOf(it.item.mediaType)) }
                 .map { row ->
                     playable(
                         node = BrowseNode.Playable(row.item.id, row.episodeId),
-                        title = ContinueRows.title(row.item.title, row.episodeTitle),
-                        subtitle = ContinueRows.subtitle(
+                        title = ContinueLabel.title(row.item.title, row.episodeTitle),
+                        subtitle = ContinueLabel.subtitle(
                             itemTitle = row.item.title,
                             author = row.item.authorName,
                             episodeTitle = row.episodeTitle,

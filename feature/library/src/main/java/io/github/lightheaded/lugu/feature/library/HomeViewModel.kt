@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.lightheaded.lugu.core.model.ContinueLabel
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.ProgressKey
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
@@ -42,12 +43,18 @@ data class ShelfCard(
     val itemId: String get() = entry.item.id
     val episodeId: String? get() = entry.episodeId
 
-    /** The episode is what is being continued, so it is the title rather than the show. */
-    val title: String get() = entry.episodeTitle ?: entry.item.title
+    /**
+     * How a part-heard thing names itself, decided by [ContinueLabel] rather than here.
+     *
+     * The rule is the same one the car draws its Continue rows with, and it only stays the
+     * same while there is one copy of it. This card is a caller of that rule, not a second
+     * statement of it.
+     */
+    val title: String get() = ContinueLabel.title(entry.item.title, entry.episodeTitle)
 
-    /** The show for an episode, the author for anything else: what the title needs placing in. */
+    /** What the title needs placing in, from the same shared rule as [title]. */
     val secondary: String? get() =
-        if (entry.episodeTitle != null) entry.item.title else entry.item.authorName
+        ContinueLabel.subtitle(entry.item.title, entry.item.authorName, entry.episodeTitle)
 
     val progressFraction: Float get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
 

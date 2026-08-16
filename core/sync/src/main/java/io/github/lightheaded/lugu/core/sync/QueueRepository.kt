@@ -2,6 +2,7 @@ package io.github.lightheaded.lugu.core.sync
 
 import io.github.lightheaded.lugu.core.db.EpisodeDao
 import io.github.lightheaded.lugu.core.db.EpisodeEntity
+import io.github.lightheaded.lugu.core.db.ItemSeriesDao
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.QueueDao
 import io.github.lightheaded.lugu.core.db.QueueEntity
@@ -88,6 +89,7 @@ sealed interface NextUp {
 class QueueRepository @Inject constructor(
     private val queueDao: QueueDao,
     private val itemDao: LibraryItemDao,
+    private val seriesDao: ItemSeriesDao,
     private val episodeDao: EpisodeDao,
     private val queuePrefs: QueuePrefs,
     private val clock: Clock,
@@ -154,11 +156,25 @@ class QueueRepository @Inject constructor(
         }
 
         if (!settings.continueSeries) return null
-        val finished = itemDao.byId(account.serverId, account.userId, finishedItemId) ?: return null
-        val seriesTitle = finished.seriesTitle ?: return null
-        val sequence = finished.seriesSequence ?: return null
-        val next = itemDao.nextInSeriesAfter(account.serverId, account.userId, seriesTitle, sequence) ?: return null
-        return NextUp.Suggested(resolve(account, next.id, null, true), reason = "Next in $seriesTitle")
+        // Every series this book is in, not just one of them. A book can end two series at
+        // once — the second Breakwater book is also the first Riverton one — and the item's
+        // own series columns can only name one, so asking them meant the other series
+        // silently stopped continuing. Memberships come back with the numbered ones first,
+        // so the series with a known position gets the first say.
+        seriesDao.forItem(account.serverId, account.userId, finishedItemId).forEach { membership ->
+            val sequence = membership.sequence ?: return@forEach
+            val next = itemDao.nextInSeriesAfter(
+                account.serverId,
+                account.userId,
+                membership.seriesName,
+                sequence,
+            ) ?: return@forEach
+            return NextUp.Suggested(
+                resolve(account, next.id, null, true),
+                reason = "Next in ${membership.seriesName}",
+            )
+        }
+        return null
     }
 
     /**

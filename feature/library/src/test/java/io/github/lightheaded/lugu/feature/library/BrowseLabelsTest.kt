@@ -33,18 +33,36 @@ class BrowseLabelsTest {
 
     @Test
     fun `a whole sequence loses its decimal point`() {
-        assertThat(seriesSequenceLabel("The Breakwater #2")).isEqualTo("Book 2")
+        assertThat(seriesSequenceLabel(2.0)).isEqualTo("Book 2")
+        assertThat(seriesSequenceLabelWithin("The Breakwater #2", "The Breakwater"))
+            .isEqualTo("Book 2")
     }
 
     @Test
     fun `a half number survives, because novellas are numbered that way`() {
-        assertThat(seriesSequenceLabel("Riverton #2.5")).isEqualTo("Book 2.5")
+        assertThat(seriesSequenceLabel(2.5)).isEqualTo("Book 2.5")
+        assertThat(seriesSequenceLabelWithin("Riverton #2.5", "Riverton")).isEqualTo("Book 2.5")
     }
 
     @Test
     fun `an entry with no number is left unnumbered rather than guessed at`() {
-        assertThat(seriesSequenceLabel("The Tidelands")).isNull()
         assertThat(seriesSequenceLabel(null)).isNull()
+        assertThat(seriesSequenceLabelWithin("The Tidelands", "The Tidelands")).isNull()
+        assertThat(seriesSequenceLabelWithin(null, "The Breakwater")).isNull()
+    }
+
+    /**
+     * The bug this page had, on the one screen whose whole job is putting a series in
+     * order. The server joins every series a book is in into one field, so reading the
+     * trailing number labels a two-series book with the *other* series' position — and it
+     * does so on the page of the series it is not the number for.
+     */
+    @Test
+    fun `a book in two series is numbered for the series being looked at`() {
+        val joined = "The Breakwater #1, The Tidelands #3"
+
+        assertThat(seriesSequenceLabelWithin(joined, "The Breakwater")).isEqualTo("Book 1")
+        assertThat(seriesSequenceLabelWithin(joined, "The Tidelands")).isEqualTo("Book 3")
     }
 
     @Test

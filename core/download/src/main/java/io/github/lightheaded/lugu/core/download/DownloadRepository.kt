@@ -21,6 +21,7 @@ import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -178,6 +179,19 @@ class DownloadRepository @Inject constructor(
             // Off the main thread: reading the cache blocks until it has finished
             // indexing, which on a phone full of books is not instant.
             .flowOn(Dispatchers.IO)
+
+    /**
+     * Bytes held by audio that was streamed rather than downloaded.
+     *
+     * Deliberately its own figure, never added to [observeBytesUsed]. The two are different
+     * kinds of thing: a download was asked for, counts against the cap and is never evicted,
+     * while retained streamed audio is disposable and is dropped oldest-first the moment it
+     * reaches its own bound. Summing them would put a number next to the cap that the cap
+     * does not govern, which is exactly the two-numbers-for-one-quantity mistake that once
+     * made a correct storage refusal look like a lie.
+     */
+    suspend fun retainedStreamBytes(): Long =
+        withContext(Dispatchers.IO) { downloadCache.retainedStreamBytes() }
 
     suspend fun status(account: ActiveAccount, itemId: String, episodeId: String?): DownloadStatus? =
         downloadDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))?.toStatus()

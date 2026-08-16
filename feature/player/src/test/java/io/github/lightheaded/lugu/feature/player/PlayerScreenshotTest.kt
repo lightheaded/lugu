@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import io.github.lightheaded.lugu.core.model.formatClock
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import org.junit.Rule
@@ -181,7 +182,7 @@ private fun PlayerPreview(playing: Boolean) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "Chapter 9 of 24 · ${formatTime(612.0)} / ${formatTime(2_040.0)}",
+                    "Chapter 9 of 24 · ${formatClock(612.0)} / ${formatClock(2_040.0)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -194,9 +195,9 @@ private fun PlayerPreview(playing: Boolean) {
                 valueRange = 0f..DURATION_SEC.toFloat(),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatTime(POSITION_SEC), style = MaterialTheme.typography.labelMedium)
+                Text(formatClock(POSITION_SEC), style = MaterialTheme.typography.labelMedium)
                 Text(
-                    "-${formatTime(DURATION_SEC - POSITION_SEC)}",
+                    "-${formatClock(DURATION_SEC - POSITION_SEC)}",
                     style = MaterialTheme.typography.labelMedium,
                 )
             }

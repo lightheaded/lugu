@@ -102,6 +102,88 @@ data class LibraryItemEntity(
     val syncedAtMs: Long,
 )
 
+/**
+ * Which series a book is in — one row per membership, so a book can be in several.
+ *
+ * The columns on [LibraryItemEntity] cannot express that, and it is not a hypothetical:
+ * the server keeps series membership in a join table with the sequence on the join row,
+ * and renders it for list payloads as a single comma-joined string. A book in two series
+ * arrives as "The Breakwater #1, The Tidelands #3", which no single-series column can
+ * hold and which the last-resort parse reads as a series called "The Breakwater #1, The
+ * Tidelands" at volume three — a series that does not exist, and a number that belongs to
+ * a different one.
+ *
+ * Rows are keyed on the series *name* rather than on [seriesId], because the id is only
+ * known when the server sent it and a membership recovered from the joined string has
+ * none. The server enforces one spelling of a name per library, and all three sources
+ * copy that spelling verbatim, so the name is a sound key within one item's library.
+ */
+@Entity(
+    tableName = "item_series",
+    primaryKeys = ["serverId", "userId", "libraryItemId", "seriesName"],
+    indices = [
+        Index(value = ["serverId", "userId", "seriesName"]),
+        Index(value = ["serverId", "userId", "libraryId"]),
+    ],
+)
+data class ItemSeriesEntity(
+    val serverId: String,
+    val userId: String,
+    val libraryItemId: String,
+    /** Denormalised from the item so a sync pass can sweep one library without a join. */
+    val libraryId: String,
+    val seriesName: String,
+    /** The server's own id, where the membership came from a source that carries one. */
+    val seriesId: String?,
+    /**
+     * This book's position in this series, and null when no position is known.
+     *
+     * Null covers both "the server has no sequence for this book" and "the sequence it
+     * has is not a number", because those mean the same thing to anything that orders a
+     * series. Ordering by anything else — the title, or the order rows arrived in — is
+     * how a shelf recommends the wrong volume, which is a spoiler rather than a glitch.
+     */
+    val sequence: Double?,
+    /**
+     * Where this book sits in the order the library-series listing returned, or null.
+     *
+     * Worth storing and worth being careful with. The server produces that order by
+     * natural-sorting the sequence strings, so where sequences exist it agrees with
+     * [sequence] and adds nothing — and where none exist its comparator has nothing to
+     * compare, leaving the order the scanner inserted the rows in. That is the order the
+     * server's own web client displays, which is reason enough to lay a series page out
+     * that way instead of alphabetically. It is not reason enough to tell somebody which
+     * book to read next, so "next in series" ignores this column and requires a
+     * [sequence].
+     */
+    val serverRank: Int?,
+    /** One of [SeriesOrigin]: how much this row can be trusted, and what may overwrite it. */
+    val origin: Int,
+    val syncedAtMs: Long,
+)
+
+/**
+ * Where a series membership came from, ordered by how much the server had to do with it.
+ *
+ * The distinction is what stops a cheap source from undoing an authoritative one. The
+ * paged library sync runs on every app open and can only ever parse the joined string; if
+ * it overwrote what the series listing established, every upgrade would be followed by a
+ * downgrade a few seconds later.
+ */
+object SeriesOrigin {
+    /**
+     * Recovered from the joined `seriesName` string, by the parse that predates all of
+     * this. At most one membership, and only as good as the string is unambiguous.
+     */
+    const val PARSED = 0
+
+    /**
+     * Stated by the server: the library-series listing, or the structured `metadata.series`
+     * array on an expanded item. Both are the join table rather than a rendering of it.
+     */
+    const val SERVER = 1
+}
+
 @Entity(
     tableName = "episode",
     primaryKeys = ["serverId", "userId", "id"],

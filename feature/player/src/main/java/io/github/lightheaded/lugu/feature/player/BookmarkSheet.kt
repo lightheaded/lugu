@@ -34,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.Bookmark
+import io.github.lightheaded.lugu.core.model.formatClock
+import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 
 /**
  * The places worth coming back to.
@@ -136,14 +138,14 @@ private fun BookmarkRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    formatTime(audioSec),
+                    formatClock(audioSec),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (kotlin.math.abs(speed - 1f) > 0.01f) {
                     Text(
-                        "about ${formatTime(wallClockSecondsAt(audioSec, speed))} of " +
-                            "listening at ${trimSpeed(speed)}x",
+                        "about ${formatClock(wallClockSecondsAt(audioSec, speed))} of " +
+                            "listening at ${formatSpeedNumber(speed)}x",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -196,7 +198,7 @@ private fun RenameBookmarkDialog(
         text = {
             Column {
                 Text(
-                    formatTime(bookmark.timeSec.toDouble()),
+                    formatClock(bookmark.timeSec.toDouble()),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.model.MediaType
+import io.github.lightheaded.lugu.core.model.PodcastTrim
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -194,6 +195,81 @@ class PlaybackPrefs @Inject constructor(
         }
     }
 
+    suspend fun setDefaultTrim(trim: PodcastTrim) {
+        store.edit { prefs ->
+            prefs[TRIM_INTRO] = trim.introSec.coerceIn(0, PodcastTrim.MAX_TRIM_SEC)
+            prefs[TRIM_OUTRO] = trim.outroSec.coerceIn(0, PodcastTrim.MAX_TRIM_SEC)
+            prefs[TRIM_ADVERTS] = trim.skipMarkedAdverts
+        }
+    }
+
+    suspend fun setAnnounceSkips(enabled: Boolean) {
+        store.edit { it[ANNOUNCE_SKIPS] = enabled }
+    }
+
+    suspend fun setBufferAheadMinutes(minutes: Int) {
+        store.edit { it[BUFFER_AHEAD] = minutes.coerceIn(1, StreamSettings.MAX_BUFFER_MINUTES) }
+    }
+
+    suspend fun setRetainStreamedMb(megabytes: Int) {
+        store.edit { it[RETAIN_STREAMED] = megabytes.coerceAtLeast(0) }
+    }
+
+    /**
+     * What this podcast trims, falling back to the default for a show nobody has set one
+     * for. Keyed on the podcast rather than the episode, because the sting belongs to the
+     * show and setting it per episode would mean setting it again every week.
+     */
+    suspend fun trimFor(podcastId: String): PodcastTrim {
+        val prefs = store.data.first()
+        if (prefs[trimSetKey(podcastId)] != true) return prefs.toPlayerSettings().skip.defaultTrim
+        return PodcastTrim(
+            introSec = prefs[trimIntroKey(podcastId)] ?: 0,
+            outroSec = prefs[trimOutroKey(podcastId)] ?: 0,
+            skipMarkedAdverts = prefs[trimAdvertsKey(podcastId)] ?: false,
+        )
+    }
+
+    fun observeTrimFor(podcastId: String): Flow<PodcastTrim> = store.data.map { prefs ->
+        if (prefs[trimSetKey(podcastId)] != true) {
+            prefs.toPlayerSettings().skip.defaultTrim
+        } else {
+            PodcastTrim(
+                introSec = prefs[trimIntroKey(podcastId)] ?: 0,
+                outroSec = prefs[trimOutroKey(podcastId)] ?: 0,
+                skipMarkedAdverts = prefs[trimAdvertsKey(podcastId)] ?: false,
+            )
+        }
+    }
+
+    /**
+     * Records this podcast's own trim. The "set" marker is stored separately from the
+     * values so that a show explicitly trimmed to zero stays at zero — without it, turning
+     * a trim off would read as "never set" and hand the show the default straight back.
+     */
+    suspend fun setTrimFor(podcastId: String, trim: PodcastTrim) {
+        store.edit { prefs ->
+            prefs[trimSetKey(podcastId)] = true
+            prefs[trimIntroKey(podcastId)] = trim.introSec.coerceIn(0, PodcastTrim.MAX_TRIM_SEC)
+            prefs[trimOutroKey(podcastId)] = trim.outroSec.coerceIn(0, PodcastTrim.MAX_TRIM_SEC)
+            prefs[trimAdvertsKey(podcastId)] = trim.skipMarkedAdverts
+        }
+    }
+
+    /** Puts a show back on the default, as distinct from setting it to nothing. */
+    suspend fun clearTrimFor(podcastId: String) {
+        store.edit { prefs ->
+            prefs.remove(trimSetKey(podcastId))
+            prefs.remove(trimIntroKey(podcastId))
+            prefs.remove(trimOutroKey(podcastId))
+            prefs.remove(trimAdvertsKey(podcastId))
+        }
+    }
+
+    /** True when this show has a trim of its own rather than following the default. */
+    suspend fun hasOwnTrim(podcastId: String): Boolean =
+        store.data.first()[trimSetKey(podcastId)] == true
+
     private fun Preferences.toPlayerSettings(): PlayerSettings = PlayerSettings(
         skipBackSec = this[SKIP_BACK] ?: DEFAULTS.skipBackSec,
         skipForwardSec = this[SKIP_FORWARD] ?: DEFAULTS.skipForwardSec,
@@ -231,6 +307,18 @@ class PlaybackPrefs @Inject constructor(
             resumeOnHeadphones = this[RESUME_HEADPHONES] ?: DEFAULTS.route.resumeOnHeadphones,
             resumeInCar = this[RESUME_CAR] ?: DEFAULTS.route.resumeInCar,
         ),
+        skip = SkipSettings(
+            defaultTrim = PodcastTrim(
+                introSec = this[TRIM_INTRO] ?: DEFAULTS.skip.defaultTrim.introSec,
+                outroSec = this[TRIM_OUTRO] ?: DEFAULTS.skip.defaultTrim.outroSec,
+                skipMarkedAdverts = this[TRIM_ADVERTS] ?: DEFAULTS.skip.defaultTrim.skipMarkedAdverts,
+            ),
+            announceSkips = this[ANNOUNCE_SKIPS] ?: DEFAULTS.skip.announceSkips,
+        ),
+        stream = StreamSettings(
+            bufferAheadMinutes = this[BUFFER_AHEAD] ?: DEFAULTS.stream.bufferAheadMinutes,
+            retainStreamedMb = this[RETAIN_STREAMED] ?: DEFAULTS.stream.retainStreamedMb,
+        ),
     )
 
     /** Order survives the round trip, because for the notification it is the setting. */
@@ -250,6 +338,12 @@ class PlaybackPrefs @Inject constructor(
      * change between episodes.
      */
     private fun speedKey(itemId: String) = floatPreferencesKey("speed_$itemId")
+
+    /** Trim is keyed on the podcast for the same reason speed is: the show, not the episode. */
+    private fun trimSetKey(podcastId: String) = booleanPreferencesKey("trim_set_$podcastId")
+    private fun trimIntroKey(podcastId: String) = intPreferencesKey("trim_intro_$podcastId")
+    private fun trimOutroKey(podcastId: String) = intPreferencesKey("trim_outro_$podcastId")
+    private fun trimAdvertsKey(podcastId: String) = booleanPreferencesKey("trim_adverts_$podcastId")
 
     private companion object {
         val DEFAULTS = PlayerSettings()
@@ -280,5 +374,11 @@ class PlaybackPrefs @Inject constructor(
         val NOTIFICATION_PERSISTENCE = stringPreferencesKey("notification_persistence")
         val HEADSET_NEXT = stringPreferencesKey("headset_next_action")
         val HEADSET_PREVIOUS = stringPreferencesKey("headset_previous_action")
+        val TRIM_INTRO = intPreferencesKey("trim_default_intro_sec")
+        val TRIM_OUTRO = intPreferencesKey("trim_default_outro_sec")
+        val TRIM_ADVERTS = booleanPreferencesKey("trim_default_adverts")
+        val ANNOUNCE_SKIPS = booleanPreferencesKey("announce_skips")
+        val BUFFER_AHEAD = intPreferencesKey("buffer_ahead_minutes")
+        val RETAIN_STREAMED = intPreferencesKey("retain_streamed_mb")
     }
 }

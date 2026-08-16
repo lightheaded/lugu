@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -27,18 +28,21 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.Series
 import io.github.lightheaded.lugu.core.sync.BrowseKind
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * The authors, series or narrators of the library, as a list of names to open.
@@ -51,6 +55,10 @@ import java.util.Locale
  * as well, and neither means anything to a list of names — there is nothing to order by
  * but the name, and nothing to filter on. What a list of several hundred authors does
  * need is the box, which is the same problem the episode list had.
+ *
+ * It also needs the same A–Z rail the grid has, and for a stronger reason: a grid row holds
+ * three covers and a name list holds one name, so four hundred authors is four hundred rows
+ * to flick past. It is the grid's [FastScrollRail], not a second one.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +69,8 @@ fun BrowseScreen(
     viewModel: BrowseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         modifier = modifier,
@@ -106,20 +116,54 @@ fun BrowseScreen(
                 return@Column
             }
 
-            // Plainly scrollable, with no index rail down the side: a fast-scroll component
-            // is being built for the grid, and two of them written a fortnight apart is how
-            // one list ends up scrolling differently from the next.
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp),
-            ) {
-                items(state.groups, key = { it.name }) { group ->
-                    ListItem(
-                        headlineContent = {
-                            Text(group.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            // The rail indexes the groups the screen is actually drawing, which is the list
+            // after the search box. Indexing the unfiltered set instead would offer a letter
+            // the search has already removed, and send the finger to a row that is not there.
+            val letterKeys = remember(state.groups) { state.groups.map { it.name } }
+            val letters = remember(letterKeys) { fastScrollLetters(letterKeys) }
+            val showRail = fastScrollEarnsItsPlace(
+                itemCount = letterKeys.size,
+                letterCount = letters.size,
+                // A list of names has one possible ordering and is always in it, so the
+                // rail's precondition is met by construction rather than by a setting.
+                orderedAlphabetically = true,
+            )
+            val currentLetter by remember(letterKeys) {
+                derivedStateOf { letterKeys.getOrNull(listState.firstVisibleItemIndex)?.let(::initialOf) }
+            }
+
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // The rail gets a strip of its own rather than floating over the names:
+                    // a two-line author's name running under the letters is unreadable, and
+                    // the row it belongs to is unhittable.
+                    contentPadding = PaddingValues(
+                        end = if (showRail) FAST_SCROLL_RAIL_WIDTH else 0.dp,
+                        bottom = 32.dp,
+                    ),
+                ) {
+                    items(state.groups, key = { it.name }) { group ->
+                        ListItem(
+                            headlineContent = {
+                                Text(group.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            },
+                            supportingContent = { Text(groupCountLine(group.itemCount, state.mediaType)) },
+                            modifier = Modifier.clickable { onOpenGroup(state.kind.id, group.name) },
+                        )
+                    }
+                }
+
+                if (showRail) {
+                    FastScrollRail(
+                        letters = letters,
+                        currentLetter = currentLetter,
+                        onLetterSelected = { letter ->
+                            val target = firstIndexOfLetter(letterKeys, letter)
+                            if (target >= 0) scope.launch { listState.scrollToItem(target) }
                         },
-                        supportingContent = { Text(groupCountLine(group.itemCount, state.mediaType)) },
-                        modifier = Modifier.clickable { onOpenGroup(state.kind.id, group.name) },
+                        modifier = Modifier.align(Alignment.CenterEnd),
                     )
                 }
             }
@@ -195,8 +239,8 @@ fun BrowseGroupScreen(
                     // volume the server gave no number to does not push its cover out of
                     // line with the rest of the row.
                     if (state.kind == BrowseKind.SERIES) {
-                        val sequence = remember(row.item.seriesName) {
-                            seriesSequenceLabel(row.item.seriesName)
+                        val sequence = remember(row.item.seriesName, state.name) {
+                            seriesSequenceLabelWithin(row.item.seriesName, state.name)
                         }
                         sequence?.let {
                             Text(
@@ -235,11 +279,23 @@ internal fun groupCountLine(count: Int, mediaType: MediaType): String {
  * for, and inventing one would be worse than leaving the card unnumbered: a made-up
  * sequence is how someone gets handed volume three of a trilogy first.
  */
-internal fun seriesSequenceLabel(seriesName: String?): String? {
-    val sequence = Series.sequenceOf(seriesName) ?: return null
+internal fun seriesSequenceLabel(sequence: Double?): String? {
+    if (sequence == null) return null
     val number = if (sequence % 1.0 == 0.0) sequence.toInt().toString() else sequence.toString()
     return "Book $number"
 }
+
+/**
+ * The number this book carries *in the series being looked at*.
+ *
+ * Anchored on the series name rather than read off the end of the string, because the
+ * server joins every series a book is in into one field: a book in two of them renders as
+ * "The Breakwater #1, The Tidelands #3", and taking the trailing number would label it
+ * "Book 3" on The Breakwater's own page — the other series' number, on the one screen
+ * whose entire job is putting a series in order.
+ */
+internal fun seriesSequenceLabelWithin(seriesName: String?, within: String): String? =
+    seriesSequenceLabel(Series.sequenceWithin(seriesName, within))
 
 /**
  * Why the list is empty, told apart.

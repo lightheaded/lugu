@@ -73,11 +73,21 @@ internal fun firstIndexOfLetter(keys: List<String>, letter: Char): Int =
  * "length" the rows are not in letter order at all, so a rail of letters would promise a
  * structure the list does not have and jump somewhere arbitrary. It is a lie, not a
  * shortcut, and it is hidden rather than made unreliable.
+ *
+ * [orderedAlphabetically] is asked as a plain question rather than taken as an [ItemSort],
+ * because the author, series and narrator lists want the same rail and have no sort at all:
+ * a name is the only thing they could be ordered by, so the answer there is a constant. A
+ * signature naming the grid's enum would have forced those lists into a second rail, which
+ * is how two lists a fortnight apart end up scrolling differently.
  */
-internal fun fastScrollEarnsItsPlace(itemCount: Int, sort: ItemSort, letterCount: Int): Boolean =
-    itemCount >= MIN_ITEMS && letterCount >= MIN_LETTERS && sort.isAlphabetical
+internal fun fastScrollEarnsItsPlace(
+    itemCount: Int,
+    letterCount: Int,
+    orderedAlphabetically: Boolean,
+): Boolean = itemCount >= MIN_ITEMS && letterCount >= MIN_LETTERS && orderedAlphabetically
 
-private val ItemSort.isAlphabetical: Boolean
+/** The grid's orderings that put rows in letter order, which is the rail's precondition. */
+internal val ItemSort.isAlphabetical: Boolean
     get() = this == ItemSort.TITLE || this == ItemSort.AUTHOR
 
 private const val MIN_ITEMS = 40

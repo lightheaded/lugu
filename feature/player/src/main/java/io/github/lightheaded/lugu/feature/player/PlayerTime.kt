@@ -1,47 +1,14 @@
 package io.github.lightheaded.lugu.feature.player
 
 /**
- * Time formatting for the player, kept in one place so a position reads the same wherever
- * it appears — the scrubber, a chapter row and a bookmark are all the same clock, and two
- * of them disagreeing by a rounding rule is the sort of thing that gets reported as lost
- * progress.
- */
-
-internal fun formatTime(seconds: Double): String {
-    val safe = seconds.coerceAtLeast(0.0).toLong()
-    val hours = safe / 3600
-    val minutes = (safe % 3600) / 60
-    val secs = safe % 60
-    return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, secs)
-    } else {
-        "%d:%02d".format(minutes, secs)
-    }
-}
-
-/**
- * A length rather than a place.
+ * The one piece of time arithmetic that belongs to the player rather than to the app.
  *
- * A chapter list shows both, and showing a length as "0:12:04" invites it to be read as a
- * timestamp, so lengths get units and places get colons.
+ * Writing a time down is a shared decision and now lives in `:core:model` alongside every
+ * other place a clock or a length is printed — a length that read "1 h 20 min" here and
+ * "1h 20m" in a list was the drift that moved it. What stays here is the conversion below,
+ * which is not formatting at all: it depends on the speed the player happens to be running
+ * at, so it is only meaningful where there is a player.
  */
-internal fun formatDurationLabel(seconds: Double): String {
-    val safe = seconds.coerceAtLeast(0.0).toLong()
-    val hours = safe / 3600
-    val minutes = (safe % 3600) / 60
-    return when {
-        hours > 0 && minutes > 0 -> "$hours h $minutes min"
-        hours > 0 -> "$hours h"
-        minutes > 0 -> "$minutes min"
-        else -> "$safe s"
-    }
-}
-
-/** Short form for a settings figure, where "300s" would be read as a mistake. */
-internal fun formatShortSeconds(seconds: Int): String {
-    val safe = seconds.coerceAtLeast(0)
-    return if (safe >= 60 && safe % 60 == 0) "${safe / 60} min" else "${safe}s"
-}
 
 /**
  * How long it actually takes to reach an audio position at the current speed.

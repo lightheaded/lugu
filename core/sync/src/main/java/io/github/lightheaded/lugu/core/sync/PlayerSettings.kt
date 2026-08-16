@@ -1,5 +1,7 @@
 package io.github.lightheaded.lugu.core.sync
 
+import io.github.lightheaded.lugu.core.model.PodcastTrim
+
 /** A button that can appear in the player, the notification, or both. */
 enum class TransportButton(val id: String, val label: String) {
     SKIP_BACK("skip_back", "Skip back"),
@@ -175,6 +177,57 @@ enum class NotificationPersistence(val id: String, val label: String) {
 }
 
 /**
+ * What gets trimmed from a podcast episode, and whether the trim announces itself.
+ *
+ * The per-podcast trim is the real setting; this is only the value a show starts from
+ * before anyone has set one, exactly as the default speed is. A listener who subscribes to
+ * one advert-heavy network can set the default once and let every other show keep zero.
+ *
+ * Announcing is on because a silent skip and a lost minute of audio are indistinguishable
+ * from the passenger seat, and the app's standing rule is that nothing corrects itself
+ * without saying so. The notice carries an undo, which is the part that makes an
+ * over-eager trim recoverable rather than merely visible.
+ */
+data class SkipSettings(
+    val defaultTrim: PodcastTrim = PodcastTrim(),
+    val announceSkips: Boolean = true,
+)
+
+/**
+ * What to do about a connection that comes and goes.
+ *
+ * A phone loses its network constantly — a lift, a tunnel, a cell handover — and a
+ * streamed book that stops for a two-second dropout has ended the listening session as
+ * surely as a crash. Two settings, because the two halves of the answer cost different
+ * things.
+ *
+ * Buffering ahead costs memory and data. Spoken word is the case where it is nearly free:
+ * at the bitrates an audiobook is encoded at, minutes of audio are a couple of megabytes,
+ * so lugu can hold a tunnel's worth where a video player could not.
+ *
+ * Keeping what was streamed costs disk. It buys two things: a re-prepare after a failure
+ * replays from disk instead of re-fetching everything the buffer was holding, and audio
+ * heard once is still there if the connection is gone the second time. Unlike a download
+ * it is disposable — evicted oldest-first when it reaches its bound, and never counted as
+ * a download, because deleting a book somebody asked for to make room for one they merely
+ * streamed is precisely what makes an offline mode untrustworthy.
+ */
+data class StreamSettings(
+    /** How far ahead to read while streaming. Minutes, because that is how a tunnel is measured. */
+    val bufferAheadMinutes: Int = 5,
+    /** Disk given to streamed audio, evicted oldest-first. Zero keeps none of it. */
+    val retainStreamedMb: Int = 256,
+) {
+    val retainsStreamed: Boolean get() = retainStreamedMb > 0
+
+    companion object {
+        val BUFFER_CHOICES_MIN = listOf(1, 2, 5, 10, 20)
+        val RETAIN_CHOICES_MB = listOf(0, 128, 256, 512, 1024, 2048)
+        const val MAX_BUFFER_MINUTES = 30
+    }
+}
+
+/**
  * What happens when the audio route changes.
  *
  * Pausing on disconnect is Android's own `becoming noisy` behaviour and is on by
@@ -234,6 +287,8 @@ data class PlayerSettings(
     val audio: AudioSettings = AudioSettings(),
     val sleep: SleepSettings = SleepSettings(),
     val route: RouteSettings = RouteSettings(),
+    val skip: SkipSettings = SkipSettings(),
+    val stream: StreamSettings = StreamSettings(),
 ) {
     val showsChapterButtonsInPlayer: Boolean
         get() = TransportButton.PREVIOUS_CHAPTER in playerButtons ||

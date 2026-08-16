@@ -5,6 +5,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
+import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.api.AbsJson
@@ -118,6 +119,7 @@ class DownloadEngine @Inject constructor(
         val (itemId, episodeKey, _) = DownloadKeys.parse(fileId) ?: return
         scope.launch {
             refreshLock.withLock {
+                enforceStorageCap()
                 downloadDao.findAny(itemId, episodeKey)?.let { refresh(it, error) }
             }
         }
@@ -142,8 +144,70 @@ class DownloadEngine @Inject constructor(
         tickerJob = scope.launch {
             while (downloadManager.currentDownloads.any { it.state == Download.STATE_DOWNLOADING }) {
                 delay(PROGRESS_TICK_MS)
-                refreshLock.withLock { downloadDao.unfinished().forEach { refresh(it) } }
+                refreshLock.withLock {
+                    // Before the fold rather than after: the sweep that notices the cap has
+                    // been reached is the same sweep that writes the rows, so a stop decided
+                    // here lands in the same pass rather than a second later.
+                    enforceStorageCap()
+                    downloadDao.unfinished().forEach { refresh(it) }
+                }
             }
+        }
+    }
+
+    /**
+     * Stops everything in flight once the bytes on disk reach the storage cap.
+     *
+     * The reasoning — why in flight and not only before, when exactly it fires, and why the
+     * partial bytes are kept rather than reclaimed — is in [StorageCap], which is also where
+     * the words the listener reads are written. This is only the part that has a database and
+     * a download service to act on.
+     *
+     * The row is written before the stop is sent. Stopping produces a state change, which
+     * comes back through [ProgressListener] and refreshes the row again — and that refresh
+     * carries `error = null`, keeping whatever the row already held. Written the other way
+     * round, the explanation would be overwritten by the event it caused.
+     */
+    private suspend fun enforceStorageCap() {
+        val inFlight = downloadDao.unfinished().filter {
+            it.state == DownloadState.DOWNLOADING || it.state == DownloadState.QUEUED
+        }
+        val capBytes = downloadPrefs.current().storageCapBytes
+        val bytesOnDisk = downloadCache.bytesUsed()
+        val action = StorageCap.actionFor(
+            bytesOnDisk = bytesOnDisk,
+            capBytes = capBytes,
+            anythingInFlight = inFlight.isNotEmpty(),
+        )
+        if (action == CapAction.CARRY_ON) return
+
+        val message = StorageCap.stoppedMessage(bytesOnDisk, capBytes)
+        inFlight.forEach { row ->
+            downloadDao.updateState(
+                serverId = row.serverId,
+                userId = row.userId,
+                itemId = row.libraryItemId,
+                episodeKey = row.episodeKey,
+                state = DownloadState.FAILED,
+                bytesDownloaded = row.bytesDownloaded,
+                bytesTotal = row.bytesTotal,
+                percent = row.percent,
+                completedAtMs = row.completedAtMs,
+                error = message,
+            )
+        }
+
+        // A null id stops every download, which is what a cap that applies to the whole
+        // phone means: stopping only the item whose bytes happened to cross the line would
+        // leave the others racing each other past it.
+        runCatching {
+            DownloadService.sendSetStopReason(
+                context,
+                LuguDownloadService::class.java,
+                /* id = */ null,
+                STOP_REASON_OVER_CAP,
+                /* foreground = */ false,
+            )
         }
     }
 
@@ -193,5 +257,12 @@ class DownloadEngine @Inject constructor(
 
         /** Matches the download notification's own update interval; a bar that moves once a second reads as alive. */
         const val PROGRESS_TICK_MS = 1_000L
+
+        /**
+         * The only stop reason lugu ever sets, which is what lets [DownloadAggregation] read
+         * a stopped file as "ran into the storage cap" with no ambiguity. Any value but zero
+         * would do; a recognisable one makes a dump of the download index legible.
+         */
+        const val STOP_REASON_OVER_CAP = 1
     }
 }

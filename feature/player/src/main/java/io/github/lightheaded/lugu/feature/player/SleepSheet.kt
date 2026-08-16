@@ -17,12 +17,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.SleepMode
 import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SleepTimerState
+import io.github.lightheaded.lugu.core.model.formatShortSeconds
 import io.github.lightheaded.lugu.core.sync.SleepSettings
 import kotlin.math.abs
 import kotlin.math.ceil
