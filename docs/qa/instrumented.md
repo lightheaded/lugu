@@ -67,9 +67,27 @@ lugu.test.playQuery=...
 ```
 
 The same four values are also read from the environment as `LUGU_DEV_SERVER_URL`,
-`LUGU_DEV_USER`, `LUGU_DEV_PASS` and `LUGU_TEST_PLAY_QUERY`. The file wins where both
-exist, so a stray variable cannot quietly redirect your own tests at something else. The
-release build ignores both and always compiles these in empty — a shipped APK never
+`LUGU_DEV_USER`, `LUGU_DEV_PASS` and `LUGU_TEST_PLAY_QUERY`. **The environment wins where
+both exist**, which is how you point a machine that already has a server configured at a
+throwaway container for one command:
+
+```sh
+LUGU_DEV_SERVER_URL=http://10.0.2.2:13378 LUGU_DEV_USER=… LUGU_DEV_PASS=… \
+LUGU_TEST_PLAY_QUERY="Lighthouse Wakes" ./gradlew connectedDebugAndroidTest
+```
+
+This started out the other way round, on the reasoning that a stray variable should not be
+able to redirect your own tests. It was changed because that reasoning cost more than it
+was worth: diagnosing a sync failure meant running the suite against a container while
+`local.properties` pointed somewhere else, and there was no way to say so for one
+invocation. An explicit variable beating an ambient file is also the ordinary precedence
+everywhere else.
+
+Both `:app` and `:harness` read them the same way, and they must stay that way — the app
+signing into one server while the harness plays a title from another is the failure this
+warns against.
+
+The release build ignores both and always compiles these in empty — a shipped APK never
 carries an address.
 
 ### Getting a server without having one
