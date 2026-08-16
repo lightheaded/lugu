@@ -107,6 +107,13 @@ builds install over the top.
 Requires Android 8.0 (API 26) or newer and an Audiobookshelf server on v2.26 or newer
 (the JWT auth model; older servers used permanent tokens and are not supported).
 
+**For Android Auto, turn on unknown sources first.** Android Auto lists only apps installed
+from the Play Store, and gives no hint that it is hiding anything — lugu will simply not be
+in the car, and not in the "customise launcher" list either. Settings → Apps → Android Auto
+→ Additional settings, tap **Version** ten times to unlock developer mode, then three dots →
+Developer settings → **Unknown sources**. Force-stop Android Auto afterwards; it does not
+rescan on its own.
+
 ## Build
 
 ```
