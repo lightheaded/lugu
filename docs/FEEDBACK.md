@@ -98,6 +98,12 @@ Links should be consistent **everywhere**, not just on one screen:
 |---|---|
 | Now-playing title links to the item page | done |
 | Author/series/narrator links | done 16 Aug |
+| Now-playing **cover** links to the item page too | done 16 Aug |
+
+**The cover was the obvious tap and was not one** (found by Tom, 16 Aug). The title above it
+already led to the book, but the cover is the biggest thing on the screen and is the picture
+*of* the book — it is what a thumb goes to. It now leads exactly where the title does, which
+for a podcast episode is the show's page, since that is where an episode lives.
 
 **The pages came before the links**, which is why this took until now. Linking to a dead
 end is worse than not linking, so the author, series and narrator on an item page stayed
