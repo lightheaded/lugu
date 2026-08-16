@@ -1015,6 +1015,26 @@ instrumented-test APK off for any module with no `src/androidTest` directory, an
 on asking the whole build for it. Adding a test directory opts a module back in, with
 nothing to remember.
 
+### And behind it, a real failure it had been hiding
+
+API 26 went green. API 36 did not, and for the first time the run got far enough to say
+something true: `LaunchSmokeTest` failing with "No compose hierarchies found in the app",
+which reads as the app not starting — the exact thing that test exists to catch.
+
+The app was starting. The logcat shows `MainActivity` reaching RESUMED and being paused two
+tenths of a second later, behind `GrantPermissionsActivity`. lugu asks for the notification
+permission on first launch, on purpose, because the media notification *is* the player for
+most of a listening session; a freshly created emulator takes that dialog every run, and the
+dialog is a separate activity sitting over the app with nothing of ours left resumed to look
+at. Android 13 is where that permission starts existing, which is precisely why only the API
+36 leg saw it and why it looked like a platform problem rather than a first-launch one.
+
+The tests now grant it before the activity launches. Nothing about the product changed: the
+dialog is correct behaviour on a real phone, and it is only a test that mistook it for a
+crash. Two red jobs for two unrelated reasons, one of them only visible once the other was
+out of the way — which is the argument for never leaving a suite red, since the second
+failure had been sitting behind the first the whole time.
+
 ### The cover is a link now
 
 The now-playing title has led to the book since M1; the cover under it did not, and the cover
