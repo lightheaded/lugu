@@ -442,7 +442,7 @@ was last playing?*
 |---|---|
 | **Start playing when a chosen device connects** | done 16 Aug |
 | **Only for named devices**, not any headphones | done 16 Aug |
-| **Wait a configurable few seconds first** | done 16 Aug |
+| **Wait a configurable few seconds first** | done 16 Aug, then replaced by watching for the switchover — see below |
 | **Always the last thing played**, from cold | done 16 Aug |
 | **Show the app version** | done 16 Aug, Settings → About |
 
@@ -453,11 +453,22 @@ with the app closed and the process dead, which is the whole of what was being a
 and it fires for any headphones rather than a chosen pair. Both settings now exist, and
 say plainly which is which.
 
-**The delay was the interesting part of the request.** It looks like a workaround and is
-not: a headset announces itself before the audio route has moved, so a book started inside
-that gap plays its first sentence to the room instead. The wait is a real setting for a
-real property of the hardware, defaulting to five seconds. When it expires, the route is
-checked again — a headset that connected and dropped straight out again gets nothing.
+**The delay was the interesting part of the request, and the follow-up was better still:**
+*the delay is a workaround for the audio channel switchover — can we detect when it has
+switched and start then?* Yes, and it is the right question. A headset announces itself
+before the audio route has moved, and a book started inside that gap plays its first
+sentence to the room; a timer is a guess at how long that takes, on hardware that varies.
+
+The platform reports output devices arriving, so **the switchover is watched for rather
+than guessed at**. On a fast headset a book now starts sooner than any delay anybody would
+have configured; on a slow one it waits longer than most people would have set, and is
+right. If no audio output turns up within twenty seconds the start is abandoned — plenty
+of Bluetooth devices are not audio devices, and a watch connecting should end there.
+
+The setting survives as a deliberate *extra* on top, defaulting to one second, because a
+device appearing in the output list and the audio policy having finished moving are not
+quite the same moment. **None is a choice**, for the case the follow-up named: wanting the
+book as early as it can possibly start. Nobody is guessing at the switchover either way.
 
 **What Tasker could not offer, and this does, is a way to say no.** The waiting notification
 carries a "Not now" button, and refusing suppresses the rest of that connection's events for
@@ -465,9 +476,12 @@ a minute — because connecting a headset fires several of them, seconds apart, 
 that the next one would restart the countdown a moment after it was cancelled. A cancel
 button that visibly does not work is worse than none.
 
-**Three things are never played over**: a call in progress, another app already holding the
-audio, and a device that is no longer there. The record says which of them refused, because
-the question this feature generates is always "why did it not start".
+**Four things are never played over**: a call in progress, another app already holding the
+audio, a device that is no longer there, and one the audio never moved to at all. The
+record says which of them refused, because the question this feature generates is always
+"why did it not start" — and the last two are deliberately separate lines, since a headset
+that dropped out and a smartwatch that was never going to play anything are different
+problems wearing the same shape.
 
 **The MAC address never appears anywhere.** On Android 12 and later lugu never learns it:
 the system shows its own device picker, and what comes back is an association, not a device

@@ -103,11 +103,13 @@ class AutoPlayTest {
     }
 
     private fun conditions(
+        audioSwitchedOver: Boolean = true,
         deviceStillConnected: Boolean = true,
         someoneElseHasTheAudio: Boolean = false,
         onACall: Boolean = false,
         hasSomethingToPlay: Boolean = true,
     ) = AutoPlayConditions(
+        audioSwitchedOver = audioSwitchedOver,
         deviceStillConnected = deviceStillConnected,
         someoneElseHasTheAudio = someoneElseHasTheAudio,
         onACall = onACall,
@@ -117,6 +119,20 @@ class AutoPlayTest {
     @Test
     fun `all clear starts playing`() {
         assertThat(AutoPlay.decide(conditions())).isEqualTo(AutoPlayOutcome.Start)
+    }
+
+    /**
+     * A watch, a keyboard, a fitness tracker: all of them connect, none of them is somewhere
+     * to play a book. Told apart from a headset that disconnected because the two are
+     * genuinely different and the record has to say which happened.
+     */
+    @Test
+    fun `a device the audio never moved to is not played to`() {
+        val outcome = AutoPlay.decide(
+            conditions(audioSwitchedOver = false, deviceStillConnected = false),
+        )
+
+        assertThat(outcome).isEqualTo(AutoPlayOutcome.Refuse(AutoPlayRefusal.NO_AUDIO_ROUTE))
     }
 
     @Test
@@ -155,6 +171,7 @@ class AutoPlayTest {
     fun `the reason given is the most important one`() {
         val outcome = AutoPlay.decide(
             conditions(
+                audioSwitchedOver = false,
                 deviceStillConnected = false,
                 onACall = true,
                 someoneElseHasTheAudio = true,
@@ -162,7 +179,17 @@ class AutoPlayTest {
             ),
         )
 
-        assertThat(outcome).isEqualTo(AutoPlayOutcome.Refuse(AutoPlayRefusal.DEVICE_GONE))
+        assertThat(outcome).isEqualTo(AutoPlayOutcome.Refuse(AutoPlayRefusal.NO_AUDIO_ROUTE))
+    }
+
+    /**
+     * The audio switching over is waited for rather than guessed at, so the setting on top of
+     * it is allowed to be nothing at all — which is what somebody who wants their book as
+     * early as it can start will choose.
+     */
+    @Test
+    fun `no extra wait is an offered choice`() {
+        assertThat(AutoPlay.WAIT_CHOICES_SEC).contains(0)
     }
 
     @Test

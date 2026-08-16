@@ -17,19 +17,21 @@ foreground-service start being refused — behave differently in release.
    lugu's. The headset must be switched on and connected, or it will not be in the list.
 3. The device appears by name. On Android 12 exactly it will read "Bluetooth device", which
    is expected and is in the backlog.
-4. Leave the wait at five seconds for the first run.
+4. Leave the extra wait at one second for the first run. Playback does not wait a fixed
+   time — it waits for the audio to move to the device, and this is added on top.
 
 ## The pass
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Play a book briefly, pause, then swipe the app away and `adb shell am force-stop` it. Connect the headset | A notification appears naming the device and counting down; the book starts after the wait, at the position it stopped at, **and at the speed it was last played at** |
+| 1 | Play a book briefly, pause, then swipe the app away and `adb shell am force-stop` it. Connect the headset | A notification appears naming the device. It reads "waiting for the audio to switch over" until the route moves, then counts down the extra second; the book starts at the position it stopped at, **and at the speed it was last played at** |
 | 2 | Repeat, and press **Not now** during the countdown | Nothing plays. The notification goes. It does not come back a few seconds later when the audio profile connects — that is the suppression window, and it is the most likely thing to be wrong |
 | 3 | Start music in another app, then connect the headset | Nothing happens at all. The service is never started, so there is no notification either |
 | 4 | Take a call, then connect the headset | Nothing plays. The record says "a call was in progress" |
 | 5 | Connect the headset and immediately switch it off again | Nothing plays. The record says "the device had disconnected again" |
 | 6 | Connect a *different* headset, one not in the list | Nothing at all — no notification, no service, nothing in the record |
-| 7 | Set the wait to none, and connect | Plays as good as immediately. Listen for the first word: if it is clipped or comes out of the phone's speaker, that is the gap the wait exists for, and it is the measurement that says what the default should be |
+| 7 | Set the extra wait to **none**, and connect | Plays the moment the audio has switched. Listen hard for the first word: if it is clipped or comes out of the phone's speaker, the output arriving is running ahead of the policy actually moving, and one second is the right default. If it is clean over several tries on more than one headset, the default should be none |
+| 7b | Connect a Bluetooth device that is **not** an audio device — a watch, a keyboard — after adding it to the list | The notification says it is waiting, then gives up after about twenty seconds. The record says "the audio never switched over to it", not that the device disconnected |
 | 8 | **Restart the phone**, do not open lugu, and connect the headset | It still works. This is the one that proves the observation was re-armed on boot rather than only on app start |
 | 9 | With a book already playing, connect the headset | Playback carries on untouched. No second notification |
 | 10 | Remove the device from the list, then connect it | Nothing happens. Then check Settings → Apps → lugu → the system's own companion-device list, if the phone exposes one: the association should be gone, not merely unused |
