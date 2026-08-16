@@ -28,6 +28,7 @@ import org.junit.runner.RunWith
  * use. A name with spaces in it needs DEX version 040, which needs minSdk 30; lugu's minSdk
  * is 26, so the test APK will not dex with them.
  */
+@BlackBox
 @RunWith(AndroidJUnit4::class)
 @LargeTest
 class LaunchSmokeTest {

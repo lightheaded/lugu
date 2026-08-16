@@ -121,11 +121,17 @@ jobs:
             variant: debug
             gradle-task: connectedDebugAndroidTest
             gradle-args: ''
+          # Only the black-box tests run here, and that is a property of how instrumentation
+          # works rather than a choice. The androidTest APK is compiled separately and loaded
+          # into the app's process, so a test that names a lugu class cannot resolve it once
+          # R8 has renamed that class — which is the whole point of this leg. Those tests run
+          # on the debug legs above. What is left answers the question this one exists for:
+          # does the app R8 produced still start, build its Hilt graph and draw a screen.
           - api-level: 36
             target: google_apis
             variant: minified
             gradle-task: connectedMinifiedAndroidTest
-            gradle-args: '-Plugu.testMinified'
+            gradle-args: '-Plugu.testMinified -Pandroid.testInstrumentationRunnerArguments.annotation=io.github.lightheaded.lugu.BlackBox'
     name: instrumented (${{ matrix.api-level }}, ${{ matrix.target }}, ${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v7
