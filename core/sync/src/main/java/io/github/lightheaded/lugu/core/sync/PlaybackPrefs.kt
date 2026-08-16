@@ -96,6 +96,14 @@ class PlaybackPrefs @Inject constructor(
         store.edit { it[SKIP_SILENCE] = enabled }
     }
 
+    suspend fun setDuckOnInterruption(enabled: Boolean) {
+        store.edit { it[DUCK_ON_INTERRUPTION] = enabled }
+    }
+
+    suspend fun setSleepSurvivesPause(enabled: Boolean) {
+        store.edit { it[SLEEP_SURVIVES_PAUSE] = enabled }
+    }
+
     suspend fun setVolumeBoostDb(db: Int) {
         store.edit { it[VOLUME_BOOST_DB] = db.coerceIn(0, AudioSettings.MAX_BOOST_DB) }
     }
@@ -203,6 +211,7 @@ class PlaybackPrefs @Inject constructor(
         audio = AudioSettings(
             skipSilence = this[SKIP_SILENCE] ?: DEFAULTS.audio.skipSilence,
             volumeBoostDb = this[VOLUME_BOOST_DB] ?: DEFAULTS.audio.volumeBoostDb,
+            duckOnInterruption = this[DUCK_ON_INTERRUPTION] ?: DEFAULTS.audio.duckOnInterruption,
         ),
         sleep = SleepSettings(
             fadeSeconds = this[SLEEP_FADE] ?: DEFAULTS.sleep.fadeSeconds,
@@ -210,6 +219,7 @@ class PlaybackPrefs @Inject constructor(
             shakeSensitivity = this[SLEEP_SHAKE_SENSITIVITY] ?: DEFAULTS.sleep.shakeSensitivity,
             extendMinutes = this[SLEEP_EXTEND] ?: DEFAULTS.sleep.extendMinutes,
             rewindOnWakeSec = this[SLEEP_REWIND] ?: DEFAULTS.sleep.rewindOnWakeSec,
+            survivesPause = this[SLEEP_SURVIVES_PAUSE] ?: DEFAULTS.sleep.survivesPause,
         ),
         route = RouteSettings(
             pauseOnDisconnect = this[PAUSE_ON_DISCONNECT] ?: DEFAULTS.route.pauseOnDisconnect,
@@ -252,6 +262,8 @@ class PlaybackPrefs @Inject constructor(
         val SPEED_PRESETS = stringPreferencesKey("speed_presets")
         val SKIP_SILENCE = booleanPreferencesKey("skip_silence")
         val VOLUME_BOOST_DB = intPreferencesKey("volume_boost_db")
+        val DUCK_ON_INTERRUPTION = booleanPreferencesKey("duck_on_interruption")
+        val SLEEP_SURVIVES_PAUSE = booleanPreferencesKey("sleep_survives_pause")
         val SLEEP_FADE = intPreferencesKey("sleep_fade_seconds")
         val SLEEP_SHAKE = booleanPreferencesKey("sleep_shake_to_extend")
         val SLEEP_SHAKE_SENSITIVITY = intPreferencesKey("sleep_shake_sensitivity")

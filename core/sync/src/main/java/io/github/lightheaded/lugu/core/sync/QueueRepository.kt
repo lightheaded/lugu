@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.core.sync
 
 import io.github.lightheaded.lugu.core.db.EpisodeDao
+import io.github.lightheaded.lugu.core.db.EpisodeEntity
 import io.github.lightheaded.lugu.core.db.LibraryItemDao
 import io.github.lightheaded.lugu.core.db.QueueDao
 import io.github.lightheaded.lugu.core.db.QueueEntity
@@ -28,6 +29,42 @@ data class QueueItem(
     /** True when a continuation rule suggested it rather than the listener adding it. */
     val isSuggestion: Boolean,
 )
+
+/**
+ * Which way round a podcast runs.
+ *
+ * Kept pure and apart from the queue because it is the whole of the disagreement upstream
+ * has two open threads about (app#473 and server#1321): continuation always walked forwards
+ * in publication order, which is right for a serial being worked through and wrong for a
+ * news show, where the thing to play after this morning's episode is yesterday's, not next
+ * week's. No client can tell the two apart from the feed, so it is a setting — and being a
+ * setting, it is worth being able to hold it to a test rather than to a database ordering.
+ */
+object PodcastOrder {
+
+    /**
+     * The episode to play after the one that has just finished, or null at the end of the
+     * road in whichever direction is being travelled.
+     *
+     * [candidates] is every unfinished episode of the one podcast, in any order — as
+     * `EpisodeDao.latestUnfinished` returns them. Oldest-first listening moves up that list
+     * to the earliest episode published after the one just heard; newest-first moves down it
+     * to the latest episode published before it. Both comparisons are strict, so two
+     * episodes sharing a publication instant cannot follow each other round in a circle.
+     */
+    fun nextEpisode(
+        candidates: List<EpisodeEntity>,
+        afterPublishedAtMs: Long,
+        oldestFirst: Boolean,
+    ): EpisodeEntity? = if (oldestFirst) {
+        candidates.filter { it.publishedAtMs > afterPublishedAtMs }.minByOrNull { it.publishedAtMs }
+    } else {
+        candidates.filter { it.publishedAtMs < afterPublishedAtMs }.maxByOrNull { it.publishedAtMs }
+    }
+
+    /** What the notice says, which differs because one direction goes back through the archive. */
+    fun reasonFor(oldestFirst: Boolean): String = if (oldestFirst) "Next episode" else "Earlier episode"
+}
 
 /** Where the next thing to play came from, which decides whether it starts unasked. */
 sealed interface NextUp {
@@ -97,15 +134,22 @@ class QueueRepository @Inject constructor(
         if (finishedEpisodeId != null) {
             if (!settings.continuePodcast) return null
             val finished = episodeDao.byId(account.serverId, account.userId, finishedEpisodeId) ?: return null
-            val next = episodeDao.nextAfter(
+            // This podcast's own answer where it has one, the default otherwise.
+            val oldestFirst = queuePrefs.podcastOldestFirst(finishedItemId)
+            // Unbounded on purpose: the episode to play next can be anywhere in the
+            // backlog, and a window would quietly answer with the wrong one for anybody
+            // working through an archive. The list is one podcast's unfinished episodes,
+            // which the feed itself keeps to a size worth holding.
+            val candidates = episodeDao.latestUnfinished(
                 account.serverId,
                 account.userId,
                 finishedItemId,
-                finished.publishedAtMs,
-            ) ?: return null
+                Int.MAX_VALUE,
+            )
+            val next = PodcastOrder.nextEpisode(candidates, finished.publishedAtMs, oldestFirst) ?: return null
             return NextUp.Suggested(
                 resolve(account, finishedItemId, next.id, true),
-                reason = "Next episode",
+                reason = PodcastOrder.reasonFor(oldestFirst),
             )
         }
 

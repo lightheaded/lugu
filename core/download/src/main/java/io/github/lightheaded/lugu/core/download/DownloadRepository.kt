@@ -47,6 +47,42 @@ sealed interface DownloadRefusal {
     data class OverStorageCap(val usedBytes: Long, val capBytes: Long, val neededBytes: Long) : DownloadRefusal
 
     data object NoAudioFiles : DownloadRefusal
+
+    /**
+     * The item's audio is in a format this device cannot decode, so the server would only
+     * ever serve it as a transcode — and a transcode is not a thing that can be kept.
+     *
+     * ## Why HLS downloading is not implemented
+     *
+     * Media3 can download HLS: [androidx.media3.exoplayer.offline.DownloadHelper] walks a
+     * playlist and fetches its segments, and on paper that closes this gap. It is not
+     * done here, and the reasons are worth writing down once so the question does not
+     * have to be reopened from nothing.
+     *
+     * The playlist is not addressable. Audiobookshelf mints a transcode against a play
+     * session, and the session expires and takes its segment URLs with it. Every other
+     * download in lugu is keyed by item and track index precisely so that the bytes
+     * survive a changed server address; an HLS download would instead be pinned to a
+     * session id that is dead within the hour, which is the shape of the orphaned-download
+     * bug the whole cache-key scheme exists to avoid.
+     *
+     * It cannot be verified. Every other download is checked by byte count against a size
+     * the server reported before the first request. A transcode has no size until it has
+     * been produced, so a truncated one is indistinguishable from a complete one — and a
+     * download that cannot be told apart from a broken download is worse than no download,
+     * because the failure surfaces in a tunnel rather than on the Downloads screen.
+     *
+     * It is the wrong copy. The result would be a re-encode, at a bitrate the server
+     * chose, of a file the server already holds intact. Storing a worse copy of something
+     * that exists is an odd thing for an offline mode to spend a phone's storage on, and
+     * seeking within it is limited to the six-second segment grid.
+     *
+     * The direction that actually helps is the other one: making fewer items transcode in
+     * the first place, which is what [DirectPlay.SUPPORTED_MIME_TYPES] is for. What is
+     * left after that is a genuinely undecodable file, and the honest answer to it is to
+     * say so rather than to keep a copy that cannot be played.
+     */
+    data class TranscodeOnly(val mimeTypes: List<String>) : DownloadRefusal
 }
 
 class DownloadRefusedException(val refusal: DownloadRefusal) : Exception(describe(refusal)) {
@@ -67,6 +103,25 @@ class DownloadRefusedException(val refusal: DownloadRefusal) : Exception(describ
                     "in Settings, or remove a download."
 
             DownloadRefusal.NoAudioFiles -> "The server lists no audio files for this item."
+
+            // Named formats rather than "unsupported", for the same reason the cap
+            // refusal prints its numbers: the listener can go and look at the file. It
+            // does not say the download failed, because nothing was attempted and nothing
+            // went wrong — the item is simply not one that can be kept.
+            is DownloadRefusal.TranscodeOnly ->
+                "The server would send this as a transcoded stream rather than as a " +
+                    "file, because its audio is ${andList(refusal.mimeTypes.map(DirectPlay::describe))} " +
+                    "and this device has no decoder for it. A transcode is made for one " +
+                    "play session and expires with it, so there is nothing stable to " +
+                    "keep. Converting the file on the server to a format this device " +
+                    "decodes — MP3, M4B, FLAC, Opus or WAV — is what would make it " +
+                    "downloadable."
+        }
+
+        /** "a", "a and b", "a, b and c" — a sentence, not a debug dump. */
+        fun andList(parts: List<String>): String = when (parts.size) {
+            0, 1 -> parts.joinToString()
+            else -> parts.dropLast(1).joinToString(", ") + " and " + parts.last()
         }
     }
 }
@@ -167,6 +222,16 @@ class DownloadRepository @Inject constructor(
         }
         if (manifest == null || manifest.tracks.isEmpty()) {
             throw DownloadRefusedException(DownloadRefusal.NoAudioFiles)
+        }
+
+        // Before the cap, deliberately. The file endpoint would hand over the original
+        // bytes of a transcode-only item quite happily, and they would sit there charged
+        // against the cap until someone pressed play in a tunnel and found the item
+        // silent. Refusing on format first also keeps the cap message honest: "there is
+        // no room for this" would be the wrong reason.
+        val transcodeOnly = DirectPlay.transcodeOnlyMimeTypes(manifest)
+        if (transcodeOnly.isNotEmpty()) {
+            throw DownloadRefusedException(DownloadRefusal.TranscodeOnly(transcodeOnly))
         }
 
         val estimatedBytes = estimateBytes(manifest, domain.durationSec)

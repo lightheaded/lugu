@@ -78,6 +78,7 @@ import kotlinx.coroutines.launch
 fun LibraryScreen(
     onOpenItem: (String) -> Unit,
     onBrowse: (kind: String) -> Unit,
+    onOpenCollections: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
@@ -128,7 +129,7 @@ fun LibraryScreen(
         if (state.selectionActive) {
             LibrarySelectionBar(state = state, viewModel = viewModel)
         } else {
-            BrowseLinks(onBrowse = onBrowse)
+            BrowseLinks(onBrowse = onBrowse, onOpenCollections = onOpenCollections)
 
             ListControlsBar(
                 query = state.query,
@@ -231,16 +232,25 @@ fun LibraryScreen(
 }
 
 /**
- * The other three ways into a library.
+ * The other four ways into a library.
  *
  * Deliberately understated. Title is how this library is browsed by default and the grid
- * behind these is the answer most of the time; author, series and narrator are the other
- * three questions people ask of a collection, not a rival to the thing already on screen.
- * Above the search box rather than below it, because they leave for another page — putting
- * them between the filters and the grid would read as controls over the grid.
+ * behind these is the answer most of the time; author, series, narrator and collections
+ * are the other questions people ask of a library, not a rival to the thing already on
+ * screen. Above the search box rather than below it, because they leave for another page —
+ * putting them between the filters and the grid would read as controls over the grid.
+ *
+ * Collections sits with the other three rather than above them even though it is the odd
+ * one out: the first three group by what the metadata says, and a collection groups by what
+ * a person decided. That difference matters to how the list was built and not at all to
+ * somebody looking for a way in.
  */
 @Composable
-private fun BrowseLinks(onBrowse: (kind: String) -> Unit, modifier: Modifier = Modifier) {
+private fun BrowseLinks(
+    onBrowse: (kind: String) -> Unit,
+    onOpenCollections: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Row(
         modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -250,6 +260,9 @@ private fun BrowseLinks(onBrowse: (kind: String) -> Unit, modifier: Modifier = M
             TextButton(onClick = { onBrowse(kind.id) }) {
                 Text(kind.label, style = MaterialTheme.typography.labelLarge)
             }
+        }
+        TextButton(onClick = onOpenCollections) {
+            Text("Collections", style = MaterialTheme.typography.labelLarge)
         }
     }
 }

@@ -355,6 +355,22 @@ class LibraryRepository @Inject constructor(
         }
     }
 
+    /**
+     * Forgets one item, index and all.
+     *
+     * The sweep after a full sync deletes by timestamp across a whole library, which is the
+     * wrong shape for a single deletion arriving over the socket — and doing it by hand at
+     * the call site means the full-text index gets forgotten exactly once, by whoever
+     * forgets. The index is the part that fails quietly: a search result pointing at a row
+     * that no longer exists opens a blank page.
+     */
+    suspend fun remove(account: ActiveAccount, itemId: String) {
+        itemDao.delete(account.serverId, account.userId, itemId)
+        ftsDao.deleteByItemIds(account.serverId, account.userId, listOf(itemId))
+        episodeDao.deleteForItem(account.serverId, account.userId, itemId)
+        chapterDao.deleteForItem(account.serverId, account.userId, itemId)
+    }
+
     suspend fun chapters(account: ActiveAccount, itemId: String) =
         chapterDao.forItem(account.serverId, account.userId, itemId)
 

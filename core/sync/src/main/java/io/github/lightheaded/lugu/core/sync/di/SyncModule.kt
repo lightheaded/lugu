@@ -15,6 +15,7 @@ import io.github.lightheaded.lugu.core.api.ServerUrlProvider
 import io.github.lightheaded.lugu.core.api.TokenStore
 import io.github.lightheaded.lugu.core.db.BookmarkDao
 import io.github.lightheaded.lugu.core.db.ChapterDao
+import io.github.lightheaded.lugu.core.db.CollectionDao
 import io.github.lightheaded.lugu.core.db.DownloadDao
 import io.github.lightheaded.lugu.core.db.EpisodeDao
 import io.github.lightheaded.lugu.core.db.LibraryDao
@@ -66,6 +67,8 @@ object DatabaseModule {
     @Provides fun libraryItemFtsDao(db: LuguDatabase): LibraryItemFtsDao = db.libraryItemFtsDao()
 
     @Provides fun bookmarkDao(db: LuguDatabase): BookmarkDao = db.bookmarkDao()
+
+    @Provides fun collectionDao(db: LuguDatabase): CollectionDao = db.collectionDao()
 }
 
 @Module

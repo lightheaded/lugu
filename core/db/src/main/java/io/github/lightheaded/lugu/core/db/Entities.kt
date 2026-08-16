@@ -22,6 +22,17 @@ data class ServerEntity(
     val defaultLibraryId: String?,
     val serverVersion: String?,
     val isActive: Boolean,
+    /**
+     * A second address to prefer when it answers — typically the server's address on the
+     * home network, where a reverse proxy is not in the way.
+     *
+     * An address, not a credential, so it lives here rather than in encrypted storage.
+     * Which one is used is decided by trying this one with a short timeout, never by
+     * inspecting the network: reading the current Wi-Fi network's name needs the location
+     * permission on Android 10 and later, and asking for a listener's location so a book
+     * loads faster is not a trade worth offering.
+     */
+    val lanBaseUrl: String? = null,
 )
 
 @Entity(

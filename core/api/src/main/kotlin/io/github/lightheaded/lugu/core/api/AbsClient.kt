@@ -4,6 +4,7 @@ import io.github.lightheaded.lugu.core.model.AuthTokens
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.call.body
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
@@ -36,20 +37,49 @@ val AbsJson: Json = Json {
  * single-flight (a mutex plus a re-read inside the lock), so a burst of parallel
  * requests on app start produces one refresh, not twenty — and never a thundering
  * herd of 401s.
+ *
+ * Every request also carries whatever custom headers are configured for the address it is
+ * going to, including the unauthenticated `/status` probe and the login itself — somebody
+ * behind an identity-aware proxy cannot get as far as being asked for a password without
+ * them.
  */
 class AbsClient(
     private val serverUrlProvider: ServerUrlProvider,
     private val tokenStore: TokenStore,
     private val deviceInfo: DeviceInfoDto,
+    /**
+     * Defaulted from [serverUrlProvider] for the same reason as in [AuthInterceptor]: the
+     * dependency-injection module builds this client from the URL provider alone, and a
+     * provider that knows nothing about connection settings must keep working unchanged.
+     */
+    private val connectionProfiles: ConnectionProfileSource =
+        serverUrlProvider as? ConnectionProfileSource ?: ServerUrlProfileSource(serverUrlProvider),
     engineFactory: HttpClientConfig<*>.() -> Unit = {},
     private val nowMs: () -> Long = { System.currentTimeMillis() },
-    private val http: HttpClient = HttpClient {
+    /**
+     * The engine is named rather than discovered, because the client certificate has to be
+     * installed on it and only the OkHttp engine can take one. The factory it is given is
+     * the delegating one, so choosing a certificate later does not mean rebuilding this
+     * client and losing its connection pool.
+     */
+    private val http: HttpClient = HttpClient(OkHttp) {
         expectSuccess = false
         install(ContentNegotiation) { json(AbsJson) }
+        engine { config { ConnectionKeyMaterial.applyTo(this) } }
         engineFactory()
     },
 ) {
     private val refreshMutex = Mutex()
+
+    /**
+     * Attaches the custom headers for whichever server [url] belongs to. Silent when the
+     * URL belongs to nothing configured, which is the case on the very first probe of an
+     * address somebody has only just typed.
+     */
+    private suspend fun HttpRequestBuilder.connectionHeaders(url: String) {
+        val profile = runCatching { connectionProfiles.profileFor(url) }.getOrNull() ?: return
+        profile.headers.forEach { header(it.name, it.value) }
+    }
 
     private suspend fun requireBaseUrl(): String =
         serverUrlProvider.baseUrl() ?: throw AuthExpiredException("No server configured")
@@ -64,6 +94,7 @@ class AbsClient(
     suspend fun login(baseUrl: String, username: String, password: String): LoginResult {
         val response = http.request("$baseUrl/login") {
             method = HttpMethod.Post
+            connectionHeaders(baseUrl)
             header("x-return-tokens", "true")
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(username, password))
@@ -104,7 +135,10 @@ class AbsClient(
      */
     suspend fun status(baseUrl: String): ServerStatusDto {
         val response = try {
-            http.request("$baseUrl/status") { method = HttpMethod.Get }
+            http.request("$baseUrl/status") {
+                method = HttpMethod.Get
+                connectionHeaders(baseUrl)
+            }
         } catch (e: Exception) {
             throw AbsHttpException(0, "Could not reach $baseUrl — ${e.message ?: "no response"}")
         }
@@ -131,8 +165,10 @@ class AbsClient(
      */
     private suspend fun refreshLocked(current: AuthTokens): AuthTokens {
         val refresh = current.refreshToken ?: throw AuthExpiredException("No refresh token stored")
-        val response = http.request("${requireBaseUrl()}/auth/refresh") {
+        val base = requireBaseUrl()
+        val response = http.request("$base/auth/refresh") {
             method = HttpMethod.Post
+            connectionHeaders(base)
             header("x-refresh-token", refresh)
         }
         if (!response.status.isSuccess()) {
@@ -196,6 +232,7 @@ class AbsClient(
 
         var response = http.request(url) {
             this.method = method
+            connectionHeaders(url)
             header("Authorization", "Bearer ${validAccessToken()}")
             block()
         }
@@ -205,6 +242,7 @@ class AbsClient(
             val token = forceRefresh()
             response = http.request(url) {
                 this.method = method
+                connectionHeaders(url)
                 header("Authorization", "Bearer $token")
                 block()
             }

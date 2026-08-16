@@ -119,4 +119,81 @@ class SleepTimerTest {
             SleepTimer.stopPositionSec(SleepMode.EndOfChapter, emptyList(), 100.0, 100.0),
         ).isNull()
     }
+
+    @Test
+    fun `a chapter count stops at the end of the last one asked for`() {
+        // Two chapters from part-way through the first means the end of the second.
+        assertThat(
+            SleepTimer.stopPositionSec(
+                SleepMode.Chapters(2),
+                chapters,
+                positionSec = 300.0,
+                armedAtPositionSec = 300.0,
+            ),
+        ).isEqualTo(1_200.0)
+
+        // One chapter is the same question end-of-chapter answers.
+        assertThat(
+            SleepTimer.stopPositionSec(
+                SleepMode.Chapters(1),
+                chapters,
+                positionSec = 300.0,
+                armedAtPositionSec = 300.0,
+            ),
+        ).isEqualTo(600.0)
+    }
+
+    /**
+     * The bug this pins down: resolving a chapter count from the *current* position makes
+     * the target recede at exactly the speed it is approached. Playing from the first
+     * chapter into the second would push a two-chapter timer from the end of chapter two
+     * to the end of chapter three, and so on until the book ran out of chapters — a timer
+     * that appears to do nothing at all.
+     *
+     * An earlier version of this test asserted precisely that receding behaviour and
+     * called it "skipping shortens the count", which it never distinguished from ordinary
+     * playback. It is fixed by counting from where the timer was armed.
+     */
+    @Test
+    fun `a chapter count does not move as the book plays into it`() {
+        val armedAt = 300.0
+
+        val whenArmed = SleepTimer.stopPositionSec(SleepMode.Chapters(2), chapters, 300.0, armedAt)
+        val oneChapterLater = SleepTimer.stopPositionSec(SleepMode.Chapters(2), chapters, 900.0, armedAt)
+        val almostThere = SleepTimer.stopPositionSec(SleepMode.Chapters(2), chapters, 1_199.0, armedAt)
+
+        assertThat(whenArmed).isEqualTo(1_200.0)
+        assertThat(oneChapterLater).isEqualTo(1_200.0)
+        assertThat(almostThere).isEqualTo(1_200.0)
+    }
+
+    @Test
+    fun `a chapter count runs down as the book plays`() {
+        val armedAt = 300.0
+        val first = SleepTimer.remainingSec(SleepMode.Chapters(2), chapters, 300.0, armedAt)
+        val later = SleepTimer.remainingSec(SleepMode.Chapters(2), chapters, 900.0, armedAt)
+
+        assertThat(first).isEqualTo(900.0)
+        assertThat(later).isEqualTo(300.0)
+        assertThat(SleepTimer.hasExpired(SleepMode.Chapters(2), chapters, 1_200.0, armedAt)).isTrue()
+    }
+
+    @Test
+    fun `asking for more chapters than remain stops at the end`() {
+        assertThat(
+            SleepTimer.stopPositionSec(
+                SleepMode.Chapters(5),
+                chapters,
+                positionSec = 1_300.0,
+                armedAtPositionSec = 1_300.0,
+            ),
+        ).isEqualTo(1_800.0)
+    }
+
+    @Test
+    fun `a chapter count needs chapters`() {
+        assertThat(
+            SleepTimer.stopPositionSec(SleepMode.Chapters(2), emptyList(), 100.0, 100.0),
+        ).isNull()
+    }
 }

@@ -21,6 +21,7 @@ class BrowseNodeTest {
             BrowseNode.Downloaded,
             BrowseNode.AllSeries,
             BrowseNode.AllPodcasts,
+            BrowseNode.LatestEpisodes,
             BrowseNode.Libraries,
             BrowseNode.Series("The Breakwater"),
             BrowseNode.Podcast("li_pod"),

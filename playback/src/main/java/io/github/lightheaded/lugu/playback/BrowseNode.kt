@@ -26,6 +26,9 @@ sealed interface BrowseNode {
 
     data object AllPodcasts : BrowseNode
 
+    /** The newest unplayed episode of everything being followed, across podcasts. */
+    data object LatestEpisodes : BrowseNode
+
     data object Libraries : BrowseNode
 
     data class Series(val title: String) : BrowseNode
@@ -48,6 +51,7 @@ sealed interface BrowseNode {
             Downloaded -> DOWNLOADED
             AllSeries -> ALL_SERIES
             AllPodcasts -> ALL_PODCASTS
+            LatestEpisodes -> LATEST_EPISODES
             Libraries -> LIBRARIES
             is Series -> "$SERIES_PREFIX$title"
             is Podcast -> "$PODCAST_PREFIX$itemId"
@@ -64,6 +68,7 @@ sealed interface BrowseNode {
         private const val DOWNLOADED = "lugu/downloaded"
         private const val ALL_SERIES = "lugu/series"
         private const val ALL_PODCASTS = "lugu/podcasts"
+        private const val LATEST_EPISODES = "lugu/latest-episodes"
         private const val LIBRARIES = "lugu/libraries"
         private const val UNKNOWN = "lugu/unknown"
 
@@ -87,6 +92,7 @@ sealed interface BrowseNode {
             id == DOWNLOADED -> Downloaded
             id == ALL_SERIES -> AllSeries
             id == ALL_PODCASTS -> AllPodcasts
+            id == LATEST_EPISODES -> LatestEpisodes
             id == LIBRARIES -> Libraries
             id.startsWith(SERIES_PREFIX) ->
                 id.removePrefix(SERIES_PREFIX).takeIf { it.isNotEmpty() }?.let(::Series) ?: Unknown

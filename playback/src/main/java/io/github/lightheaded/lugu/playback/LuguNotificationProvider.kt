@@ -44,8 +44,11 @@ import com.google.common.collect.ImmutableList
  * [ChapterAwarePlayer] exist to keep single. That is how a resumed book starts in the
  * wrong chapter, and it is not worth a bar that moves.
  *
- * The chapter is still said out loud where it is free to say it: the notification's text
- * carries the chapter title, which answers "where am I" without claiming to be a position.
+ * The chapter is still said out loud where it is free to say it: the session's metadata
+ * carries the chapter title as its subtitle and description, which is what a car draws
+ * under the title, and it answers "where am I" without claiming to be a position. See
+ * [NowPlayingMetadata], which also holds the same argument as it applies to exposing the
+ * chapters as a queue.
  */
 @OptIn(UnstableApi::class)
 class LuguNotificationProvider(context: Context) : DefaultMediaNotificationProvider(context) {

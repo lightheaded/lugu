@@ -79,6 +79,15 @@ data class HeadsetSettings(
 data class AudioSettings(
     val skipSilence: Boolean = false,
     /**
+     * Lower the book for a short interruption rather than stopping it.
+     *
+     * On by default, and the right default for spoken word only just: a navigation prompt
+     * over a quiet passage is easy to talk over, while a phone call is not — so this
+     * applies to *transient* focus loss, which is what the system uses for the former.
+     * Anyone who would rather not miss a sentence can turn it off and get a pause.
+     */
+    val duckOnInterruption: Boolean = true,
+    /**
      * Extra gain in decibels, applied by the platform's loudness enhancer.
      *
      * Capped well below what the API allows. Gain is not free — past a point it is
@@ -110,6 +119,14 @@ data class SleepSettings(
     val extendMinutes: Int = 5,
     /** How far back the next play starts, to recover the part that was slept through. */
     val rewindOnWakeSec: Int = 30,
+    /**
+     * Whether pausing leaves the timer armed.
+     *
+     * On by default. A pause is usually an interruption rather than a decision to stay
+     * awake, and a timer that silently cancels itself is the complaint upstream has open
+     * as app#1317 — the failure is invisible until the book is still playing an hour later.
+     */
+    val survivesPause: Boolean = true,
 ) {
     companion object {
         val FADE_CHOICES = listOf(0, 5, 10, 20, 30, 60)

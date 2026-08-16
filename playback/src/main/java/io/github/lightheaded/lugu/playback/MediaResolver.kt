@@ -7,6 +7,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.toDomain
+import io.github.lightheaded.lugu.core.download.DirectPlay
 import io.github.lightheaded.lugu.core.download.DownloadKeys
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.download.toAudioTracks
@@ -224,22 +225,14 @@ class MediaResolver @Inject constructor(
          * What the server compares the source codec against to pick direct play. Direct
          * play means byte-range requests and sample-accurate seeking; HLS transcode
          * means ~6s seek granularity, so the list is deliberately generous.
+         *
+         * It lives in `:core:download` rather than here because the download path has to
+         * predict the same answer this call gets, in order to refuse an item the server
+         * would only transcode. Two lists that could disagree would produce a download
+         * refusing exactly what playback then plays directly — a contradiction nobody
+         * could reproduce, because each half would be behaving correctly on its own terms.
          */
-        val SUPPORTED_MIME_TYPES = listOf(
-            "audio/flac",
-            "audio/mpeg",
-            "audio/mp4",
-            "audio/aac",
-            "audio/ogg",
-            "audio/opus",
-            "audio/webm",
-            "audio/wav",
-            "audio/x-wav",
-            "audio/aiff",
-            "audio/x-aiff",
-            "audio/x-m4a",
-            "audio/x-m4b",
-        )
+        val SUPPORTED_MIME_TYPES = DirectPlay.SUPPORTED_MIME_TYPES
 
         fun mediaIdOf(itemId: String, episodeId: String?, trackIndex: Int): String =
             "$itemId|${episodeId.orEmpty()}|$trackIndex"

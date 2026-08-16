@@ -47,6 +47,41 @@
         </activity>
 
         <!--
+          The automation surface: Tasker, Automate, adb, or anything else that can send a
+          broadcast. A receiver and not an activity, so a routine that pauses a book does
+          not steal focus or flash a window over whatever is on screen.
+
+          Exported with no permission, deliberately — see AutomationReceiver for the whole
+          argument. In short: these are transport commands rather than data, and the
+          receiver answers nothing back, so there is no path by which a caller learns
+          anything about the library, the server or the account. `ExportedReceiver` is
+          suppressed here rather than project-wide, so the next exported receiver still has
+          to make the same case for itself.
+
+          The action names carry ${applicationId}, so the debug build answers only to
+          ...lugu.debug.action.PLAY and the release build only to ...lugu.action.PLAY. The
+          two can be installed side by side and neither drives the other.
+        -->
+        <receiver
+            android:name=".automation.AutomationReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="${applicationId}.action.PLAY" />
+                <action android:name="${applicationId}.action.PAUSE" />
+                <action android:name="${applicationId}.action.PLAY_PAUSE" />
+                <action android:name="${applicationId}.action.SKIP_FORWARD" />
+                <action android:name="${applicationId}.action.SKIP_BACK" />
+                <action android:name="${applicationId}.action.NEXT_CHAPTER" />
+                <action android:name="${applicationId}.action.PREVIOUS_CHAPTER" />
+                <action android:name="${applicationId}.action.SET_SPEED" />
+                <action android:name="${applicationId}.action.SLEEP_TIMER" />
+                <action android:name="${applicationId}.action.SLEEP_CANCEL" />
+                <action android:name="${applicationId}.action.PLAY_SEARCH" />
+            </intent-filter>
+        </receiver>
+
+        <!--
             Nothing about crash reporting starts on its own. The SDK is initialised by
             CrashReporting only after consent, so a build nobody has opted into never
             loads it at all. Setting `enabled = false` at init instead would still run

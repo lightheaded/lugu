@@ -666,35 +666,6 @@ interface EpisodeDao {
     @Query("SELECT * FROM episode WHERE serverId = :serverId AND userId = :userId AND id = :id")
     suspend fun byId(serverId: String, userId: String, id: String): EpisodeEntity?
 
-    /**
-     * The next episode of this podcast after the one just finished, if it is unplayed.
-     *
-     * Forwards in publication order rather than "the newest one": someone working
-     * through a backlog is moved along it, and someone already at the newest episode is
-     * given nothing rather than being sent back to the start of the archive.
-     */
-    @Query(
-        """
-        SELECT e.* FROM episode e
-        WHERE e.serverId = :serverId AND e.userId = :userId AND e.libraryItemId = :itemId
-          AND e.publishedAtMs > :afterPublishedAtMs
-          AND NOT EXISTS (
-            SELECT 1 FROM progress p
-            WHERE p.serverId = e.serverId AND p.userId = e.userId
-              AND p.libraryItemId = e.libraryItemId AND p.episodeKey = e.id
-              AND p.isFinished = 1
-          )
-        ORDER BY e.publishedAtMs
-        LIMIT 1
-        """,
-    )
-    suspend fun nextAfter(
-        serverId: String,
-        userId: String,
-        itemId: String,
-        afterPublishedAtMs: Long,
-    ): EpisodeEntity?
-
     @Query(
         """
         SELECT * FROM episode

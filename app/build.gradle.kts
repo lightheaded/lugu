@@ -51,6 +51,13 @@ android {
         versionCode = 2 + (buildNumber ?: 0)
         versionName = buildNumber?.let { "$versionBase.$it" } ?: versionBase
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
+
+        // The instrumented tests need a device to run on and, for the ones that play
+        // something, a server to play from. The server comes from the same gitignored
+        // local.properties keys the login screen is prefilled from — see the debug build
+        // type below — and a test that cannot find one skips rather than fails, so a CI
+        // emulator with no server stays green.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -73,6 +80,10 @@ android {
             buildConfigField("String", "DEV_SERVER_URL", "\"${devProp("lugu.dev.serverUrl")}\"")
             buildConfigField("String", "DEV_USER", "\"${devProp("lugu.dev.user")}\"")
             buildConfigField("String", "DEV_PASS", "\"${devProp("lugu.dev.pass")}\"")
+            // What the instrumented playback tests ask the library for. Not a secret and
+            // not a credential — a title, which is why it is a separate key: a developer
+            // who has a server still has to say what on it is safe to play.
+            buildConfigField("String", "TEST_PLAY_QUERY", "\"${devProp("lugu.test.playQuery")}\"")
         }
         release {
             // R8 on, with the keep rules in proguard-rules.pro. Note that a clean build
@@ -91,6 +102,7 @@ android {
             buildConfigField("String", "DEV_SERVER_URL", "\"\"")
             buildConfigField("String", "DEV_USER", "\"\"")
             buildConfigField("String", "DEV_PASS", "\"\"")
+            buildConfigField("String", "TEST_PLAY_QUERY", "\"\"")
             if (System.getenv("LUGU_KEYSTORE_PATH") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -105,6 +117,15 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests {
+            // Roborazzi draws the real thing, so the real resources have to be there.
+            // Without this a screenshot test renders a screen with no theme attributes
+            // and every baseline is a picture of the failure.
+            isIncludeAndroidResources = true
+        }
     }
 
     packaging {
@@ -166,4 +187,30 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+
+    // Screenshot tests. Roborazzi renders Compose on the JVM through Robolectric's native
+    // graphics, so these run on every push without an emulator.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.junit)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    debugImplementation(libs.compose.ui.test.manifest)
+
+    // Instrumented tests. These are the only tests that exercise the parts of lugu that
+    // exist because Android kills processes: resumption after the app is gone, and the
+    // media button arriving at a service nothing is bound to.
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.truth)
+    androidTestImplementation(libs.media3.session)
+    androidTestImplementation(libs.kotlinx.coroutines.guava)
+    androidTestImplementation(project(":playback"))
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
 }

@@ -113,3 +113,16 @@
 -keep public class * extends androidx.media3.session.MediaLibraryService {
     <init>();
 }
+
+# -- Socket.IO ---------------------------------------------------------------------
+# Live updates from the server. engine.io picks its transports by class name and both
+# libraries hand callbacks across a Java listener interface, so the classes are reachable
+# only through strings and reflection. The failure mode is the quiet one: the socket never
+# connects, the poll-and-sweep sync covers for it, and nobody notices until they wonder
+# why an edit made on the web took ten minutes to appear.
+-keep class io.socket.** { *; }
+-keep class io.socket.engineio.client.transports.** { *; }
+-dontwarn io.socket.**
+
+# org.json ships with Android, but engine.io's own copy is referenced at compile time.
+-dontwarn org.json.**

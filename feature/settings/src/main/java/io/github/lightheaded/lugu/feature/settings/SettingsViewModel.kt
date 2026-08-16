@@ -215,6 +215,15 @@ class SettingsViewModel @Inject constructor(
 
     fun setSkipSilence(enabled: Boolean) = viewModelScope.launch { prefs.setSkipSilence(enabled) }
 
+    fun setDuckOnInterruption(enabled: Boolean) =
+        viewModelScope.launch { prefs.setDuckOnInterruption(enabled) }
+
+    fun setSleepSurvivesPause(enabled: Boolean) =
+        viewModelScope.launch { prefs.setSleepSurvivesPause(enabled) }
+
+    fun setPodcastOldestFirst(oldestFirst: Boolean) =
+        viewModelScope.launch { queuePrefs.setPodcastOldestFirst(oldestFirst) }
+
     fun setVolumeBoostDb(db: Int) = viewModelScope.launch { prefs.setVolumeBoostDb(db) }
 
     fun setSleepFadeSeconds(seconds: Int) = viewModelScope.launch { prefs.setSleepFadeSeconds(seconds) }

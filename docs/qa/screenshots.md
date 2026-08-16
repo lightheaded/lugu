@@ -1,0 +1,81 @@
+# Screenshot tests
+
+A suite nobody knows how to update is a suite that gets deleted. This is how to update it.
+
+## What is recorded
+
+Every screenshot is taken twice, light and dark. A light-only baseline lets a dark-mode
+regression through, and dark mode is when most of this app is used.
+
+| Module | Baselines |
+| --- | --- |
+| `feature/library` | Home tab, Library tab, the grid with a selection running, a book page, a podcast page, the queue |
+| `feature/player` | The player, playing and paused |
+| `feature/settings` | Settings, settings filtered by a search, a search that matches nothing |
+| `app` | The "why playback stopped" record, full and empty |
+
+Images live in each module's `screenshots/` directory and are committed. They are the
+baseline; nothing else records what the app looked like.
+
+## Running them
+
+They are ordinary JVM unit tests — Roborazzi renders Compose through Robolectric's native
+graphics, so no emulator and no device is involved.
+
+```
+./gradlew testDebugUnitTest
+```
+
+This **verifies** against the committed images and fails on any difference, which is why
+`./gradlew build` catches a visual regression on its own. A failure writes a side-by-side
+comparison into `<module>/build/outputs/roborazzi/`; CI uploads that directory as an
+artifact, because a red run nobody can see is a red run nobody fixes.
+
+## Re-recording after an intentional change
+
+```
+./gradlew testDebugUnitTest -Proborazzi.record
+```
+
+Then look at `git diff` before committing. Every changed image is a change to what the app
+looks like — if one you did not expect has moved, that is the suite doing its job.
+
+Record everything in one run rather than module by module, so the whole set stays taken
+with the same Compose and Robolectric versions.
+
+## Why the pictures are not what is on your phone
+
+Two deliberate differences:
+
+- **No dynamic colour.** lugu follows the wallpaper from Android 12 onwards, which is by
+  definition not the same on two phones. The baselines use lugu's fallback palette, which
+  is what runs below Android 12 and wherever dynamic colour is off. The light and dark code
+  paths are the same either way.
+- **No cover art.** Covers are fetched over the network, so every image renders the
+  placeholder block instead. That is also the state a real screen is in for the first
+  moment it appears.
+
+## What is not covered
+
+Every screen in lugu takes a Hilt view model. Most of those view models depend on final
+classes over Room, DataStore and Ktor, which cannot be substituted, so most of these
+pictures are of the screens' own components — `ItemCard`, `ShelfRowView`, `ListControlsBar`,
+`SelectionBar`, `DownloadButton`, `RowActionsMenu`, `PlayerActionRow` — arranged the way the
+screen arranges them, rather than of the screen composable itself. A change to the order of
+blocks inside a screen file will not fail these.
+
+Settings is the exception: its view model's six dependencies are all constructible without
+Hilt, so `SettingsScreenshotTest` drives the real `SettingsScreen`.
+
+Making a screen's own content composable `internal` and stateless — taking a UI state and a
+set of callbacks, with the view model wiring left in the public wrapper — would let the rest
+be photographed as they really are. That is a change to production code and is not made
+here.
+
+## Adding a screen
+
+1. Put the test in `src/test/`, in a file whose name ends in `ScreenshotTest.kt`.
+2. Copy the `ScreenshotTheme` helper from a neighbouring test, so the palette matches.
+3. Pin anything that would otherwise move: a clock, a time zone, a relative date. A picture
+   that depends on the day it was taken fails on the next day.
+4. Record, look at the image, then commit it.

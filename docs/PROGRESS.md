@@ -584,3 +584,127 @@ rather than silently taking someone else's place.
 4. Custom HTTP headers, once the release build has been proven on a device — it changes
    the auth path, and debugging that against an unverified obfuscated build would be two
    unknowns at once.
+
+## 2026-08-16 (later) — the harness, the last of M0, and the reach
+
+Six threads at once, and the through-line is that most of them are about *evidence* rather
+than features: three phases had shipped in three days with R8 newly on and nothing ever run
+on a device.
+
+### A harness, at last
+
+Screenshot baselines for every screen in both themes, verified on every `./gradlew build`
+rather than behind a task somebody has to remember. Instrumented tests on an API 26 and 36
+emulator matrix — the two ends, because that is where the failures are: 26 is where the
+background-execution limits the playback service is built around first landed and the
+oldest SQLite the migrations must open on, and 36 is where the newest foreground-service
+rules decide whether a media session may start itself.
+
+Two honest limits, both written into the backlog rather than glossed. **Process death still
+is not covered**, because instrumentation runs inside the process under test and killing
+the package kills the runner; the test destroys the playback *service* instead, which is
+what Android actually does when reclaiming memory, and a real kill needs a second process.
+And **only Settings drives its real screen** — every other screen takes a Hilt view model
+over final Room, DataStore and Ktor classes that cannot be faked, so those baselines cover
+the screens' own components arranged as the screen arranges them.
+
+The Roborazzi Gradle plugin could not be applied at all: 1.46.1 reaches for AGP's
+`TestedExtension`, which AGP 9.3.1 removed. Its whole job is setting two system properties,
+so the root build file sets them directly — which made verification the default rather than
+opt-in, a better outcome than the plugin would have given.
+
+### M0 is finally finished
+
+Socket.IO deltas: an edit or deletion made on the web now lands in the mirror rather than
+waiting for the next sweep. The event names were read out of the server's own source, not
+its API documentation, which says of itself that it is unmaintained — and that was the
+right call, since three of the names in the brief were wrong. There is no batch removal
+event; `item_removed` carries `{id, libraryId}`; and `user_item_progress_updated`'s outer
+`id` is the *progress row's* id, so reading it as an item id would have sent every
+re-fetch to an item that does not exist.
+
+Two rules make it safe. An event is a hint, never a payload to write: it yields ids, and
+the existing item fetch does the rest, because a partial parse that puts a half-populated
+row over a good one is worse than no live updates. And progress goes through
+`ProgressRepository.startSession`, the same call a real session start makes, so
+`ProgressConflictResolver` still decides — a socket update that bypassed it would have
+reintroduced exactly the bug M0 was built to prevent. The item in the player is never
+touched from here at all: the server echoes progress back to the device that caused it, so
+acting on one during playback would have the app racing its own writes.
+
+### Reach: proxies, certificates, and a second address
+
+Custom headers on every request, which is the most-demanded thing in the whole upstream
+tracker and the reason nobody behind Cloudflare Access can use the official app. They reach
+all three paths — the API, the media data source and cover loading — which is the part that
+would have been easy to get two-thirds right, and they are settable before the first login,
+because somebody behind an identity-aware proxy cannot get as far as being asked for a
+password without them.
+
+A second address for the local network, decided by **racing it with a short timeout** and
+never by inspecting the network. Reading the current Wi-Fi network's name needs the location
+permission on Android 10 and later, and asking a listener for their location so a book loads
+faster is not a trade worth offering. This is only safe at all because progress here is keyed
+by server and user id rather than by connection — which is the bug that makes the same
+feature dangerous upstream.
+
+Client certificates, installed per call through `Interceptor.Chain.withSslSocketFactory`, so
+mTLS works on the shared client without rebuilding it and losing its connection pool.
+
+The connectivity audit found nothing to fix, which is the answer that was wanted: there is no
+`ConnectivityManager` check anywhere deciding in advance whether a request is worth making.
+
+### Transcodes, said out loud
+
+An item the server will only transcode still cannot be downloaded — but it now says so, and
+says why, instead of a button that quietly achieves nothing. Three independent reasons are
+written where the next person will find them: the playlist is minted against a session that
+expires and takes its URLs with it; a transcode has no size until it exists, so a truncated
+download is indistinguishable from a complete one; and it is a re-encode of a file the server
+already holds intact.
+
+The productive half was the other direction. The supported-format list was underselling what
+Media3 can decode, so items were being transcoded that never needed to be — and the download
+path and the playback path now read one list, because two that can disagree would produce a
+download refusing exactly what playback then plays directly.
+
+### The car, and the small things
+
+Podcasts can run oldest-first, per podcast, because no client can tell a serial from a news
+show by looking at the feed. The chapter title is in the session metadata where a head unit
+draws it. A "Latest episodes" node spans every followed podcast. The sleep timer is
+*suspended* rather than cancelled while a car is connected, and re-armed from the current
+position when it disconnects, because resuming the old countdown would stop the audio the
+instant the car was left.
+
+Chapters-as-the-car's-queue was declined, for the same reason the chapter-scoped progress bar
+was declined yesterday: Media3 builds the queue from the player's timeline, and making that a
+list of chapters is a second, disagreeing notion of where the book is.
+
+And a finding worth more than any of them. **Ducking never worked, and no setting could have
+made it.** Media3 pauses rather than ducks whenever the content type is `SPEECH`, which lugu
+has declared since M0 — so every navigation prompt has been stopping the book outright. It is
+now a choice, made by selecting the content type.
+
+Also: Tasker-compatible intents with documentation, sleep-after-N-chapters, collections that
+can be edited, and an exported receiver that answers nothing back — which is what makes
+exporting it without a permission defensible rather than merely convenient.
+
+### A bug the work found in yesterday's work
+
+`SleepMode.Chapters` could not fire. It resolved the count from the *current* position, so
+ordinary playback into the next chapter pushed the target along by a whole chapter: the timer
+receded exactly as fast as it was approached and came due only when the book ran out of
+chapters. Its own test asserted that behaviour and called it "skipping shortens the count",
+which is why it read as correct — the test never distinguished skipping from playing. Fixed
+at the source, and the test now pins the thing that matters.
+
+### Next
+
+1. **A device pass on a release build.** Owed since R8 went on, and now the only way to
+   settle a growing list: that the socket connects at all, that headers reach a real proxy,
+   that the LAN race behaves on a real network, and that R8 has not quietly broken a
+   reflective path.
+2. Run [qa/auto.md](qa/auto.md) in the DHU. Six of the car items can only be confirmed there.
+3. Read the playback diary after a real stop.
+4. A `com.android.test` module, so process death can be tested from a second process.

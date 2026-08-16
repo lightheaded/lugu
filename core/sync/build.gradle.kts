@@ -36,6 +36,15 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
+
+    // Live updates from the server. The client ships its own OkHttp, which is older than
+    // the one the app pins and the one every other request already goes through; letting
+    // both onto the classpath makes which version wins a matter of resolution order.
+    implementation(libs.socketio.client) {
+        exclude(group = "com.squareup.okhttp3")
+    }
+    implementation(libs.okhttp)
+
     implementation(libs.hilt.android)
     implementation(libs.androidx.hilt.work)
     ksp(libs.hilt.compiler)
