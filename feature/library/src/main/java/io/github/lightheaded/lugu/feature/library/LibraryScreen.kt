@@ -49,6 +49,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -361,12 +363,17 @@ internal fun ItemCard(
                 modifier = Modifier.fillMaxSize(),
             )
             if (row.progressFraction > 0f) {
+                // Three device-independent pixels of colour is the whole of what a sighted
+                // reader gets, and TalkBack got nothing at all — a bar with no description
+                // is skipped, so the one fact that distinguishes a part-heard book from an
+                // untouched one was unavailable to anyone using a screen reader.
                 LinearProgressIndicator(
                     progress = { row.progressFraction },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(3.dp),
+                        .height(3.dp)
+                        .semantics { contentDescription = row.progressDescription },
                 )
             }
             if (isSelected) {
