@@ -79,6 +79,10 @@ class LibraryGridTest {
 
     private lateinit var token: PlantedToken
 
+    /** The listener's own library choice and grid filter, put back in [restoreTheDevice]. */
+    private var displacedLibraryId: String? = null
+    private var displacedFilter: ListFilter = ListFilter.ALL
+
     @Before
     fun seedAndSignOut() {
         db = LuguDatabase.build(context)
@@ -87,9 +91,15 @@ class LibraryGridTest {
             displacedServer = db.serverDao().active()
             db.serverDao().clearActive()
             // The picked library outlives a test, so a run where the books chip was tapped
-            // would otherwise decide which library the next test opens on.
-            LibraryPrefs(context).setSelectedLibraryId(null)
-            LibraryPrefs(context).setItemFilter(ListFilter.ALL)
+            // would otherwise decide which library the next test opens on — and on a real
+            // phone it would decide which library its owner opens on.
+            val prefs = LibraryPrefs(context)
+            prefs.current().let {
+                displacedLibraryId = it.selectedLibraryId
+                displacedFilter = it.itemFilter
+            }
+            prefs.setSelectedLibraryId(null)
+            prefs.setItemFilter(ListFilter.ALL)
         }
         wipeTestRows()
     }
@@ -102,6 +112,8 @@ class LibraryGridTest {
             runCatching {
                 wipeTestRows()
                 displacedServer?.let { db.serverDao().setActive(it) }
+                LibraryPrefs(context).setSelectedLibraryId(displacedLibraryId)
+                LibraryPrefs(context).setItemFilter(displacedFilter)
             }
         }
         runCatching { token.restore() }
