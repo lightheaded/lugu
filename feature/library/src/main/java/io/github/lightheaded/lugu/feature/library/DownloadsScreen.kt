@@ -169,6 +169,10 @@ fun DownloadsScreen(
                     filters = DOWNLOAD_FILTERS,
                     selectedFilter = state.filter,
                     onFilterSelected = viewModel::setFilter,
+                    // On this screen the question is about bytes, not about listening.
+                    labelFor = { filter ->
+                        if (filter == ListFilter.IN_PROGRESS) "Downloading" else filter.label
+                    },
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
             }
