@@ -38,6 +38,34 @@ data class LibraryRow(
 ) {
     val progressFraction: Float
         get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+
+    /**
+     * Whether this row's progress is the item's own or borrowed from one of its episodes.
+     *
+     * A podcast has no progress row at the item level, so a card for one shows the position
+     * of the episode that would be resumed. That is the right thing to *draw* and the wrong
+     * thing to draw conclusions from: one finished episode does not finish a feed.
+     */
+    val progressIsEpisode: Boolean get() = progress?.episodeId != null
+
+    /** A feed is never finished; only a thing with its own progress row can be. */
+    val isFinished: Boolean get() = progress?.isFinished == true && !progressIsEpisode
+
+    /**
+     * What the bar under a cover means, said out loud.
+     *
+     * A podcast's says which episode it is about, because "62% listened" against a show
+     * with four hundred episodes would be read as a claim about the show.
+     */
+    val progressDescription: String
+        get() {
+            val percent = (progressFraction * 100).toInt()
+            return if (progressIsEpisode) {
+                "Latest episode $percent% listened"
+            } else {
+                "$percent% listened"
+            }
+        }
 }
 
 data class LibraryUiState(
@@ -108,11 +136,20 @@ class LibraryViewModel @Inject constructor(
         .map { it.selectedLibraryId }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val progressByKey: StateFlow<Map<String, MediaProgress>> = account
+    /**
+     * Progress per item, falling back to the item's most recent episode where it has no
+     * row of its own.
+     *
+     * The grid used to read the item-level key alone, which a podcast never has — so every
+     * podcast cover showed no progress at all, however much of it had been listened to,
+     * and the "In progress" filter could not see one either. The browse and collection
+     * grids already read it this way; this one was the odd screen out.
+     */
+    private val progressByItem: StateFlow<Map<String, MediaProgress>> = account
         .flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else progressRepository.observeAll(current)
         }
-        .map { list -> list.associateBy { "${it.libraryItemId}#${it.episodeId.orEmpty()}" } }
+        .map { list -> ItemProgress.byItem(list) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /**
@@ -159,12 +196,12 @@ class LibraryViewModel @Inject constructor(
         libraries,
         selectedLibraryId,
         items,
-        combine(progressByKey, downloadedItemIds, settings) { progress, downloaded, prefs ->
+        combine(progressByItem, downloadedItemIds, settings) { progress, downloaded, prefs ->
             Shaping(progress, downloaded, prefs.itemSort, prefs.itemFilter)
         },
         extras,
     ) { libs, selected, itemList, shaping, extras ->
-        val rows = itemList.map { LibraryRow(it, shaping.progress["${it.id}#"]) }
+        val rows = itemList.map { LibraryRow(it, shaping.progress[it.id]) }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
         val facts = rows.associate { it.item.id to it.facts(it.item.id in shaping.downloaded) }
@@ -394,6 +431,6 @@ private fun LibraryRow.facts(isDownloaded: Boolean): ListFacts = ListFacts(
     addedAtMs = item.addedAtMs,
     durationSec = item.durationSec,
     progressFraction = progressFraction,
-    isFinished = progress?.isFinished == true,
+    isFinished = isFinished,
     isDownloaded = isDownloaded,
 )
