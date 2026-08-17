@@ -46,11 +46,30 @@ object ServerUrl {
         if (!value.contains("://")) value = "https://$value"
         value = value.trimEnd('/')
         value = value.removeSuffix("/login").removeSuffix("/audiobookshelf/login").trimEnd('/')
-        val scheme = value.substringBefore("://")
+        // The scheme is case-insensitive by the URL spec and a keyboard that has just
+        // auto-capitalised is the ordinary way to arrive at "Https://". Rejecting that as
+        // "not a server address" would be blaming the listener for their keyboard. The
+        // rest is left alone: a path can be case-sensitive and this is not the place to
+        // decide that it is not.
+        val scheme = value.substringBefore("://").lowercase()
         if (scheme != "http" && scheme != "https") return null
-        if (value.substringAfter("://").isBlank()) return null
-        return value
+        val rest = value.substringAfter("://")
+        if (rest.isBlank()) return null
+        return "$scheme://$rest"
     }
+
+    /**
+     * Whether talking to this address means talking in the clear.
+     *
+     * lugu permits cleartext at the platform level, because Audiobookshelf is mostly run at
+     * home over plain HTTP and refusing outright made those servers unreachable with an
+     * error that blamed the server. The trade is that the app has to say so itself: this is
+     * what the sign-in screen asks before it sends a password anywhere.
+     *
+     * A half-typed address is not yet a plain-HTTP one — nothing is claimed about something
+     * that does not parse, and typing "http" on the way to "https" must not flash a warning.
+     */
+    fun isCleartext(input: String): Boolean = normalise(input)?.startsWith("http://") == true
 }
 
 /** Raised when the server rejects our credentials and a fresh login is required. */

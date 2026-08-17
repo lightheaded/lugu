@@ -164,17 +164,6 @@ android {
 
     // Shared by both build types tests run against, rather than living in `src/debug` and
     // being copied: two copies of a security policy is how one of them ends up wrong.
-    sourceSets {
-        getByName("debug") {
-            manifest.srcFile("src/testServer/AndroidManifest.xml")
-            res.srcDir("src/testServer/res")
-        }
-        getByName("minified") {
-            manifest.srcFile("src/testServer/AndroidManifest.xml")
-            res.srcDir("src/testServer/res")
-        }
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true

@@ -17,6 +17,15 @@ class ServerUrlTest {
     }
 
     @Test
+    fun `an auto-capitalised scheme is accepted rather than blamed on the typist`() {
+        assertThat(ServerUrl.normalise("Https://books.example.com"))
+            .isEqualTo("https://books.example.com")
+        // And only the scheme is lowered: a path may be case-sensitive.
+        assertThat(ServerUrl.normalise("HTTPS://example.com/AudioBookshelf"))
+            .isEqualTo("https://example.com/AudioBookshelf")
+    }
+
+    @Test
     fun `trailing slashes and whitespace are trimmed`() {
         assertThat(ServerUrl.normalise("  https://books.example.com/  "))
             .isEqualTo("https://books.example.com")
@@ -32,6 +41,24 @@ class ServerUrlTest {
     fun `a subpath install is preserved`() {
         assertThat(ServerUrl.normalise("https://example.com/audiobookshelf"))
             .isEqualTo("https://example.com/audiobookshelf")
+    }
+
+    @Test
+    fun `a plain HTTP address is recognised so it can be warned about`() {
+        assertThat(ServerUrl.isCleartext("http://192.168.1.10:13378")).isTrue()
+        assertThat(ServerUrl.isCleartext("HTTP://192.168.1.10:13378")).isTrue()
+        assertThat(ServerUrl.isCleartext("https://books.example.com")).isFalse()
+        // A bare host becomes https, so it is not a plain-HTTP address.
+        assertThat(ServerUrl.isCleartext("192.168.1.10:13378")).isFalse()
+    }
+
+    @Test
+    fun `typing towards https does not flash a warning`() {
+        // Each of these is a keystroke on the way to "https://books.example.com".
+        assertThat(ServerUrl.isCleartext("h")).isFalse()
+        assertThat(ServerUrl.isCleartext("http")).isFalse()
+        assertThat(ServerUrl.isCleartext("http:")).isFalse()
+        assertThat(ServerUrl.isCleartext("http://")).isFalse()
     }
 
     @Test
