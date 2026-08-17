@@ -30,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,15 @@ import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.download.formatBytes
 import io.github.lightheaded.lugu.core.model.ItemSort
 import io.github.lightheaded.lugu.core.model.ListFilter
+import kotlinx.coroutines.delay
+
+/**
+ * Long enough to read a refusal that quotes two byte figures, and no longer.
+ *
+ * Deliberately longer than the grid's batch note: that one confirms something that
+ * happened, this one explains why nothing did.
+ */
+private const val REFUSAL_MS = 8_000L
 
 /**
  * What is on the phone, and how much room it is taking.
@@ -60,6 +70,14 @@ fun DownloadsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     BackHandler(enabled = state.selectionActive) { viewModel.clearSelection() }
+
+    // Same rule as the grid's batch notes: say it, then stop saying it.
+    LaunchedEffect(state.message) {
+        if (state.message != null) {
+            delay(REFUSAL_MS)
+            viewModel.dismissMessage()
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -153,6 +171,20 @@ fun DownloadsScreen(
                     onFilterSelected = viewModel::setFilter,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
+            }
+
+            state.message?.let { note ->
+                item {
+                    // A refusal, not a status. It sits above the rows because it is about
+                    // the tap that has just happened, and it goes away on its own so it
+                    // does not become part of the screen.
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    )
+                }
             }
 
             if (state.visible.isEmpty()) {

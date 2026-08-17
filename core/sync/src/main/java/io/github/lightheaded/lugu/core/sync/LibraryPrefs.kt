@@ -82,6 +82,15 @@ data class LibrarySettings(
     val itemFilter: ListFilter = ListFilter.ALL,
     val episodeSort: EpisodeSort = EpisodeSort.NEWEST,
     val episodeFilter: ListFilter = ListFilter.ALL,
+    /**
+     * The downloads screen's own ordering, kept apart from the grid's.
+     *
+     * Its own keys rather than a share of [itemSort] and [itemFilter], because that screen
+     * sorts over bytes and download times that the library's ordering knows nothing about
+     * — and because borrowing them would mean re-ordering the grid by visiting Downloads.
+     */
+    val downloadSort: ItemSort = ItemSort.ADDED,
+    val downloadFilter: ListFilter = ListFilter.ALL,
 ) {
     fun isVisible(mediaType: MediaType): Boolean = mediaType !in hiddenMediaTypes
 
@@ -163,6 +172,14 @@ class LibraryPrefs @Inject constructor(
         store.edit { it[EPISODE_FILTER] = filter.id }
     }
 
+    suspend fun setDownloadSort(sort: ItemSort) {
+        store.edit { it[DOWNLOAD_SORT] = sort.id }
+    }
+
+    suspend fun setDownloadFilter(filter: ListFilter) {
+        store.edit { it[DOWNLOAD_FILTER] = filter.id }
+    }
+
     private fun Preferences.toSettings(): LibrarySettings = LibrarySettings(
         hiddenMediaTypes = this[HIDDEN_TYPES]?.toMediaTypes() ?: emptySet(),
         selectedLibraryId = this[SELECTED_LIBRARY],
@@ -174,6 +191,10 @@ class LibraryPrefs @Inject constructor(
         itemFilter = ListFilter.fromId(this[ITEM_FILTER]),
         episodeSort = EpisodeSort.fromId(this[EPISODE_SORT]),
         episodeFilter = ListFilter.fromId(this[EPISODE_FILTER]),
+        // Nothing stored means the declared default rather than [ItemSort.fromId]'s, which
+        // is the library grid's answer and not this screen's.
+        downloadSort = this[DOWNLOAD_SORT]?.let { ItemSort.fromId(it) } ?: ItemSort.ADDED,
+        downloadFilter = ListFilter.fromId(this[DOWNLOAD_FILTER]),
     )
 
     private fun String.toNames(): List<String> =
@@ -193,5 +214,7 @@ class LibraryPrefs @Inject constructor(
         val ITEM_FILTER = stringPreferencesKey("item_filter")
         val EPISODE_SORT = stringPreferencesKey("episode_sort")
         val EPISODE_FILTER = stringPreferencesKey("episode_filter")
+        val DOWNLOAD_SORT = stringPreferencesKey("download_sort")
+        val DOWNLOAD_FILTER = stringPreferencesKey("download_filter")
     }
 }
