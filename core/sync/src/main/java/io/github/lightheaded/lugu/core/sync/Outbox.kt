@@ -141,6 +141,32 @@ class ReconcileWorker @AssistedInject constructor(
 object SyncScheduler {
     private const val OUTBOX_WORK = "lugu-outbox"
     private const val RECONCILE_WORK = "lugu-reconcile"
+    private const val FIRST_SYNC_WORK = "lugu-first-sync"
+
+    /**
+     * Mirrors everything now, because an account has just been created.
+     *
+     * Signing in used to leave the mirror to whichever screen happened to be composed next:
+     * the only on-demand sync in the app is `LibraryViewModel`'s, and signing in lands on
+     * Home. So a new account's Home was empty — no shelves, nothing to resume — until the
+     * Library tab was tapped, and so was everything else that reads Room: the car's browse
+     * tree, and "play X on lugu" behind a voice command, neither of which can tap a tab.
+     * The periodic reconcile hid this on a fresh install, where WorkManager runs the first
+     * period immediately; on any later sign-in it is already enqueued and `KEEP` means it
+     * does not run again for six hours.
+     *
+     * A worker rather than a coroutine on the sign-in screen: a first sync of a large
+     * library outlives the screen that started it, and this survives the process dying
+     * halfway through.
+     */
+    fun syncNow(context: Context) {
+        val request = OneTimeWorkRequestBuilder<ReconcileWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(FIRST_SYNC_WORK, ExistingWorkPolicy.REPLACE, request)
+    }
 
     fun flushNow(context: Context) {
         val request = OneTimeWorkRequestBuilder<OutboxWorker>()

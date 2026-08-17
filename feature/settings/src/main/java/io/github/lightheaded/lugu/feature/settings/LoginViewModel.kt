@@ -1,15 +1,18 @@
 package io.github.lightheaded.lugu.feature.settings
 
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.api.ConnectionCertificate
 import io.github.lightheaded.lugu.core.api.ConnectionHeader
 import io.github.lightheaded.lugu.core.api.ConnectionHeaders
 import io.github.lightheaded.lugu.core.api.ServerUrl
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
+import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +47,15 @@ data class LoginUiState(
         get() = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank() && !isBusy
 
     /**
+     * Whether this address will be talked to in the clear.
+     *
+     * Said before the password is sent rather than after, and never as a refusal: a plain
+     * HTTP server on a home network is the ordinary case for this software, and lugu
+     * refusing it outright is what made those servers unreachable in the first place.
+     */
+    val isPlainHttp: Boolean get() = ServerUrl.isCleartext(serverUrl)
+
+    /**
      * This state holds three separate secrets in the clear — the account password, the
      * certificate password and the header values — because text fields cannot hold
      * anything else. A data class would print all three into any log line, breadcrumb or
@@ -55,6 +67,7 @@ data class LoginUiState(
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
     private val connectionPrefs: ConnectionPrefs,
 ) : ViewModel() {
@@ -126,6 +139,10 @@ class LoginViewModel @Inject constructor(
             _state.update { it.copy(isBusy = true, error = null) }
             authRepository.login(current.serverUrl, current.username, current.password)
                 .onSuccess {
+                    // Signing in is the moment the mirror should fill, and nothing else was
+                    // going to do it: the only on-demand sync belongs to the Library tab,
+                    // and this screen hands over to Home.
+                    SyncScheduler.syncNow(context)
                     // Drop the password from memory the moment it is no longer needed.
                     _state.update { LoginUiState(signedIn = true) }
                 }
