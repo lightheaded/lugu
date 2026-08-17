@@ -27,11 +27,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +46,7 @@ import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.download.formatBytes
 import io.github.lightheaded.lugu.core.model.ItemSort
 import io.github.lightheaded.lugu.core.model.ListFilter
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Long enough to read a refusal that quotes two byte figures, and no longer.
@@ -71,16 +75,29 @@ fun DownloadsScreen(
 
     BackHandler(enabled = state.selectionActive) { viewModel.clearSelection() }
 
-    // Same rule as the grid's batch notes: say it, then stop saying it.
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // A snackbar rather than a line in the list. The refusal explains a tap that has just
+    // happened, and a tap can happen on the fortieth row — where a note pinned above the
+    // rows is off-screen, which is indistinguishable from the button doing nothing, which
+    // is the complaint being fixed. `Indefinite` plus an explicit timeout because Material
+    // offers four and ten seconds and this one quotes two byte figures.
     LaunchedEffect(state.message) {
-        if (state.message != null) {
-            delay(REFUSAL_MS)
+        state.message?.let { note ->
+            withTimeoutOrNull(REFUSAL_MS) {
+                snackbarHostState.showSnackbar(
+                    message = note,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
             viewModel.dismissMessage()
         }
     }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (state.selectionActive) {
                 SelectionBar(
@@ -175,20 +192,6 @@ fun DownloadsScreen(
                     },
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
-            }
-
-            state.message?.let { note ->
-                item {
-                    // A refusal, not a status. It sits above the rows because it is about
-                    // the tap that has just happened, and it goes away on its own so it
-                    // does not become part of the screen.
-                    Text(
-                        note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                    )
-                }
             }
 
             if (state.visible.isEmpty()) {
