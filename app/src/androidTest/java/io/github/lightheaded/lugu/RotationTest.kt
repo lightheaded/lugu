@@ -63,6 +63,9 @@ class RotationTest {
     private var displacedServer: ServerEntity? = null
     private var scenario: ActivityScenario<MainActivity>? = null
 
+    /** The listener's own library choice, put back in [restoreTheDevice]. */
+    private var displacedLibraryId: String? = null
+
     @Before
     fun seedALibrary() {
         db = LuguDatabase.build(context)
@@ -70,6 +73,7 @@ class RotationTest {
         runBlocking {
             displacedServer = db.serverDao().active()
             db.serverDao().clearActive()
+            displacedLibraryId = LibraryPrefs(context).current().selectedLibraryId
             LibraryPrefs(context).setSelectedLibraryId(null)
         }
         wipeTestRows()
@@ -86,6 +90,7 @@ class RotationTest {
             runCatching {
                 wipeTestRows()
                 displacedServer?.let { db.serverDao().setActive(it) }
+                LibraryPrefs(context).setSelectedLibraryId(displacedLibraryId)
             }
         }
         runCatching { token.restore() }

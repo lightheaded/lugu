@@ -67,6 +67,9 @@ class RememberedListControlsTest {
 
     private lateinit var token: PlantedToken
 
+    /** Every preference this class writes, as the device had it. */
+    private var displacedPrefs: Triple<ItemSort, ListFilter, ItemSort>? = null
+
     @Before
     fun seedTwoDownloads() {
         db = LuguDatabase.build(context)
@@ -75,7 +78,11 @@ class RememberedListControlsTest {
             displacedServer = db.serverDao().active()
             db.serverDao().clearActive()
             // Whatever an earlier test or an earlier session left, so this starts from the
-            // declared default rather than from somebody else's choice.
+            // declared default rather than from somebody else's choice — and remembered,
+            // so a phone that ran these does not find its own choices rewritten.
+            prefs().current().let {
+                displacedPrefs = Triple(it.downloadSort, it.downloadFilter, it.itemSort)
+            }
             prefs().setDownloadSort(ItemSort.ADDED)
             prefs().setDownloadFilter(ListFilter.ALL)
         }
@@ -91,6 +98,11 @@ class RememberedListControlsTest {
             runCatching {
                 wipeTestRows()
                 displacedServer?.let { db.serverDao().setActive(it) }
+                displacedPrefs?.let { (sort, filter, itemSort) ->
+                    prefs().setDownloadSort(sort)
+                    prefs().setDownloadFilter(filter)
+                    prefs().setItemSort(itemSort)
+                }
             }
         }
         runCatching { token.restore() }
