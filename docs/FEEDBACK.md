@@ -432,6 +432,50 @@ says "Delete books you have listened to", explains that it applies once you reac
 and offers "After a week" rather than "After 7d". A setting whose worst reading is
 destructive has to be worded for that reading.
 
+## An episode page, and where a notification should land
+
+Reported 17 Aug: *I got a "new episode" notification, tapped it, and it took me to "home" of
+the app. I want it to take me to the episode page. We don't have an episode page yet, do we?
+I'd like to see show notes and decide whether I'd like to hear the episode from there.*
+
+| Item | Status |
+|---|---|
+| **The new-episode notification opens Home** | todo |
+| **There is no episode page** | todo — correct, there is not |
+| **Show notes are not shown anywhere** | todo |
+
+**The notification is the small half.** `NewEpisodeNotifier` builds its tap action from
+`getLaunchIntentForPackage`, which is the bare launcher intent: it says "open lugu" and
+carries nothing about which episode caused it. So it lands wherever the app would have
+landed anyway, and the notification's whole point — *this* episode, now — is lost at the
+moment it is acted on. It cannot be fixed on its own, because there is nowhere for it to go.
+
+**There is no episode page, and an episode's own description is already on the phone.** The
+sync mirrors `description` onto every episode row and nothing has ever drawn it. The item
+page renders the *show's* description; the episode list draws a title and a subline of date,
+number and length. So the show notes for every episode of every followed podcast are
+sitting in Room, unread.
+
+Three things this needs decided before it is built, none of them large but none of them
+obvious:
+
+- **What a tap in the episode list means.** Today it is unambiguous and deliberately so:
+  tapping an episode plays it, and that was itself a fix — the player used to open showing
+  Play, inviting a press it could not honour. An episode page makes a tap ambiguous again,
+  so the page needs its own way in (the row's overflow, or a chevron) rather than stealing
+  the tap.
+- **Show notes are HTML.** A podcast feed's description is markup with links in it, and the
+  show description is currently rendered with a plain `Text`, so a feed that uses `<p>` and
+  `<a>` shows its tags. Whether that is already visibly wrong on the show's own page is
+  worth looking at while this is open; either way an episode page cannot ship rendering raw
+  markup, and links in show notes are usually the point of reading them.
+- **Where the page goes in the back stack**, since it is reachable from a notification with
+  the app not running. Landing on it from cold with no way back to the library is the
+  failure mode; the item page already solves this and the answer should be the same one.
+
+The play affordance belongs on that page too — the request is to *decide* from there, which
+means the decision and the action are in one place.
+
 ## Podcast trimming, and adverts
 
 Asked on 16 Aug alongside a batch of backlog items: *skip intro and outro — and maybe skip
