@@ -259,7 +259,16 @@ private fun HomeTabContent(
         if (state.continueCard == null && state.shelves.isEmpty()) {
             item {
                 Text(
-                    "Nothing to pick up yet. The Library tab has everything on the server.",
+                    // Two different emptinesses, and pointing at the Library tab is only
+                    // useful for one of them. A minute after signing in that tab is empty
+                    // too, and sending somebody to it makes the app look broken at the one
+                    // moment they have nothing else to judge it by.
+                    if (state.libraryHasArrived) {
+                        "Nothing to pick up yet. The Library tab has everything on the server."
+                    } else {
+                        "Getting your library from the server. This happens once — " +
+                            "what you have listened to will show up here."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),

@@ -82,6 +82,14 @@ interface LibraryItemDao {
     @Query("SELECT COUNT(*) FROM library_item WHERE serverId = :serverId AND userId = :userId")
     suspend fun count(serverId: String, userId: String): Int
 
+    /**
+     * Whether anything has been mirrored yet, for screens that have to tell "nothing here"
+     * apart from "nothing yet". Counted rather than selected: an empty Home asking this
+     * question must not pull a whole library into memory to answer it.
+     */
+    @Query("SELECT COUNT(*) FROM library_item WHERE serverId = :serverId AND userId = :userId")
+    fun observeCount(serverId: String, userId: String): Flow<Int>
+
     @Upsert
     suspend fun upsertAll(items: List<LibraryItemEntity>)
 
@@ -482,6 +490,34 @@ interface LibraryItemDao {
         """,
     )
     suspend fun bySeries(serverId: String, userId: String, seriesTitle: String): List<LibraryItemEntity>
+
+    /**
+     * The same series, keeping only the volumes *this* series numbers.
+     *
+     * The difference from filtering [bySeries] on `library_item.seriesSequence` is a book in
+     * two series. That column is re-derived for the primary series only, so a book numbered
+     * #4 here and unnumbered in its other series was being dropped from here, and a book
+     * unnumbered here but numbered there was being kept with the wrong number. The join row
+     * is the only place this series' own sequence lives.
+     *
+     * Unnumbered volumes are excluded rather than ordered last, because the caller is
+     * deciding what comes *next* — and a series nobody numbered has no next.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item i
+        INNER JOIN item_series s
+            ON s.serverId = i.serverId AND s.userId = i.userId AND s.libraryItemId = i.id
+        WHERE i.serverId = :serverId AND i.userId = :userId AND s.seriesName = :seriesTitle
+          AND s.sequence IS NOT NULL
+        ORDER BY s.sequence, i.title COLLATE NOCASE
+        """,
+    )
+    suspend fun bySeriesNumbered(
+        serverId: String,
+        userId: String,
+        seriesTitle: String,
+    ): List<LibraryItemEntity>
 
     /**
      * Everyone who wrote something, with how much of it there is.

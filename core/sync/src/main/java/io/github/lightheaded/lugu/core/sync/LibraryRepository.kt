@@ -142,6 +142,17 @@ class LibraryRepository @Inject constructor(
             rows.map { Library(it.id, it.name, MediaType.fromWire(it.mediaType), it.displayOrder) }
         }
 
+    /**
+     * Whether this account has anything mirrored at all.
+     *
+     * The difference between "you have nothing part-heard" and "your library has not
+     * arrived yet" is the whole of what an empty Home can usefully say, and for the first
+     * minute of a new account the second is the true one. Sending somebody to the Library
+     * tab in that minute sends them to another empty screen.
+     */
+    fun observeAnythingMirrored(account: ActiveAccount): Flow<Boolean> =
+        itemDao.observeCount(account.serverId, account.userId).map { it > 0 }
+
     fun observeItems(account: ActiveAccount, libraryId: String): Flow<List<LibraryItem>> =
         itemDao.observeByLibrary(account.serverId, account.userId, libraryId).map { rows ->
             rows.map { it.toDomain() }

@@ -986,7 +986,15 @@ private fun settingEntries(
             ) {
                 SwitchRow(
                     title = "Tell me about new episodes",
-                    subtitle = "One quiet notification for the batch, for podcasts you are listening to",
+                    // The second sentence exists because without it this feature looks
+                    // broken for its first six hours. New is decided by comparing a
+                    // podcast's episode ids before and after a refresh, so the first
+                    // refresh after switching this on establishes the baseline and
+                    // reports nothing — which is indistinguishable from a switch that
+                    // does not work.
+                    subtitle = "One quiet notification for the batch, for podcasts you are " +
+                        "listening to. The first check after switching this on only takes " +
+                        "stock — anything new arrives from the one after it.",
                     checked = downloads.notifyNewEpisodes,
                     onChange = viewModel::setNotifyNewEpisodes,
                 )
