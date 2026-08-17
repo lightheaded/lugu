@@ -133,6 +133,8 @@ one row at a time.
 | **Library selection does not scope what is shown** — podcasts appear when only audiobooks is selected | fixed 15 Aug |
 | **Let a media type be switched off entirely**, so someone who never listens to podcasts never sees them | done 15 Aug |
 | **An episode row shows only its title and length** — no date, no season or episode number | done 15 Aug |
+| **The grid shows no progress for a podcast** | done 17 Aug |
+| **Sort and filter on the downloads screen are not remembered** | done 17 Aug |
 
 **Multi-select.** Every action in the app was one row at a time, which is fine for a book
 and wrong for a podcast: downloading eight episodes meant eight round trips through the
@@ -203,6 +205,43 @@ podcast never showed progress on Home, because progress is stored per episode an
 read the item-level row that a podcast does not have. The shelf now falls back to the most
 recently updated episode of that podcast — which is also the episode the resume affordance
 plays, since for a podcast "continue listening" means the episode you were on.
+
+**A podcast cover had no progress bar.** Reported twice, and recorded in the backlog as a
+decision rather than a bug — the argument being that a cover reading "60%" for a whole feed
+is worse than none. That argument was wrong, and the app had already settled the question
+everywhere else: the author, series, narrator and collection grids all fall back to the most
+recently played episode, and only the library grid still looked progress up by an item-level
+key that a podcast never has.
+
+So the bar is drawn, and the thing the old argument was worried about is answered by saying
+what the number means instead of leaving it to be guessed: a screen reader hears "Latest
+episode 62% listened", where a book's says "62% listened". The bar had no spoken description
+at all before this, so the one fact separating a part-heard book from an untouched one was
+unavailable to anyone using TalkBack.
+
+The half with no defence was the filter. With no item-level row, a part-heard podcast counted
+as *not started*, so "In progress" — the one filter that exists to find what you are in the
+middle of — hid every podcast in the library.
+
+What a borrowed episode row still may not do is finish the feed. One finished episode of a
+four-hundred-episode show does not make the show Finished, so the bar is drawn from the
+episode and the Finished state is only ever an item's own.
+
+**The downloads screen forgot its sort and its filter** on every visit. They were held in the
+view model, which dies with the screen — deliberately, to avoid tying this screen's ordering
+to the library grid's, since it sorts over bytes and download times the grid knows nothing
+about. The answer was two keys of its own rather than no keys, and a test now asserts that
+changing one leaves the other alone, because sharing them is the obvious wrong fix.
+
+The search box is deliberately not remembered. An ordering is a decision about how a list is
+read; a search is a thing being looked for, and coming back to three of forty downloads with
+a stale word in the box reads as lost data.
+
+**And a retry on that screen did nothing at all.** A download stopped by the storage cap keeps
+the ordinary retry button, and pressing it is refused by the same cap before anything is
+enqueued — but the refusal was being thrown away, so the screen did not change. A button that
+visibly does nothing reads as broken. It now shows what the refusal says, which already states
+its own arithmetic: "Needs 56 MB, and 7.6 GB of the 8 GB cap is already used."
 
 ## Notices (rewound, jumped)
 
@@ -607,6 +646,35 @@ right default nearly everywhere — but this one lives for a second and asks a s
 and opening lugu is not an answer to it. The whole notification now says no. Swiping it away
 does too, because dismissing a prompt and then having the book start anyway would make the
 gesture a lie. The labelled button stays: a tap target nobody can see is not an offer.
+
+## Connecting to a plain-HTTP server
+
+Not reported by Tom — his server is behind https — and found while pointing the tests at a
+container. Recorded here because it is the worst kind of defect this record exists to catch:
+one that made lugu unusable for a whole class of people, silently, and blamed their server
+for it.
+
+| Item | Status |
+|---|---|
+| **A plain-HTTP server could not be reached at all** | fixed 17 Aug |
+| The failure blamed the server rather than the app | fixed 17 Aug |
+
+Android refuses cleartext by default from API 28, and the refusal happens *below* the HTTP
+client: the socket never opens. Audiobookshelf is overwhelmingly self-hosted at home on
+`http://192.168.x.x:13378`, so for those owners a correct address and a running server
+reported "could not reach that server" — which reads as the server being down, and is not
+fixable from their side at all.
+
+A network security config cannot express "whatever the user configures": its domain list is
+fixed at build time and there is no runtime API to add to it. So the platform switch is open
+and the *policy* is the app's, stated where it can be about the address actually in use. The
+sign-in screen says, before the password is sent, that a plain-HTTP address carries the
+password, the token and everything listened to in the clear.
+
+Inline, not a dialog. This is the ordinary way the software is run and lugu must not obstruct
+it — what it must not do is let the password go out silently. Certificate trust is untouched:
+an https address is still verified against the system store, and this must never become a
+"trust everything" config.
 
 ## A way out to the web client
 

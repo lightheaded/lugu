@@ -32,18 +32,49 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | Test | Needs a server |
 | --- | --- |
 | `LaunchSmokeTest` | No |
+| `AutoBrowseTreeTest` | No |
+| `LibraryGridTest` | No |
+| `RememberedListControlsTest` | No |
+| `RotationTest` | No |
+| `CoverCacheTest` | No |
 | `core:db` `DeviceMigrationTest` | No |
+| `SignInTest` | Yes |
 | `PlaybackResumptionTest` | Yes |
 | `harness` `the_harness_outlives_a_force_stop_of_lugu` | No |
 | `harness` `..._after_the_process_is_killed` | Yes |
 | `harness` `a_force_stop_never_resumes_the_wrong_thing` | Yes |
 
-The two that need nothing are not filler. `LaunchSmokeTest` catches the three ways lugu can
+The ones that need nothing are not filler. `LaunchSmokeTest` catches the three ways lugu can
 fail to start that no unit test sees — Hilt's graph failing to build, WorkManager's
 initialiser being removed without Hilt's replacement taking over, and R8 having stripped
 something reached only reflectively. `DeviceMigrationTest` runs the whole 1→5 migration
 chain against Android's own SQLite, which is the only place a migration is actually proved:
 a migration that fails there is an app that will not open after an update.
+
+### Driving screens with no server behind them
+
+`AutoBrowseTreeTest` established the pattern and three more tests now use it: seed Room
+directly under a `serverId` no real account can have, point the account at `books.example`
+so nothing can resolve, and assert against what the app draws. It is what lets a check about
+the library grid run on a bare CI emulator, and it is honest — a tile that shows a progress
+bar cannot have got it from a server that does not exist.
+
+Two things had to be learned for it to work through the *UI* rather than through a
+`MediaBrowser`:
+
+- **A `server` row is not a signed-in account.** `isSignedIn` is `serverDao.active() != null
+  && tokenStore.tokens() != null`, and the token lives in encrypted preferences. Seeding only
+  Room gets you the login screen, and then every assertion fails at "there is no Library tab"
+  — which is true and says nothing. `PlantedToken` writes a nonsense token and hands back
+  whatever the device already held.
+- **Launch the activity yourself.** `createAndroidComposeRule` launches before `@Before`
+  runs, so the screen composes against an empty database and has nothing to bring it back:
+  its first sync goes to an address that cannot resolve. These use `createEmptyComposeRule`
+  and `ActivityScenario.launch` after seeding.
+
+Anything these tests change on the device — the active account, the selected library, a sort
+preference — is put back afterwards, so running them on a phone signed in to a real server
+does not sign it out or re-order its library.
 
 `PlaybackResumptionTest` needs a server because a saved position only exists once something
 has played. Without one it **skips** rather than fails, so a developer with no container
@@ -106,10 +137,15 @@ The library is three sine waves and the invented names AGENTS.md reserves. No re
 author, address or credential is ever involved, and the password is generated per run.
 
 **From an emulator the address is `http://10.0.2.2:13378`, not localhost** — inside an AVD,
-localhost is the AVD. Cleartext to that host and to localhost is permitted by
-`src/testServer/network_security_config.xml`, which is merged into the debug and minified
-builds only. It is not an answer to "my own server is plain HTTP on the LAN"; that is a
-real question with a different answer, and it is in the backlog.
+localhost is the AVD.
+
+Reaching it over plain HTTP needed a debug-and-minified manifest overlay until 17 August,
+because Android refuses cleartext from API 28. That overlay is gone: lugu now permits
+cleartext in the main manifest for every build, having answered the question it was
+deliberately not answering — a great many Audiobookshelf servers are plain HTTP on a home
+network, and refusing them outright made lugu unusable for their owners with an error that
+blamed the server. The decision moved into the app, where the sign-in screen states what a
+plain-HTTP address costs before the password is sent.
 
 This is what CI now does before every emulator run, which is why these tests stopped
 skipping there.
