@@ -74,8 +74,11 @@ class AutoDownloader @Inject constructor(
      */
     private suspend fun fromSeries(account: ActiveAccount, settings: DownloadSettings): List<Target> =
         itemDao.seriesTitles(account.serverId, account.userId).flatMap { title ->
-            val volumes = itemDao.bySeries(account.serverId, account.userId, title)
-                .filter { it.seriesSequence != null }
+            // Numbered by *this* series, asked of the join table rather than of the item's
+            // own `seriesSequence` column. That column is re-derived for the primary series
+            // only, so for a book in two series it was the other series' number — which
+            // dropped books that this series numbers and kept books that it does not.
+            val volumes = itemDao.bySeriesNumbered(account.serverId, account.userId, title)
             val lastStarted = volumes.indexOfLast { hasProgress(account, it.id) }
             if (lastStarted < 0) {
                 emptyList()

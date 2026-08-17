@@ -94,6 +94,15 @@ data class HomeUiState(
     val continueCard: ShelfCard? = null,
     val shelves: List<ShelfRow> = emptyList(),
     val shelvesSpanEverything: Boolean = false,
+    /**
+     * Whether anything has been mirrored for this account yet.
+     *
+     * An empty Home means two different things and used to say only one of them. Right
+     * after signing in the library has not arrived, and "the Library tab has everything"
+     * sends someone to a second empty screen; once it has arrived, the same emptiness
+     * honestly means nothing is part-heard.
+     */
+    val libraryHasArrived: Boolean = true,
 )
 
 /**
@@ -119,7 +128,7 @@ data class HomeUiState(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     authRepository: AuthRepository,
-    libraryRepository: LibraryRepository,
+    private val libraryRepository: LibraryRepository,
     progressRepository: ProgressRepository,
     libraryPrefs: LibraryPrefs,
     private val playback: PlaybackConnection,
@@ -194,8 +203,14 @@ class HomeViewModel @Inject constructor(
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    private val libraryHasArrived: StateFlow<Boolean> = account
+        .flatMapLatest { current ->
+            if (current == null) flowOf(true) else libraryRepository.observeAnythingMirrored(current)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
     val state: StateFlow<HomeUiState> =
-        combine(shelves, progressByThing, settings) { shelfList, progress, prefs ->
+        combine(shelves, progressByThing, settings, libraryHasArrived) { shelfList, progress, prefs, mirrored ->
             // Hidden shelves never reach here — the repository is told not to query them —
             // so this only puts what is left into the order somebody asked for.
             val visible = prefs.arrangeShelves(shelfList) { it.kind.name }
@@ -219,6 +234,7 @@ class HomeViewModel @Inject constructor(
                 continueCard = rows.firstOrNull { it.kind == ShelfKind.CONTINUE }?.cards?.firstOrNull(),
                 shelves = rows,
                 shelvesSpanEverything = !prefs.shelvesFollowLibrary,
+                libraryHasArrived = mirrored,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 

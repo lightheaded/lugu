@@ -240,4 +240,35 @@ class ItemSeriesDaoTest {
         assertThat(dao.nextInSeriesAfter(serverId, userId, "The Breakwater", afterSequence = 1.0)?.id)
             .isEqualTo("falls")
     }
+
+    /**
+     * Download-ahead asks which volumes this series numbers, and the answer has to come
+     * from the join row rather than from the item's primary-series column.
+     *
+     * `falls` is the case that used to go wrong: it is #2 of *The Breakwater* and #1 of
+     * *Riverton*, and `refreshPrimarySeries` writes *Riverton*'s number onto the item. A
+     * rule reading that column while walking *The Breakwater* is reading the wrong series'
+     * position — and where the primary series happens to be an unnumbered one, it drops a
+     * numbered volume entirely.
+     */
+    @Test
+    fun `a numbered series lists the volumes it numbers, not the ones its primary series does`() = runTest {
+        db.libraryItemDao().upsertAll(listOf(item("wakes"), item("falls"), item("companion")))
+        db.itemSeriesDao().upsertAll(
+            listOf(
+                membership("wakes", "The Breakwater", 1.0),
+                membership("falls", "The Breakwater", 2.0),
+                membership("falls", "Riverton", 1.0),
+                // Numbered nowhere: it belongs on the series page and can never be a "next".
+                membership("companion", "The Breakwater", sequence = null, serverRank = 9),
+            ),
+        )
+        db.libraryItemDao().refreshPrimarySeries(serverId, userId, "lib1")
+
+        val numbered = db.libraryItemDao().bySeriesNumbered(serverId, userId, "The Breakwater")
+
+        assertThat(numbered.map { it.id }).containsExactly("wakes", "falls").inOrder()
+        // And the proof that the primary column was not consulted: falls carries Riverton's.
+        assertThat(numbered.last().seriesTitle).isEqualTo("Riverton")
+    }
 }
