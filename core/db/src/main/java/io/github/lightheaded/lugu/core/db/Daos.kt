@@ -90,6 +90,15 @@ interface LibraryItemDao {
     @Query("SELECT COUNT(*) FROM library_item WHERE serverId = :serverId AND userId = :userId")
     fun observeCount(serverId: String, userId: String): Flow<Int>
 
+    /** What one library holds, for a caller reporting the size of a pass it did not run. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND libraryId = :libraryId
+        """,
+    )
+    suspend fun countInLibrary(serverId: String, userId: String, libraryId: String): Int
+
     @Upsert
     suspend fun upsertAll(items: List<LibraryItemEntity>)
 

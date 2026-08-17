@@ -29,12 +29,15 @@ import io.github.lightheaded.lugu.core.model.LibraryItem
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.model.SeriesRef
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A computed row on the library screen. */
 enum class ShelfKind(val label: String) {
@@ -117,6 +120,12 @@ class LibraryRepository @Inject constructor(
      * likely to be stale.
      */
     private val lastSeriesSyncAtMs = mutableMapOf<String, Long>()
+
+    /**
+     * One lock per (account, library), so two mirror passes over the same library cannot
+     * run at once. See [syncLibraryItems] for what happens when they do.
+     */
+    private val passLocks = ConcurrentHashMap<String, Mutex>()
 
     /**
      * The libraries this listener wants to see.
@@ -354,12 +363,49 @@ class LibraryRepository @Inject constructor(
      * in one response, which is a memory cliff on a large library. Rows untouched by
      * the pass are swept afterwards, which is how deletions propagate without needing
      * a socket event.
+     *
+     * ## One pass per library at a time, and why that is not optional
+     *
+     * The sweep deletes every row of this library stamped before *this pass* started, so
+     * two passes running at once can delete each other's work. The order that does it:
+     * pass B stamps a row at its own start time, pass A — which started earlier and is
+     * still walking — restamps that row with its *older* time, and B's sweep then reads
+     * the row as stale and removes it. A has already gone past, so nothing puts it back,
+     * and the item is simply missing from the mirror until the next full pass.
+     *
+     * It was always possible — the six-hourly reconcile could overlap a pull-to-refresh —
+     * and it became likely on 17 August, when signing in started a sync of its own while
+     * the Library tab was starting one. It showed up as an instrumented test on the slower
+     * emulator reporting that a title never reached Room, which is exactly what it looks
+     * like from outside: not a failure, an absence.
+     *
+     * A second caller therefore waits for the pass in flight and takes its word rather
+     * than repeating it. Waiting rather than skipping matters because the caller asked for
+     * a mirror and has to be able to read one when this returns; not repeating it matters
+     * because a full pass over a large library is minutes of somebody's data.
      */
     suspend fun syncLibraryItems(
         account: ActiveAccount,
         libraryId: String,
         onProgress: (synced: Int, total: Int) -> Unit = { _, _ -> },
     ): Result<Int> = runCatching {
+        val inFlight = passLock(account, libraryId)
+        if (!inFlight.tryLock()) {
+            inFlight.withLock { }
+            return@runCatching itemDao.countInLibrary(account.serverId, account.userId, libraryId)
+        }
+        try {
+            mirrorLibraryItems(account, libraryId, onProgress)
+        } finally {
+            inFlight.unlock()
+        }
+    }
+
+    private suspend fun mirrorLibraryItems(
+        account: ActiveAccount,
+        libraryId: String,
+        onProgress: (synced: Int, total: Int) -> Unit,
+    ): Int {
         val startedAt = clock.nowMs()
         var page = 0
         var synced = 0
@@ -392,8 +438,18 @@ class LibraryRepository @Inject constructor(
         // failure is not this one's: the mirror is already written, and the memberships
         // fall back to what the paged pass parsed. Hence the Result being dropped.
         syncSeries(account, libraryId)
-        synced
+        return synced
     }
+
+    /**
+     * One lock per (account, library), created once and kept.
+     *
+     * Keyed by account as well as library because a library id is only unique within a
+     * server, and two accounts syncing at once is an ordinary thing on a shared phone.
+     * The map only grows by the number of libraries somebody has, so nothing evicts it.
+     */
+    private fun passLock(account: ActiveAccount, libraryId: String): Mutex =
+        passLocks.getOrPut("${account.serverId}#$libraryId") { Mutex() }
 
     /**
      * Mirrors one library's series from the server's own listing.
