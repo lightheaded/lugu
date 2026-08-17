@@ -38,6 +38,23 @@ data class SpeedSettings(
         const val MIN = 0.5f
         const val MAX = 3.5f
         const val STEP = 0.05f
+
+        /**
+         * One press of the fine adjustment either side of the presets.
+         *
+         * Computed in hundredths rather than by adding [STEP] to a float, because repeated
+         * addition drifts — fifteen presses from 1.0 lands on 1.7499998, and the next value
+         * after that is not a step away from anything. Snapping to the grid also means a
+         * speed arrived at from a preset and one arrived at by stepping are the same number.
+         *
+         * Clamped here rather than only at the player, so the buttons can be turned off at
+         * the ends instead of accepting presses that do nothing.
+         */
+        fun stepped(from: Float, steps: Int): Float {
+            val stepHundredths = Math.round(STEP * 100f)
+            val hundredths = Math.round(from * 100f) + steps * stepHundredths
+            return (hundredths / 100f).coerceIn(MIN, MAX)
+        }
     }
 }
 
