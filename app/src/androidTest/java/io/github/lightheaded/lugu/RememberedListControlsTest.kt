@@ -224,9 +224,9 @@ class RememberedListControlsTest {
 
         const val FIRST_ID = "downloads-controls-test-a"
         const val SECOND_ID = "downloads-controls-test-b"
-        const val FIRST_TITLE = "Lighthouse Wakes"
+        const val FIRST_TITLE = "Riverton"
         const val SECOND_TITLE = "Lighthouse Falls"
-        const val AUTHOR = "James T. R. Corven"
+        const val AUTHOR = "Marisol Fen"
 
         const val DOWNLOADS_BUTTON = "Downloads"
         const val RECENTLY_ADDED = "Recently added"

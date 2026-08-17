@@ -294,9 +294,9 @@ class LibraryGridTest {
         const val PODCAST_ID = "library-grid-test-podcast"
         const val EPISODE_ID = "library-grid-test-episode"
 
-        const val BOOK_TITLE = "Lighthouse Wakes"
-        const val PODCAST_TITLE = "The Breakwater"
-        const val AUTHOR = "James T. R. Corven"
+        const val BOOK_TITLE = "Lighthouse Falls"
+        const val PODCAST_TITLE = "Riverton"
+        const val AUTHOR = "Marisol Fen"
 
         const val LIBRARY_TAB = "Library"
         const val UI_TIMEOUT_MS = 30_000L

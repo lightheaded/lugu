@@ -236,9 +236,16 @@ class RotationTest {
         const val TEST_SERVER_ID = "$TEST_SERVER_URL#$TEST_USER_ID"
         const val LIBRARY_ID = "rotation-test-library"
         const val BOOK_ID = "rotation-test-book"
-        const val BOOK_TITLE = "Lighthouse Wakes"
-        const val AUTHOR = "James T. R. Corven"
-        const val NARRATOR = "Jefferson Vale"
+        /**
+         * Invented, and deliberately *not* the invented names `scripts/seed-test-server.sh`
+         * puts on the container's catalogue. A device that has run the tests needing a
+         * server has that catalogue mirrored and a mini player showing one of its titles,
+         * and a fixture sharing a name with it makes "exactly one node" false — which is
+         * how the API 26 leg failed the first time this test ran in CI.
+         */
+        const val BOOK_TITLE = "Lighthouse Falls"
+        const val AUTHOR = "Marisol Fen"
+        const val NARRATOR = "Vero Aldstadt"
 
         const val LIBRARY_TAB = "Library"
         const val SETTINGS = "Settings"
