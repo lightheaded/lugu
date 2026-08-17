@@ -156,36 +156,18 @@ fun LibraryScreen(
             )
         }
 
-        state.message?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
-        state.syncMessage?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
-        state.error?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
+        // What a sync is doing, what a batch action just did and why either failed used to
+        // be three lines of text right here, between the controls and the grid. Each of
+        // them appeared and disappeared on its own, and every one of those moments pushed
+        // the whole grid down or pulled it up — a jump nobody asked for, in the middle of
+        // reading. All three are now said in the status line under the top bar, which is
+        // drawn over the content and so moves nothing. See [StatusStrip] and [HomeScreen].
 
         // The grid is fed by the local database, so this gesture re-mirrors from
         // the server rather than being what makes content appear.
         PullToRefreshBox(
-            isRefreshing = state.isSyncing,
-            onRefresh = viewModel::refresh,
+            isRefreshing = state.isPulling,
+            onRefresh = viewModel::pullToRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
