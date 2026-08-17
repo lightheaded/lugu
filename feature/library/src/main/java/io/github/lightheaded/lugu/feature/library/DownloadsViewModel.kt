@@ -13,6 +13,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
+import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +50,8 @@ data class DownloadsUiState(
     val filter: ListFilter = ListFilter.ALL,
     val selectionActive: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
+    /** Why something this screen was asked to do did not happen. */
+    val message: String? = null,
 ) {
     val active: List<DownloadStatus> get() = downloads.filter { it.isActive }
     val complete: List<DownloadStatus> get() = downloads.filter { it.isComplete }
@@ -67,16 +70,26 @@ data class DownloadsUiState(
 class DownloadsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val downloadRepository: DownloadRepository,
+    private val libraryPrefs: LibraryPrefs,
     downloadPrefs: DownloadPrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
 
-    // Kept in memory rather than in LibraryPrefs. The sort here is over sizes and download
-    // times, which the library's own ordering knows nothing about, and borrowing that
-    // setting would mean changing one screen from the other.
-    private val sort = MutableStateFlow(ItemSort.ADDED)
-    private val filter = MutableStateFlow(ListFilter.ALL)
+    // Remembered between visits, under this screen's own two keys. Borrowing the grid's
+    // would have tied two unrelated screens together — sorting downloads by size would
+    // re-order the library — which is why they were held in memory at first, and holding
+    // them in memory meant re-picking the ordering on every visit instead.
+    //
+    // The search box is deliberately *not* remembered. An ordering is a decision about how
+    // a list is read; a search is a thing being looked for, and returning to a screen
+    // showing three of forty downloads with a stale word in the box reads as lost data.
+    //
+    // Read as one pair rather than as two flows because `combine` tops out at five, and
+    // they arrive together from one store anyway.
+    private val listPrefs = libraryPrefs.settings.map { it.downloadSort to it.downloadFilter }
+
+    private val message = MutableStateFlow<String?>(null)
 
     private val selection = MutableStateFlow(Selection())
 
@@ -99,7 +112,8 @@ class DownloadsViewModel @Inject constructor(
         }
 
     val state: StateFlow<DownloadsUiState> =
-        combine(content, query, sort, filter, selection) { base, search, order, chosenFilter, picked ->
+        combine(content, query, listPrefs, message, selection) { base, search, prefs, note, picked ->
+            val (order, chosenFilter) = prefs
             val facts = base.downloads.factsByKey()
             val visible = ListControls.sortItems(
                 base.downloads.filter {
@@ -116,6 +130,7 @@ class DownloadsViewModel @Inject constructor(
                 filter = chosenFilter,
                 selectionActive = onScreen.active,
                 selectedIds = onScreen.ids,
+                message = note,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DownloadsUiState())
 
@@ -124,11 +139,11 @@ class DownloadsViewModel @Inject constructor(
     }
 
     fun setSort(value: ItemSort) {
-        sort.value = value
+        viewModelScope.launch { libraryPrefs.setDownloadSort(value) }
     }
 
     fun setFilter(value: ListFilter) {
-        filter.value = value
+        viewModelScope.launch { libraryPrefs.setDownloadFilter(value) }
     }
 
     fun toggleSelection(key: String) {
@@ -166,11 +181,28 @@ class DownloadsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Starts a failed download again, and says so when it will not start.
+     *
+     * The refusal was thrown away here, which made the commonest failure on this screen
+     * invisible: a download stopped by the storage cap keeps the ordinary retry button, and
+     * pressing it hits the same cap and is refused before anything is enqueued. Nothing
+     * changed on screen, so the button read as broken rather than as the cap holding. The
+     * refusal states its own arithmetic — "Needs 56 MB, and 7.6 GB of the 8 GB cap is
+     * already used" — which is the sentence that says what to change first.
+     */
     fun retry(status: DownloadStatus) {
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             downloadRepository.download(current, status.libraryItemId, status.episodeId)
+                .onFailure { failure ->
+                    message.value = failure.message ?: "That download could not be started again"
+                }
         }
+    }
+
+    fun dismissMessage() {
+        message.value = null
     }
 
     /**
