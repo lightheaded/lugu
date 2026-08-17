@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -66,6 +67,7 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import io.github.lightheaded.lugu.core.model.formatClock
+import io.github.lightheaded.lugu.core.model.formatLength
 import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
@@ -345,7 +347,15 @@ fun PlayerScreen(
                     scrubbing = null
                 },
                 valueRange = 0f..(state.durationSec.toFloat().coerceAtLeast(1f)),
-                modifier = Modifier.semantics { contentDescription = "Playback position" },
+                modifier = Modifier.semantics {
+                    contentDescription = "Playback position"
+                    // Without this a Slider announces a percentage, which on a forty-hour
+                    // book is the least useful number available: "43 percent" is four
+                    // hours wide. The two figures either side of the bar are what a
+                    // sighted listener reads, so they are what this says.
+                    stateDescription = "${formatLength(scrubbing?.toDouble() ?: state.positionSec)} " +
+                        "of ${formatLength(state.durationSec)}"
+                },
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
