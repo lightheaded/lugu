@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,7 +25,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -119,14 +119,12 @@ fun HomeScreen(
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
-                    if (libraryState.isSyncing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(end = 16.dp)
-                                .size(20.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    }
+                    // Nothing conditional belongs in here. A top bar's actions are a
+                    // right-aligned row, so a spinner that came and went at the end of it
+                    // slid these three buttons sideways and back every time a sync started
+                    // and finished — including the sync that runs by itself on launch, so
+                    // the app twitched before anyone had touched it. What it was trying to
+                    // say is now said under the bar, where saying it moves nothing.
                 },
             )
         },
@@ -151,29 +149,62 @@ fun HomeScreen(
             }
         },
     ) { padding ->
-        when (tab) {
-            // Nothing at all until the start tab is known, which is a frame at most.
-            null -> Unit
+        // A Box, so the status line is drawn *over* the top of the content instead of
+        // above it. Laid out as a sibling in a Column it would push both tabs down as it
+        // appeared and let them spring back as it went, which is the movement it exists to
+        // remove. Overlaying costs the top few pixels of a scrolling list for as long as
+        // something is genuinely happening, and costs nothing at all the rest of the time.
+        Box(Modifier.fillMaxSize()) {
+            when (tab) {
+                // Nothing at all until the start tab is known, which is a frame at most.
+                null -> Unit
 
-            HomeTab.HOME -> HomeTabContent(
-                state = state,
-                playingNow = playingNow,
-                coverUrlFor = { viewModel.coverUrl(it) },
-                onOpenItem = onOpenItem,
-                onPlay = onPlay,
-                onTogglePlayPause = viewModel::togglePlayPause,
-                modifier = Modifier.fillMaxSize().padding(padding),
-            )
+                HomeTab.HOME -> HomeTabContent(
+                    state = state,
+                    playingNow = playingNow,
+                    coverUrlFor = { viewModel.coverUrl(it) },
+                    onOpenItem = onOpenItem,
+                    onPlay = onPlay,
+                    onTogglePlayPause = viewModel::togglePlayPause,
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                )
 
-            HomeTab.LIBRARY -> LibraryScreen(
-                onOpenItem = onOpenItem,
-                onBrowse = onBrowse,
-                onOpenCollections = onOpenCollections,
-                modifier = Modifier.fillMaxSize().padding(padding),
-                viewModel = libraryViewModel,
+                HomeTab.LIBRARY -> LibraryScreen(
+                    onOpenItem = onOpenItem,
+                    onBrowse = onBrowse,
+                    onOpenCollections = onOpenCollections,
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    viewModel = libraryViewModel,
+                )
+            }
+
+            // Shown on both tabs, because a sync is a property of the app rather than of
+            // whichever tab happens to be in front — and because switching tabs while one
+            // is running should not look like it stopped.
+            StatusStrip(
+                status = libraryState.statusLine(),
+                onDismiss = libraryViewModel::dismissStatus,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
             )
         }
     }
+}
+
+/**
+ * The one thing worth saying right now, of everything the library screen tracks.
+ *
+ * Ordered by what a person needs first. A failure outranks a confirmation, because a batch
+ * action that succeeded and a sync that then failed is a screen where the failure is the
+ * news. A confirmation outranks work in progress, because it is the reply to something just
+ * pressed and the sync will still be running a moment later to say so.
+ */
+private fun LibraryUiState.statusLine(): Status? = when {
+    error != null -> Status.Problem(error)
+    message != null -> Status.Done(message)
+    isSyncing -> Status.Working(syncNote?.text ?: "Syncing", syncNote?.fraction)
+    else -> null
 }
 
 /** The stored preference names one of the two tabs; this is that name, as a tab. */

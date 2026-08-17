@@ -119,6 +119,11 @@ class CollectionsViewModel @Inject constructor(
         }
     }
 
+    /** Dismisses a failure that has been read; the list itself was never affected by it. */
+    fun dismissError() {
+        error.value = null
+    }
+
     init {
         refresh()
     }

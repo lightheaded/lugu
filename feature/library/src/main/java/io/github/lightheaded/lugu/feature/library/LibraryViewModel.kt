@@ -68,6 +68,17 @@ data class LibraryRow(
         }
 }
 
+/**
+ * What a sync is doing, and how far through it is.
+ *
+ * A sentence rather than a spinner because the thing on screen used to say only that
+ * *something* was happening, which is the least useful true statement an app can make. The
+ * fraction is `null` until the server has said how many items there are — an indeterminate
+ * bar for a second, then a real one, rather than a bar that pretends to know from the
+ * start.
+ */
+data class SyncNote(val text: String, val fraction: Float? = null)
+
 data class LibraryUiState(
     val libraries: List<Library> = emptyList(),
     val selectedLibraryId: String? = null,
@@ -76,7 +87,15 @@ data class LibraryUiState(
     val sort: ItemSort = ItemSort.TITLE,
     val filter: ListFilter = ListFilter.ALL,
     val isSyncing: Boolean = false,
-    val syncMessage: String? = null,
+    /**
+     * True only for a sync somebody asked for by pulling the grid down.
+     *
+     * The pull indicator means "your pull is being honoured", so it may not appear for the
+     * sync that runs on its own when the app opens — a spinner answering a gesture nobody
+     * made is the same lie the top bar's used to tell.
+     */
+    val isPulling: Boolean = false,
+    val syncNote: SyncNote? = null,
     val error: String? = null,
     val selectionActive: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
@@ -105,7 +124,8 @@ class LibraryViewModel @Inject constructor(
 
     private val query = MutableStateFlow("")
     private val syncing = MutableStateFlow(false)
-    private val syncMessage = MutableStateFlow<String?>(null)
+    private val pulling = MutableStateFlow(false)
+    private val syncNote = MutableStateFlow<SyncNote?>(null)
     private val error = MutableStateFlow<String?>(null)
     private val message = MutableStateFlow<String?>(null)
 
@@ -185,8 +205,8 @@ class LibraryViewModel @Inject constructor(
      * reading anything into.
      */
     private val extras: Flow<Extras> = combine(
-        combine(query, syncing, syncMessage, error) { text, isSyncing, syncNote, err ->
-            Extras(text, isSyncing, syncNote, err)
+        combine(query, syncing, pulling, syncNote, error) { text, isSyncing, pulled, note, err ->
+            Extras(text, isSyncing, pulled, note, err)
         },
         message,
         selection,
@@ -219,7 +239,8 @@ class LibraryViewModel @Inject constructor(
             sort = shaping.sort,
             filter = shaping.filter,
             isSyncing = extras.isSyncing,
-            syncMessage = extras.syncMessage,
+            isPulling = extras.isPulling,
+            syncNote = extras.syncNote,
             error = extras.error,
             selectionActive = onScreen.active,
             selectedIds = onScreen.ids,
@@ -237,7 +258,8 @@ class LibraryViewModel @Inject constructor(
     private data class Extras(
         val query: String,
         val isSyncing: Boolean,
-        val syncMessage: String?,
+        val isPulling: Boolean,
+        val syncNote: SyncNote?,
         val error: String?,
         val note: String? = null,
         val selection: Selection = Selection(),
@@ -369,11 +391,31 @@ class LibraryViewModel @Inject constructor(
      * Re-mirrors from the server. The UI never waits on this: everything on screen is
      * already rendering from Room, so a failure here is a message, not an empty screen.
      */
-    fun refresh() {
+    fun refresh() = sync(pulled = false)
+
+    /**
+     * The same work, asked for by pulling the grid down.
+     *
+     * Told apart from the automatic pass only so the pull indicator answers the gesture and
+     * nothing else — see [LibraryUiState.isPulling].
+     */
+    fun pullToRefresh() = sync(pulled = true)
+
+    /** Clears whatever the status line is currently saying. */
+    fun dismissStatus() {
+        message.value = null
+        error.value = null
+    }
+
+    private fun sync(pulled: Boolean) {
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             syncing.value = true
+            pulling.value = pulled
             error.value = null
+            // Named from the start, so the line never appears saying nothing while the
+            // first request is in flight.
+            syncNote.value = SyncNote("Checking the server")
 
             val libraries = libraryRepository.syncLibraries(current)
                 .onFailure { error.value = it.message ?: "Could not reach the server" }
@@ -400,14 +442,27 @@ class LibraryViewModel @Inject constructor(
                     ?: libraries.firstOrNull()?.id,
             )
             targets.forEach { id ->
+                // Named where the name is known. "Syncing Audiobooks" answers the question
+                // somebody watching the line is actually asking, which is what is being
+                // fetched — and on a server with several libraries it also says which.
+                val name = libraries.firstOrNull { it.id == id }?.name
+                val what = if (name.isNullOrBlank()) "your library" else name
+                syncNote.value = SyncNote("Syncing $what")
                 libraryRepository.syncLibraryItems(current, id) { synced, total ->
-                    syncMessage.value = "Syncing $synced of $total"
+                    syncNote.value = SyncNote(
+                        text = "Syncing $what — $synced of $total",
+                        // A total of zero is a library with nothing in it, not a job that is
+                        // finished, and dividing by it would say so in the worst way.
+                        fraction = if (total > 0) synced.toFloat() / total else null,
+                    )
                 }.onFailure { error.value = it.message ?: "Could not sync the library" }
             }
 
+            syncNote.value = SyncNote("Syncing where you got to")
             progressRepository.reconcile(current)
-            syncMessage.value = null
+            syncNote.value = null
             syncing.value = false
+            pulling.value = false
         }
     }
 

@@ -266,6 +266,64 @@ configurable — and a notice carrying an Undo has to stay up long enough to rea
 timestamp and decide. Letting it time out keeps the new position, which is what the old
 "Keep" button did, so that button is gone.
 
+## The spinner in the top bar, and the rule it broke
+
+> *"I never want any UI to jump, as I've mentioned before. Currently there seems to be a
+> loader for something (not clear what) inside the top bar on the right. I sometimes see a
+> spinner there, which disappears. Maybe we could have a loading bar as a thin overlay under
+> that bar, full-width. Would actually be cool to know what exactly is it loading or syncing
+> or refreshing."*
+
+Reported 17 Aug. The same rule as the section above, broken somewhere else — which is the
+point worth taking from it: "do not make the UI jump" is not a fact about notices, and
+fixing it notice by notice will keep producing this report.
+
+| Item | Status |
+|---|---|
+| **The top bar's buttons shift when a sync starts and finishes** | fixed 17 Aug |
+| **The spinner never said what was being loaded** | fixed 17 Aug |
+| **A sync that finishes quickly flashes an indicator nobody can read** | fixed 17 Aug |
+| **Sync, batch and error lines pushed the library grid up and down** | fixed 17 Aug |
+| **The pull-to-refresh spinner answered gestures nobody made** | fixed 17 Aug |
+
+**What was moving, and why it was not obvious.** A top bar's `actions` are a *right-aligned*
+row. The spinner was the last thing in it, so every time it appeared the queue, downloads
+and settings buttons slid left to make room, and every time it went they slid back. Nothing
+was animating and nothing was wrong with the spinner itself — the movement came from three
+buttons that had nothing to do with syncing. It happened on launch, because the library
+mirrors itself the moment the app opens, so the app twitched before anyone had touched it.
+
+**Nothing conditional lives in that row now.** That is the actual fix and it is structural:
+with no state in the actions, there is no arrangement for a state change to alter.
+
+**The line under the bar.** Taken as Tom described it — full width, thin, and drawn *over*
+the top of the content rather than above it, so it costs nothing in layout. Three things
+now share it, because all three were separately shifting the grid: what a sync is doing,
+what a batch action just did ("Marked 3 items"), and why either failed. The batch and error
+lines used to sit between the filter chips and the first row of covers, which meant marking
+three books finished pushed the whole grid down and then let it spring back.
+
+**It says what it is loading.** "Checking the server", then "Syncing *Audiobooks*", then
+"Syncing Audiobooks — 240 of 1,100" with a real progress bar once the server has said how
+many there are, then "Syncing where you got to" while listening positions reconcile. The
+bar is indeterminate for the first second and determinate after, rather than pretending to
+know a total it has not been told.
+
+**And it says nothing at all about a quick one.** Work has to last 400ms before the line is
+drawn. The sync on launch usually finds nothing changed and is over well inside that — which
+is exactly the case that had been flashing a spinner for long enough to notice and not long
+enough to read. Once drawn it stays 600ms after the work ends, because a bar that vanishes
+the instant it fills reads as a glitch rather than as a finish. Both numbers are pinned by
+tests that drive the clock by hand, so "a sync that took 200ms" is stated rather than raced
+for.
+
+**A failure is the one thing that does not leave on its own**, since it is still true when
+it stops being new. It waits to be tapped away, in the same place, coloured as a problem.
+
+**One more thing found while in there.** Pull-to-refresh was wired to *any* sync, including
+the automatic one, so the pull spinner appeared on launch with nobody's finger on the
+screen. It now answers only a real pull; everything else is the line's job.
+
 ## Starting playback
 
 | Item | Status |

@@ -19,7 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,8 +45,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * person made rather than one the metadata implies.
  *
  * The list draws from the mirror, so it is here on a cold start with no network. Only the
- * refresh behind it needs the server, and when that fails it says so in a line above the
- * list rather than by emptying it.
+ * refresh behind it needs the server, and when that fails it says so in the status line
+ * under the top bar rather than by emptying the list.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,78 +73,100 @@ fun CollectionsScreen(
                     // few rows tall and there is nothing to pull. It stands in for the
                     // refresh the app has just declined to make on its own: opening this
                     // screen twice in a minute does not re-fetch several megabytes.
-                    if (state.isSyncing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(end = 16.dp).size(20.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        IconButton(onClick = { viewModel.refresh(force = true) }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                        }
+                    //
+                    // It stays put while the refresh runs, greyed rather than replaced by a
+                    // spinner. Swapping the two moved the button — they are not the same
+                    // width — so the control someone had just pressed jumped under their
+                    // finger. That a refresh is running is said under the bar instead.
+                    IconButton(
+                        onClick = { viewModel.refresh(force = true) },
+                        enabled = !state.isSyncing,
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                 },
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            // The box is offered only once the list is long enough to need it, which is the
-            // opposite of the author page: there are hundreds of authors and rarely more
-            // than a few collections.
-            if (searchEarnsItsPlace(state.total)) {
-                OutlinedTextField(
-                    value = state.query,
-                    onValueChange = viewModel::setQuery,
-                    label = { Text("Search collections", maxLines = 1) },
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (state.query.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.setQuery("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear search")
-                            }
+        Box(Modifier.fillMaxSize()) {
+            CollectionsList(
+                state = state,
+                onQueryChange = viewModel::setQuery,
+                onOpenCollection = onOpenCollection,
+                modifier = Modifier.fillMaxSize().padding(padding),
+            )
+
+            // Overlaid rather than placed in the column, so that a refresh starting and a
+            // failure appearing do not shift the list underneath. The error used to be a
+            // line of red text between the search box and the first row, which pushed every
+            // collection down the moment the server could not be reached.
+            StatusStrip(
+                status = state.error?.let { Status.Problem(it) }
+                    ?: Status.Working("Refreshing collections").takeIf { state.isSyncing },
+                onDismiss = viewModel::dismissError,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CollectionsList(
+    state: CollectionsUiState,
+    onQueryChange: (String) -> Unit,
+    onOpenCollection: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        // The box is offered only once the list is long enough to need it, which is the
+        // opposite of the author page: there are hundreds of authors and rarely more
+        // than a few collections.
+        if (searchEarnsItsPlace(state.total)) {
+            OutlinedTextField(
+                value = state.query,
+                onValueChange = onQueryChange,
+                label = { Text("Search collections", maxLines = 1) },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (state.query.isNotEmpty()) {
+                        IconButton(onClick = { onQueryChange("") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
 
-            state.error?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-
-            if (state.collections.isEmpty()) {
-                Box(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    contentAlignment = Alignment.TopCenter,
-                ) {
-                    Text(
-                        emptyCollectionsLine(state.total, state.query),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                return@Column
-            }
-
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp),
+        if (state.collections.isEmpty()) {
+            Box(
+                Modifier.fillMaxSize().padding(32.dp),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                items(state.collections, key = { it.id }) { collection ->
-                    ListItem(
-                        headlineContent = {
-                            Text(collection.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        },
-                        supportingContent = { Text(collectionCountLine(collection.itemCount)) },
-                        modifier = Modifier.clickable { onOpenCollection(collection.id) },
-                    )
-                }
+                Text(
+                    emptyCollectionsLine(state.total, state.query),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            return@Column
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
+        ) {
+            items(state.collections, key = { it.id }) { collection ->
+                ListItem(
+                    headlineContent = {
+                        Text(collection.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    },
+                    supportingContent = { Text(collectionCountLine(collection.itemCount)) },
+                    modifier = Modifier.clickable { onOpenCollection(collection.id) },
+                )
             }
         }
     }
