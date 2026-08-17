@@ -67,6 +67,15 @@ fun ListControlsBar(
     selectedFilter: ListFilter,
     onFilterSelected: (ListFilter) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * What a filter is called *here*.
+     *
+     * The set is shared and the words are not always. "In progress" on a list of books
+     * means part-listened; on the downloads screen the same filter is answering a question
+     * about bytes, and a chip that reads the same and means something else is the kind of
+     * ambiguity nobody reports and everybody misreads.
+     */
+    labelFor: (ListFilter) -> String = { it.label },
 ) {
     Column(modifier) {
         Row(
@@ -104,7 +113,7 @@ fun ListControlsBar(
                 FilterChip(
                     selected = filter == selectedFilter,
                     onClick = { onFilterSelected(filter) },
-                    label = { Text(filter.label, maxLines = 1, softWrap = false) },
+                    label = { Text(labelFor(filter), maxLines = 1, softWrap = false) },
                 )
             }
         }
