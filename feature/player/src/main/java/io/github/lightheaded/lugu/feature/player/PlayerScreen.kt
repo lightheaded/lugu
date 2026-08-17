@@ -68,6 +68,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import io.github.lightheaded.lugu.core.model.formatClock
 import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.playback.PositionJump
 
@@ -669,14 +670,33 @@ private fun SpeedSheet(
                 }
             }
             Spacer(Modifier.height(16.dp))
+            // The fine adjustment. It steps on a grid and stops at the ends rather than
+            // accepting presses that change nothing: a button that responds to nothing is
+            // read as the sheet having stopped working, not as a limit having been reached.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { onPick(current - 0.05f) }) { Text("−") }
+                val slower = SpeedSettings.stepped(current, -1)
+                val faster = SpeedSettings.stepped(current, 1)
+                IconButton(
+                    onClick = { onPick(slower) },
+                    enabled = slower < current,
+                    modifier = Modifier.semantics { contentDescription = "Slower" },
+                ) {
+                    Text("−")
+                }
                 Text(
                     "${formatSpeedNumber(current)}x",
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "Speed ${formatSpeedNumber(current)} times" },
                 )
-                IconButton(onClick = { onPick(current + 0.05f) }) { Text("+") }
+                IconButton(
+                    onClick = { onPick(faster) },
+                    enabled = faster > current,
+                    modifier = Modifier.semantics { contentDescription = "Faster" },
+                ) {
+                    Text("+")
+                }
             }
         }
     }
