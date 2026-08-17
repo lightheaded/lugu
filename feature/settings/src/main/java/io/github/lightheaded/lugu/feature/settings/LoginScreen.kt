@@ -138,6 +138,24 @@ fun LoginScreen(
                 .semantics { contentDescription = "Password" },
         )
 
+        if (state.isPlainHttp) {
+            Spacer(Modifier.height(12.dp))
+            // Stated where the address was typed, not in a dialog that has to be dismissed.
+            // This is the ordinary way Audiobookshelf is run and the sign-in must not
+            // obstruct it; what it must not do is let the password go out in the clear
+            // without saying so.
+            Text(
+                "This address is plain HTTP. Your password, your token and everything you " +
+                    "listen to travel unencrypted — fine on your own network, not over the " +
+                    "internet. Use https:// if your server offers it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Plain HTTP warning" },
+            )
+        }
+
         state.error?.let { message ->
             Spacer(Modifier.height(12.dp))
             Text(

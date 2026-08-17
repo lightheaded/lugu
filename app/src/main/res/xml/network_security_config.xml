@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Plain HTTP is permitted, and the decision about whether to use it belongs to the person
+    who typed the address.
+
+    Android refuses cleartext by default from API 28, which for a self-hosted client is the
+    wrong default in a way that cannot be worked around by the listener. Audiobookshelf is
+    overwhelmingly run at home, on a LAN, on `http://192.168.x.x:13378` — and lugu could not
+    reach one at all. Worse, it failed in the least legible way possible: the platform blocks
+    the socket before a request is made, so an address that was correct and a server that was
+    running reported "could not reach that server", which reads as the server being down.
+
+    A network security config cannot express "whatever the user configures" — its domain list
+    is fixed at build time and there is no runtime API to add to it. So the platform-level
+    switch is opened and the *policy* moves into the app, where it can be about the address
+    actually in use: the sign-in screen says plainly, before the password is sent, that a
+    plain-HTTP server carries the password and everything listened to in the clear. That
+    warning is the whole safeguard, which is why it is stated at the moment of typing rather
+    than buried in settings.
+
+    What this does not weaken: the only hosts lugu contacts are the server the listener
+    configured and, when crash reporting is switched on, Sentry over https. There is no
+    ad SDK, no analytics endpoint and no third-party host to be downgraded.
+
+    Certificate trust is untouched: an https address is still verified against the system
+    trust store, so this is not a "trust everything" config and must never become one.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
