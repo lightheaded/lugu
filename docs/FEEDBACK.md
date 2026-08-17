@@ -691,6 +691,77 @@ and opening lugu is not an answer to it. The whole notification now says no. Swi
 does too, because dismissing a prompt and then having the book start anyway would make the
 gesture a lie. The labelled button stays: a tap target nobody can see is not an offer.
 
+## The car, a second drive — the speed button, and what the car chooses to show
+
+Reported 17 Aug, from the same car. Two faults, one confirmation, and one question about a
+feature that may already work and has never been watched working.
+
+| Item | Status |
+|---|---|
+| **The speed button does not say what speed it is on** | recorded 17 Aug — backlogged |
+| **"For you" is useless; it should hold what Continue holds** | recorded 17 Aug — backlogged, and not yet known to be ours to change |
+| Cover images in the car | working — *"we have images in Android Auto"* |
+| Continue, complemented by next-in-series | *"amazing"* — and unverified end to end; see below |
+
+**The speed button is a cycle with nothing written on it.** It goes out as a
+`CommandButton` whose display name is the fixed word "Speed", built once in
+`LuguPlaybackService.carCommands`, so the car draws the same label at 0.8× as at 2.0×.
+Pressing it changes the speed correctly and remembers it, and there is no way to tell from
+the button what it just did or what it will do next — which in a car means finding out by
+listening to a sentence at the wrong speed and pressing again, several times, at exactly
+the moment attention is worth the most.
+
+The fix is small and the design question inside it is not. Mechanically the label is already
+pushable: `pushNotificationLayout()` broadcasts the button list to every controller, so
+rebuilding the speed button with the current rate in its name and pushing on every speed
+change is the whole of it. What has to be decided is *which* speed the word names — the one
+playing now, or the one a press moves to. Tom asked for the current speed ("e.g. 1.2x") and
+explained it by the other one ("hard to understand what speed you are switching to"), and
+those are not the same button. A label that reads "1.2×" and lands on 1.4× when pressed
+answers where you are; a label that reads "1.4×" answers where the press goes but never
+tells you where you are. Naming the current rate is the better of the two, because the rate
+in force is a fact about what you are hearing and the next preset is guessable from it once
+the presets are known — but this is a judgement, and it should be checked in the car rather
+than settled here. What must also be checked there: whether a head unit re-reads a custom
+action's label when the session pushes a new one, or caches it from the first connection.
+If it caches, the label cannot carry the number and the answer is a different shape
+entirely.
+
+**"For you" is not lugu's.** Nothing in this app builds a node by that name — the browse
+tree's root offers Continue, Up next, Latest episodes, Downloaded, Series, Podcasts and
+Libraries, and the code is a single list in `BrowseTree.rootChildren`. So the section is the
+host's, and before anything is promised the first job is to find out which of two surfaces
+it is, because only one of them can be fed from here:
+
+- **The recent/resumption root.** A media session can serve a separate root for "what would
+  you resume", which Android Auto uses to draw a tile before anything is browsed. lugu
+  serves no such root today — there are no content-style or recent-root hints anywhere in
+  the service — and if this is what fills "For you", the fix is ours and is roughly the
+  Continue node under a different id.
+- **Android Auto's own suggestions.** If instead it is the launcher's media row, built by
+  the system from its own history, there is no hook at all and the honest answer to Tom is
+  that it cannot be changed from inside lugu.
+
+The ask itself is the part worth keeping whichever way that goes, because it is a statement
+about what a car is for: *"I never use the car UI to discover what I'm going to listen next.
+It's always to continue something."* That is already why the browse tree opens with Continue
+rather than with a library, and it is an argument for spending nothing further on discovery
+surfaces in the car — no recommendations, no "recently added", no browsing shelves — beyond
+what is needed to reach a specific thing on purpose.
+
+**Next-in-series is implemented and has never been watched working.** Tom's own caveat —
+*"although I dunno if it works yet"* — is fair, and the record can be exact about it. A book
+ending with an empty queue resolves through `QueueRepository.next`, which returns a
+`NextUp.Suggested` carrying the reason "Next in *series*"; `DefaultContinuationResolver`
+then either starts it or, if the ask-first setting is on, cues it at the head of the queue
+and puts the reason on screen. The query underneath it, `nextInSeriesAfter`, has its own
+Room test, and the series membership it reads has been through a migration with tests of its
+own. What has no coverage is the join: a real book reaching its end and the next one
+starting, which lives only in [qa/auto.md](qa/auto.md) as an unticked manual line. So the
+parts are proven and the whole is not, and "amazing" is currently praise for something
+nobody has seen happen. That is the gap to close — and it is a good candidate for
+automation, since a book can be seeked to its final seconds without waiting out a book.
+
 ## Connecting to a plain-HTTP server
 
 Not reported by Tom — his server is behind https — and found while pointing the tests at a
