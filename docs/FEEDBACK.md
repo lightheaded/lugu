@@ -757,7 +757,7 @@ feature that may already work and has never been watched working.
 | Item | Status |
 |---|---|
 | **The speed button does not say what speed it is on** | recorded 17 Aug — backlogged |
-| **"For you" is useless; it should hold what Continue holds** | recorded 17 Aug — backlogged, and not yet known to be ours to change |
+| **"For you" is useless; it should hold what Continue holds** | recorded 17 Aug — **served 20 Aug**, and unconfirmed in a car |
 | Cover images in the car | working — *"we have images in Android Auto"* |
 | Continue, complemented by next-in-series | *"amazing"* — and unverified end to end; see below |
 
@@ -785,27 +785,61 @@ action's label when the session pushes a new one, or caches it from the first co
 If it caches, the label cannot carry the number and the answer is a different shape
 entirely.
 
-**"For you" is not lugu's.** Nothing in this app builds a node by that name — the browse
-tree's root offers Continue, Up next, Latest episodes, Downloaded, Series, Podcasts and
-Libraries, and the code is a single list in `BrowseTree.rootChildren`. So the section is the
-host's, and before anything is promised the first job is to find out which of two surfaces
-it is, because only one of them can be fed from here:
+**"For you" is not a node in lugu's tree, and it is still lugu's to fill.** Two guesses were
+recorded here on 17 August — that it was the recent/resumption root, or that it was Android
+Auto's own history row with no hook at all. Both were wrong, and the answer is a third thing.
 
-- **The recent/resumption root.** A media session can serve a separate root for "what would
-  you resume", which Android Auto uses to draw a tile before anything is browsed. lugu
-  serves no such root today — there are no content-style or recent-root hints anywhere in
-  the service — and if this is what fills "For you", the fix is ours and is roughly the
-  Continue node under a different id.
-- **Android Auto's own suggestions.** If instead it is the launcher's media row, built by
-  the system from its own history, there is no hook at all and the honest answer to Tom is
-  that it cannot be changed from inside lugu.
+"For you" is a pane on **Android Auto's dashboard**: the screen the car shows when nothing
+is playing. It is not a tab inside the browse tree, which is why nothing in this app builds
+a node by that name. An app fills it with a **root hint**. A browser that wants suggestions
+sets `MediaBrowserServiceCompat.BrowserRoot.EXTRA_SUGGESTED`
+(`android.service.media.extra.SUGGESTED`, present since API 24) when it asks for the root,
+and the app must answer with a root of its own whose children are read as an ordered list of
+suggestions, best first. The platform's own words are that an app which can provide such
+items *must* return the key in the root hint it answers with.
 
-The ask itself is the part worth keeping whichever way that goes, because it is a statement
-about what a car is for: *"I never use the car UI to discover what I'm going to listen next.
-It's always to continue something."* That is already why the browse tree opens with Continue
-rather than with a library, and it is an argument for spending nothing further on discovery
-surfaces in the car — no recommendations, no "recently added", no browsing shelves — beyond
-what is needed to reach a specific thing on purpose.
+That hint is **not** `EXTRA_RECENT`. `EXTRA_RECENT` is the phone's System UI resumption
+carousel; Media3 answers it inside the session for the system UI and routes it to
+`onPlaybackResumption`, which lugu has implemented already. The two are different questions
+from different surfaces, and merging them would break one to serve the other.
+
+**Why the pane was useless is exact.** Google's guidance says an app that supplies no
+suggestions gets the pane filled from the top of its browse tree instead. The top of
+`BrowseTree.rootChildren` is *Continue* — a browsable category, not a thing to play. So the
+pane offered a folder, and pressing a folder on a dashboard is not what a dashboard pane is
+for. Before 20 August lugu read no root hints at all: `onGetLibraryRoot` took `LibraryParams`
+only to hand it straight back.
+
+**What was done, on 20 August.** `onGetLibraryRoot` reads `LibraryParams.isSuggested` and
+answers a set hint with a second root, `lugu/suggested`, repeating the flag in the params it
+returns. That root's children are Continue's own rows, in the same order and playable rather
+than browsable. An empty Continue answers with an empty list, never an error; signed out, it
+answers with the same one-row explanation the ordinary root gives. A hint that is absent,
+false or malformed gets today's root and today's rows, so ordinary browsing is untouched.
+The bridge this rests on was read in the Media3 1.11.0 source rather than assumed:
+`LegacyConversions.convertToLibraryParams` sets `isSuggested` from the legacy key on the way
+in, and `convertToRootHints` writes the key back from the same field on the way out.
+
+The rows carry no completion extras. `DESCRIPTION_EXTRAS_KEY_COMPLETION_STATUS` would read
+"partially played" on every row of a pane that holds only part-heard things, so it separates
+nothing, and the percentage beside it is only read together with that status. Neither is
+drawn by any Android Auto build known to us: androidx/media issue 2127 (internal
+b/400925046) reports the indicator missing from 13.7.650624 through at least 15.2.653614
+with correct extras. The decision and that reference are in `BrowseTree.suggestedRoot`, so
+the next person does not work it out again.
+
+**What is still unknown is the part that matters to Tom.** The evidence is strong on the
+mechanism and thin on his head unit. Only a car can say whether the pane he is looking at is
+the pane this feeds — a browser client cannot see a dashboard — so the check lives in
+[qa/auto.md](qa/auto.md) with what a failure there would mean.
+
+The ask itself was worth keeping whichever way that went, because it is a statement about
+what a car is for: *"I never use the car UI to discover what I'm going to listen next. It's
+always to continue something."* That is already why the browse tree opens with Continue
+rather than with a library, and it is why this fix is Continue's contents and nothing more
+ambitious. It stays an argument for spending nothing further on discovery surfaces in the
+car — no recommendations, no "recently added", no browsing shelves — beyond what is needed
+to reach a specific thing on purpose.
 
 **Next-in-series is implemented and has never been watched working.** Tom's own caveat —
 *"although I dunno if it works yet"* — is fair, and the record can be exact about it. A book
