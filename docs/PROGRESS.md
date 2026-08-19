@@ -1222,3 +1222,404 @@ not mention lugu. The row says so when either is configured.
 The device pass on a signed release build, which now gates more than it did: whether the extra
 second before playback is needed, whether "Not now" is redundant, and whether the car actually
 draws a downloaded cover with the network off.
+
+## 2026-08-17 — the first CI run with a server, and the three things it caught
+
+The seeded Audiobookshelf container landed on 16 August. On 17 August it ran. Every finding
+below came from it. Two of the three were faults in the app. The third was a test that never
+did the thing its name claimed.
+
+### A test that destroyed nothing
+
+`PlaybackResumptionTest` reported "expected to be at most: 1 but was: 4093". The assertion
+said that a reconnected controller finds an empty player. The reasoning was that a destroyed
+service builds a fresh `ExoPlayer` in `onCreate`. That is right about the service and wrong
+about the premise. Media3 keeps a `MediaSessionService` alive while its session is active.
+So `stopService` destroyed nothing, and the player kept its position.
+
+So the step the test is named after never ran, on any machine, since the day somebody wrote
+it. Nobody knew, because the test skipped for want of a server. A skip looks exactly like a
+pass in a green run.
+
+The false assertion is gone rather than loosened. What remains is true and worth the test.
+The position survives the release and the re-attach of a session. A media button through
+`AudioManager` reaches lugu's session and resumes the right item. The cold-start case
+belongs to `:harness`, which kills the process for real. The KDoc says that now.
+
+### A sign-in that mirrored the libraries and none of their items
+
+The next failure was an empty Room. It got three readings. Only the third survived the
+logcat: a race, then a slow mirror, then a sync that nothing started.
+
+`LibraryViewModel` starts the only on-demand sync in the app. Nothing builds that view model
+until the Library tab is composed. A sign-in lands on Home. The test sat on Home and waited
+for a sync with no reason to start. It taps Library first now, which is what a person does.
+A car cannot, so the gap went into the backlog as a decision rather than a note.
+
+Under it was the real fault. `refresh()` syncs the libraries, then syncs the items of
+`selectedLibraryId`. That selection is null on the first run. The collector that picks a
+default waits for the libraries fetched two lines above it. So the list of libraries to
+mirror was empty. Nothing called `refresh()` again.
+
+Three readings from outside were each wrong, so the next step was a measurement. On a
+device, against a throwaway server: `library` held 2 rows and `library_item` held 0. It
+stayed 0 through a visit to the Library tab. A restart of the app made it 2, because the
+selection was persisted by then. That is what made the fault look first like a race and then
+like a slow sync.
+
+It reached past the grid. Home's shelves, the Android Auto browse tree and `playFromSearch`
+all read Room. All three found nothing. A person can restart the app. A car cannot.
+
+`refresh()` now falls back to the account's default library, or to the first one. Verified
+on a device: items arrive within five seconds of a sign-in, on Home, with no tab tapped and
+no restart.
+
+### The harness skipped past the end of a ninety-second book
+
+Both playback tests failed, in two places, for one reason. The harness skipped ten minutes
+forward to get deep into the book. The book CI seeds is ninety seconds of sine wave.
+
+The skip ran off the end. Playback stopped. A session that no longer played never reported
+the speed set immediately afterwards. That is what "lugu never reported the speed the
+harness asked for" really said. The server then stored the item as finished, and the next
+test resumed it at its end. One wrong constant, two failures that looked unrelated.
+
+The leak is worse than a leak between tests. Progress lives on the Audiobookshelf server. So
+the poisoned position came back down after an uninstall and a reinstall. On a fresh install,
+before a single test touched it, `dumpsys media_session` read `state=STOPPED(1),
+position=90000`.
+
+The setup now assumes nothing about where the book is:
+
+- It waits for the title **on screen**, and it opens the Library tab on the way.
+  `PLAY_SEARCH` answers from Room. Before the first sync, the right answer is that no such
+  book exists. `:app` waits on Room directly. The harness cannot see another app's Room, so
+  it waits for what a person sees.
+- It waits for a book that is **loaded**, not one that plays. A book left at its end loads,
+  plays out what is left, and stops.
+- It rewinds to the start, presses play, and walks forward in fifteen-second steps to
+  forty-five seconds. It verifies after each step that the book still plays. A book too
+  short to reach the target says so, rather than an end that gets blamed on the speed.
+- Tolerances match that target: 20s behind, 30s ahead, against 45s. Nothing on the
+  resumption path applies a rewind. `SmartRewind` is sized from the length of a pause, and a
+  dead process no longer knows one. Only the five-second persistence tick puts the position
+  behind.
+
+One more fault came out of the numbers rather than the color of the run. The published
+position is a stamp with a time on it. The first version carried it forward by the elapsed
+time. On one API 26 run the session went quiet for ten seconds. The arithmetic invented
+fifteen seconds of progress, and the book "resumed fifteen seconds behind" a position it
+never reached. The seek loop read the same estimate, so the loop was able to reach the
+target with no seek landed at all.
+
+Every comparison now uses what the platform reported. A stale reading errs towards an
+earlier position. That loosens the "behind" check and tightens the "ahead" one, and both are
+the safe direction. The spread across runs fell from fifteen seconds to under a tenth of
+one.
+
+**The resumption works, and this is the first time anything showed it.** On an API 36
+emulator, against the seeded server:
+
+    I LuguHarness: killed lugu's process 19887 while it was playing
+    I LuguHarness: resumed 9c46b6de at 45209ms x1.5; was 9c46b6de at 45239ms x1.5
+
+The process gone, `input keyevent 126`, and the same item back thirty milliseconds from
+where it stopped, at the speed it was on. API 26 lands in the same place. That line is
+written on a pass as well as on a failure. "It resumed" and "it resumed where it was" are
+different claims, and only the second is the promise. The identity is a digest of the title,
+so it names nothing from anybody's shelf.
+
+The test was checked before it was believed. Without the key press it fails, and nothing
+comes back inside sixty seconds. So the button does the work, not a service that the system
+restarts by itself. The speed asserted is never the one already in force: the harness picks
+1.5 or 1.2, whichever the book is not on.
+
+This is the proof that the media button receiver of 330fd87 was missing. Before that
+receiver was declared, a headset press had nowhere to arrive once the process was gone.
+
+One finding stays unasserted. A media button after `am force-stop` woke lugu on two runs of
+one emulator and not on a third, against a fresh install. Neither outcome is lugu's to
+control. So the test asserts only that whatever comes back is the right book at the right
+place.
+
+### Two things around the server, not in it
+
+`scripts/seed-test-server.sh` refuses to hijack a container that belongs to another
+checkout. The container name is fixed and `ABS_ROOT` is not. So two roots on one machine
+fought over one name, and the loser was never told. A run from the second root replaced the
+first root's server. It also left the first root's stored password on an account that no
+longer existed.
+
+What that looks like downstream is nothing like what it is. The sign-in fails and the
+library comes back empty. The harness then reports that the title in `lugu.test.playQuery`
+was not on screen, which reads as a fault in the test. It cost two runs, and it very nearly
+bought a wrong conclusion about work that was correct. The script now compares the running
+container's `/config` mount against the root it was asked for. If they differ, it stops,
+prints both paths, and names the two ways out.
+
+And `docs/automation.md` stated the precedence backwards. It said the file wins over the
+environment, and both `:app` and `:harness` do the opposite. The code changed and the
+sentence about it did not. A review caught it, which is the only way a wrong sentence in a
+document ever gets caught.
+
+## 2026-08-17 (later) — what daily driving turned up
+
+Nine faults from Tom's own use, none of them found by a test.
+
+### A podcast tile showed no progress, and the filter was blind to it
+
+Progress is stored per (item, episode) pair, and a podcast holds no row at the item level.
+The library grid looked progress up by that key alone, so a feed's key matched nothing. The
+browse, series, narrator and collection grids were already fixed. They read
+`ItemProgress.byItem`, which falls back to the most recently played episode. The library
+grid was the last screen that did it the old way.
+
+The same lookup left the "In progress" filter blind. A part-heard podcast has no item-level
+row, so it counted as untouched. The one filter that exists to find what you are in the
+middle of hid it.
+
+A borrowed row must not decide that the *feed* is finished. `LibraryRow` now knows whether
+its progress is its own or an episode's. The bar is drawn either way, and only an item with
+a row of its own can be Finished.
+
+The bar also carried no content description. A screen reader heard nothing about the one
+fact that separates a part-heard book from a new one. It says "62% listened" now. Where the
+number belongs to an episode it says "Latest episode 62% listened", because the plain
+version reads as a claim about a whole show.
+
+The record here was wrong, not merely incomplete. The backlog called the missing bar a
+deliberate refusal to draw "60% of a feed". The app already settled that question on every
+other grid.
+
+### The downloads screen forgot its ordering and hid its refusals
+
+Sort and filter lived in a `MutableStateFlow` that dies with the screen. `LibraryPrefs` now
+carries `downloadSort` and `downloadFilter`. They are two keys of its own rather than the
+grid's, because a visit to Downloads must not re-order somebody's library. A test pins that:
+a change to one leaves the other alone.
+
+The search box is deliberately not remembered. An ordering is a decision about how a list is
+read. A search is a thing looked for, and three of forty rows behind a stale word reads as
+lost data.
+
+A refused retry said nothing. The storage cap stops a download and keeps the ordinary retry
+affordance. The same cap then refuses the retry. The screen threw the refusal away, so the
+button read as broken. The refusal is now a snackbar, at the row that was tapped rather than
+above forty rows. It quotes its own arithmetic: "Needs 56 MB, and 7.6 GB of the 8 GB cap is
+already used."
+
+The chip that reads "In progress" on the grid means part-listened. On the downloads screen
+the same chip answers a question about bytes. It reads "Downloading" there now. The words
+belong to the screen and the filter policy stays in `:core:model`, which is the split that
+was already right.
+
+### A plain-HTTP server was unreachable
+
+Audiobookshelf is mostly self-hosted, at home, on a LAN, over plain HTTP. Android refuses
+cleartext from API 28, and it refuses below the HTTP client. The socket is blocked before a
+request exists. So a correct address and a running server reported "could not reach that
+server", which reads as a server that is down.
+
+A network security config cannot express "whatever the user configures", because its domain
+list is fixed at build time. The platform switch is open now and the policy lives in the
+app, where it can be about the address in use. The sign-in screen states the cost before the
+password goes out. A plain-HTTP server carries the password, the token and every listen in
+the clear. The warning is inline, where the address was typed, and not a dialog. This is the
+ordinary way the software runs, and lugu must not obstruct it.
+
+What lugu must not do is let the password go out silently. Certificate trust is untouched.
+An `https` address is still verified against the system trust store, and the config must
+never become "trust everything". The debug-and-minified manifest overlay that permitted
+cleartext to 10.0.2.2 is gone, with its source-set wiring and its lint suppression.
+
+`ServerUrl` also lowercases the scheme. An auto-capitalized "Https://" is the ordinary way
+to arrive. "That does not look like a server address" blames the listener for their
+keyboard.
+
+### The playback speed drifted off its own grid
+
+The fine adjustment added a hardcoded 0.05 to a float on every press. Fifteen presses from
+1.0 reached 1.7499998. So a stepped speed was a different number from the identical-looking
+preset. The step is computed in hundredths now and snaps to the grid.
+
+It also did not know the range had ends. A press below 0.5 or above 3.5 was accepted,
+clamped at the player, and changed nothing on screen. A button that answers nothing reads as
+a broken sheet rather than as a limit. Both buttons switch off with nowhere left to go.
+
+`−` and `+` inside an `IconButton` gave a screen reader one character to read. They carry
+"Slower" and "Faster" now, and the number between them reads as a speed.
+
+`SpeedSettings.STEP` existed for this and was never used. The backlog said "wire it or
+delete it". It is wired.
+
+### Four manual checks became machine checks
+
+None of the four needs a server. `RotationTest` puts eight screens through the destroy and
+rebuild of a rotation. It asserts that each is still the screen afterwards, because a
+NavHost that restarts at Home passes "it did not crash". The item page is the interesting
+one, because its argument must come back out of saved state.
+
+Covers on disk are asserted on the loader the app draws with. "Coil caches by default" is
+not a decision anybody can point at, and a deleted cache block looks like the upstream
+complaint app#907. A wrong password says so, against the seeded server. And a sign-in fills
+the mirror, asserted against Room, because Room is the claim.
+
+The position slider gained a state description in the same pass. A `Slider` announces a
+percentage, and on a forty-hour book "43 percent" is four hours wide. It reads the two
+figures printed either side of the bar instead.
+
+### Three smaller ones, and two about the tests
+
+An empty Home pointed at an empty Library tab. "The Library tab has everything on the
+server" is right once the mirror arrives. It is wrong for the minute after a sign-in, which
+is the minute where somebody has nothing else to judge lugu by. Home counts what is mirrored
+for the account — one counted query — and says the library is on its way.
+
+Download-ahead read the wrong series' numbering. `library_item.seriesSequence` is re-derived
+for the primary series only. So for a book in two series it holds the other series'
+position. `bySeriesNumbered` asks the join table, which is the only place a series' own
+sequence lives. The test uses a book that is #2 of one series and #1 of another, and asserts
+that the primary column was not consulted.
+
+"Tell me about new episodes" looked broken for six hours. New is decided by a comparison of
+episode ids across a refresh. The first refresh sets the baseline and reports nothing. The
+row says so now.
+
+Two test faults, both real outside CI. `RotationTest` clicked a book called "Lighthouse
+Wakes", and so does the catalogue the seeder builds. On a device with that catalogue
+mirrored, "exactly one node" was two. The fixtures use invented names now, and a constant
+says why.
+
+The seeded-Room tests reset three preferences to a default rather than to the value they
+found: the selected library and two sort keys. On CI that is nothing. On a phone it leaves
+its owner's library picker on something they did not choose.
+
+The last M0 sign-in line stays manual, and the reason is recorded. `cmd connectivity
+airplane-mode` arrived in API 30, and the older route needs a permission the shell no longer
+has. A test that runs on one leg and skips on the other is worse than a manual line, because
+CI fails on any skip.
+
+## 2026-08-17 (last) — a sign-in that mirrors, the race it exposed, and a line that moves nothing
+
+### Something now calls refresh()
+
+The morning fix made `refresh()` mirror a library's items when nothing was selected yet. It
+did not make anything call `refresh()`. So a new account's Home was still empty. There were
+no shelves, nothing to resume, and no sign that anything was on its way. The car's browse
+tree and `playFromSearch` found the same nothing, and neither can tap a tab.
+
+The periodic reconcile hid this on a fresh install, where WorkManager runs the first period
+straight away. On any later sign-in the worker is already enqueued.
+`ExistingPeriodicWorkPolicy.KEEP` then means it does not run again for up to six hours.
+
+`SyncScheduler.syncNow` enqueues a one-off reconcile at the moment the account is created.
+It is a worker rather than a coroutine on the sign-in screen. A first sync of a large
+library outlives the screen that starts it, and this one survives a dead process.
+
+### The race that fix made likely
+
+The API 26 leg then failed with "Lighthouse Wakes never reached Room after 180000ms". That
+is an honest description of a race.
+
+A mirror pass stamps every row it writes with its own start time. It then deletes everything
+in that library older than that stamp. This is how a book deleted on the server leaves the
+phone with no event to carry the news. It is correct exactly once at a time.
+
+Two passes that overlap delete each other's work. The later pass stamps a row at its own
+start. The earlier pass restamps it with an earlier time. The later pass then reads the row
+as stale and removes it. The earlier pass moved on already and never puts it back. The item
+is simply missing until the next full pass.
+
+The hazard was always there, because the six-hourly reconcile can overlap a pull-to-refresh.
+It became likely on 17 August, when a sign-in started a sync of its own beside the Library
+tab's. It surfaced as an absence, with nothing failing anywhere. That is why it is worth a
+lock rather than a retry.
+
+`syncLibraryItems` holds a lock per (account, library). A second caller waits for the pass
+in flight and takes its word. It waits rather than skips, because the caller asked for a
+mirror and must be able to read one. It takes the first pass's word rather than repeats the
+work, because a full pass over a large library is minutes of somebody's data.
+`LibraryMirrorSweepTest` writes the interleaving out at the DAO level. It does not test the
+lock, and it is why the lock cannot be removed.
+
+### A line that says what loads, and moves nothing
+
+The spinner in the top bar broke a rule Tom stated before: the UI must never jump. A top
+bar's actions are a right-aligned row. So a spinner at the end of it slid the queue,
+downloads and settings buttons left, and let them slide back on the way out. Nothing about
+the spinner animated the layout. Three unrelated buttons did. It happened on launch, before
+anybody touched the app, because the library mirrors itself the moment the app opens.
+
+Nothing conditional lives in that row now, and that is the actual fix. With no state in the
+actions, a state change has no arrangement to alter.
+
+In its place is a full-width line under the top bar. It is drawn over the content rather
+than above it, so it costs nothing in layout. Three things that each shifted the library
+grid now share it: what a sync does, what a batch action did, and why either failed. The
+batch and error lines used to sit between the filter chips and the first row of covers. So
+three books marked finished pushed the whole grid down and let it spring back.
+
+It says what it fetches, which the spinner never did. First "Checking the server", then
+"Syncing <library>". Then a count and a real progress bar, once the server states how many
+items exist. Then "Syncing where you got to" while positions reconcile. It stays
+indeterminate until the total is known, instead of a pretense of knowledge.
+
+And it says nothing at all about quick work. Work must last 400ms before the line is drawn.
+The launch sync usually finds nothing changed and ends well inside that, which is exactly
+the flicker in the complaint. Once drawn it stays 600ms after the work ends, so a filled bar
+is seen to finish rather than seen to vanish. Tests drive the clock by hand and pin both. A
+failure is the one kind that does not leave on its own, because it is still true when it
+stops being new.
+
+It waits to be tapped away. Two more came out of the same place. The collections screen
+swapped its refresh button for a spinner, which moved the control that was just pressed. The
+button stays put and greys now. And pull-to-refresh was wired to any sync, including the
+automatic one, so its spinner answered a gesture nobody made. It answers only a real pull.
+
+### A second drive, and two pages that do not exist
+
+The car's speed button carries the fixed word "Speed". It reads the same at 0.8x as at 2.0x,
+so a driver learns what a press did from a sentence at the wrong speed. The label is already
+pushable, because the button list is broadcast on demand.
+
+What is recorded is the part that is not mechanical. Does the label name the rate in force,
+or the rate a press moves to? Does a head unit re-read a custom action's label, or cache it
+from the first connection? Only a car can answer the second question, and a cached label
+needs a different fix entirely.
+
+"For you" is not lugu's. Nothing here builds a node by that name, so the section belongs to
+the host. The entry names the two surfaces it can be, and which one we can feed. The reason
+behind the ask survives either answer. The car is used to continue something, never to
+discover, which argues against any further spend on discovery there.
+
+Covers in the car are recorded as working, from the fix made on the previous drive.
+Next-in-series is recorded as unproven. Each of its parts has a test. Its join — a book that
+ends, and the next one that starts — exists only as an unticked manual line.
+
+A new-episode notification opens Home, and the ask behind it is an episode page with show
+notes. Both are recorded rather than built. The notification is a two-line fix that cannot
+be made alone. `getLaunchIntentForPackage` is the bare launcher intent and carries nothing
+about the episode. And there is nowhere for it to go.
+
+One fact is worth having before that page is designed. An episode's own description is
+already mirrored by the item sync and was never drawn. So the show notes for every episode
+of every followed podcast sit on the phone, unread.
+
+### Next
+
+Four things, in the order they are worth doing.
+
+The status line stopped at two screens, and that was deliberate. The sign-in screen, the
+connection screen, the feedback form and the player still grow a line and push their content
+down. The decision comes first. Does the line generalize past the two screens it is on? A
+form is the one place where a message under its own field is defensible. The player is not a
+form.
+
+Next-in-series, end to end, in `:harness`. A book can be seeked to its final seconds, so the
+check costs no more than any other instrumented test.
+
+The episode page, with show notes, which then gives the notification somewhere to land.
+Three decisions come with it, and they are in the backlog.
+
+The car items and the M0 device pass wait for a drive and a signed release build. Nothing
+else can answer the speed label or "For you".
