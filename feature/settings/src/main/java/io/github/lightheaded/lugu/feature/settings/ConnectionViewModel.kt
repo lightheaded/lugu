@@ -158,6 +158,14 @@ class ConnectionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Puts away whichever of the two the strip is showing.
+     *
+     * One function rather than two, because the strip shows one line at a time and the
+     * person tapping it is putting away the line they can see.
+     */
+    fun dismissStatus() = _state.update { it.copy(error = null, testResult = null) }
+
     // endregion
 
     // region headers

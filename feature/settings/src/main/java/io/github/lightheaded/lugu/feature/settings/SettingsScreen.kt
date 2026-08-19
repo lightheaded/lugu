@@ -69,6 +69,7 @@ import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
+import io.github.lightheaded.lugu.core.ui.ReservedMessage
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -1570,14 +1571,24 @@ private fun AutoPlayDevices(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        message?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 4.dp).clickable(onClick = onDismissMessage),
-            )
-        }
+        // Reserved rather than added. There is no top bar to draw over from inside a
+        // settings row, and the message is about the control directly above it, so it
+        // takes rule 2: always composed, the same height whether or not there is anything
+        // to say, and never the reason the rows below this one move.
+        ReservedMessage(
+            message = message,
+            // Tappable only while there is something to put away. Reserved space that
+            // answers a tap is a target that usually does nothing.
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .then(
+                    if (message != null) {
+                        Modifier.clickable(onClick = onDismissMessage)
+                    } else {
+                        Modifier
+                    },
+                ),
+        )
     }
 
     if (showPaired) {

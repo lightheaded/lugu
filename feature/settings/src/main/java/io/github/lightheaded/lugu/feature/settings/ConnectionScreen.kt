@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,6 +49,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.text.KeyboardOptions
 import io.github.lightheaded.lugu.core.api.ConnectionCertificate
 import io.github.lightheaded.lugu.core.api.ConnectionHeader
+import io.github.lightheaded.lugu.core.ui.ReservedMessage
+import io.github.lightheaded.lugu.core.ui.Status
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 import java.text.DateFormat
 import java.util.Date
 
@@ -93,22 +97,40 @@ fun ConnectionScreen(
             )
         },
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .imePadding()
-                .padding(horizontal = 16.dp),
-        ) {
-            LocalAddressSection(state, viewModel)
-            HorizontalDivider(Modifier.padding(vertical = 20.dp))
-            HeadersSection(state, viewModel)
-            HorizontalDivider(Modifier.padding(vertical = 20.dp))
-            CertificateSection(state, viewModel, onPick = { pickCertificate.launch(CERTIFICATE_TYPES) })
-            HorizontalDivider(Modifier.padding(vertical = 20.dp))
-            StorageNote()
-            Spacer(Modifier.height(32.dp))
+        // A Box, so the answer to "Test this now" is drawn over the top of the screen
+        // rather than added to the bottom of the first section. Placed in the column, it
+        // pushed the headers, the certificate and the storage note down the moment the
+        // probe came back — and the probe's answer is several lines long, so what moved
+        // was most of the screen.
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+                    .padding(horizontal = 16.dp),
+            ) {
+                LocalAddressSection(state, viewModel)
+                HorizontalDivider(Modifier.padding(vertical = 20.dp))
+                HeadersSection(state, viewModel)
+                HorizontalDivider(Modifier.padding(vertical = 20.dp))
+                CertificateSection(state, viewModel, onPick = { pickCertificate.launch(CERTIFICATE_TYPES) })
+                HorizontalDivider(Modifier.padding(vertical = 20.dp))
+                StorageNote()
+                Spacer(Modifier.height(32.dp))
+            }
+
+            // A failure outranks a test result: an address that could not be saved is the
+            // news, and the probe that ran before it will be run again.
+            StatusStrip(
+                status = state.error?.let { Status.Problem(it) }
+                    ?: state.testResult?.let { Status.Note(it) },
+                onDismiss = viewModel::dismissStatus,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
+            )
         }
     }
 
@@ -173,14 +195,9 @@ private fun LocalAddressSection(state: ConnectionUiState, viewModel: ConnectionV
         }
     }
 
-    state.testResult?.let {
-        Spacer(Modifier.height(8.dp))
-        Text(it, style = MaterialTheme.typography.bodySmall)
-    }
-    state.error?.let {
-        Spacer(Modifier.height(8.dp))
-        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-    }
+    // What the test found, and anything that failed, are drawn by the strip over the top
+    // of the screen. Both are outcomes of an action rather than facts about the field
+    // above them, so neither belongs in this column. See [StatusStrip].
 }
 
 @Composable
@@ -280,14 +297,10 @@ private fun HeaderDialog(draft: HeaderDraft, problem: String?, viewModel: Connec
                     singleLine = true,
                     modifier = Modifier.semantics { contentDescription = "Header value" },
                 )
-                problem?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                // A dialog is a column too, and a problem added to the bottom of it moved
+                // Save and Cancel down under the finger that had just reached for them.
+                Spacer(Modifier.height(4.dp))
+                ReservedMessage(problem)
             }
         },
         confirmButton = { TextButton(onClick = viewModel::saveDraft) { Text("Save") } },
@@ -377,14 +390,8 @@ private fun CertificatePasswordDialog(state: ConnectionUiState, viewModel: Conne
                     ),
                     modifier = Modifier.semantics { contentDescription = "Certificate password" },
                 )
-                state.certificateProblem?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                Spacer(Modifier.height(4.dp))
+                ReservedMessage(state.certificateProblem)
             }
         },
         confirmButton = { TextButton(onClick = viewModel::confirmCertificate) { Text("Install") } },
