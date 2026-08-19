@@ -41,6 +41,13 @@ ROOT="${ABS_ROOT:-${RUNNER_TEMP:-/tmp}/lugu-abs}"
 # server is not the same as agreeing that a test may play something on it.
 PLAY_QUERY="Lighthouse Wakes"
 
+# The series the next-in-series test walks. Same reasoning as PLAY_QUERY, and the same
+# consent: the test plays volume 1 to its end and lets volume 2 begin, so it moves the
+# position of both books. The two volumes are found by their sequence within this series,
+# not by title, which is what makes the check "volume 2 followed volume 1" rather than
+# "something followed something".
+SERIES_QUERY="Riverton"
+
 say() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
 
 # --------------------------------------------------------------------------------------
@@ -51,6 +58,8 @@ generate_media() {
   if [ -f "$ROOT/.media-done" ]; then say "media already generated"; return; fi
   mkdir -p "$ab/James T. R. Corven/Lighthouse Wakes" \
            "$ab/Jefferson Vale/The Breakwater" \
+           "$ab/Nessa Cardrow/$SERIES_QUERY/Vol. 1 - Riverton Dawn" \
+           "$ab/Nessa Cardrow/$SERIES_QUERY/Vol. 2 - Riverton Dusk" \
            "$pc/The Tidelands"
 
   # A chaptered single-file book. Three chapters, because "next chapter" cannot be tested
@@ -88,6 +97,31 @@ META
       -metadata title="Part $i" -metadata album="The Breakwater" \
       -metadata artist="Jefferson Vale" \
       -c:a libmp3lame -b:a 32k "$ab/Jefferson Vale/The Breakwater/0$i - Part $i.mp3" -y
+  done
+
+  # A real series: two volumes, numbered 1 and 2, so that "the next volume began" is a
+  # thing a test can watch rather than a rule a unit test asserts about empty tables.
+  #
+  # Audiobookshelf takes the series and the sequence from the folder layout —
+  # `<author>/<series>/Vol. N - <title>` — and no API call is needed after the scan. Two
+  # other layouts were tried against a live 2.36.0 container and work equally well
+  # (`N - <title>` and `<title> - Book N`); this one was kept because it reads as a volume
+  # number to a person as well as to the scanner. The item titles come out as the folder
+  # name with the volume prefix removed, and the joined string the API returns is
+  # "Riverton #1", which is where lugu recovers the sequence from.
+  #
+  # Twenty-five seconds each, and the length is the point: the test seeks into the last few
+  # seconds of volume 1 and then lets the audio run out, in real seconds. These are also the
+  # shortest items in the catalogue, which is safe only because no other test names them —
+  # the harness walks the ninety-second book to forty-five seconds and would run off the end
+  # of one of these. Nothing may point lugu.test.playQuery at a Riverton volume.
+  local vol title
+  for vol in 1 2; do
+    if [ "$vol" = 1 ]; then title="Riverton Dawn"; else title="Riverton Dusk"; fi
+    ffmpeg -v error -f lavfi -i "sine=frequency=$((330 + vol * 30)):duration=25" \
+      -metadata title="$title" -metadata album="$title" -metadata artist="Nessa Cardrow" \
+      -c:a libmp3lame -b:a 32k \
+      "$ab/Nessa Cardrow/$SERIES_QUERY/Vol. $vol - $title/$title.mp3" -y
   done
 
   # Episodes, so an episode can be shown to be tracked as itself rather than as the show.
@@ -247,7 +281,8 @@ main() {
 
   books=$(make_library Audiobooks /audiobooks book audiobookshelf)
   casts=$(make_library Podcasts /podcasts podcast itunes)
-  scan_and_wait "$books" 2
+  # Four books now: the chaptered one, the two-file one, and the two Riverton volumes.
+  scan_and_wait "$books" 4
   scan_and_wait "$casts" 1
 
   if [ "${1:-}" = "--github-output" ]; then
@@ -260,6 +295,7 @@ main() {
       echo "user=$ABS_USER"
       echo "pass=$ABS_PASS"
       echo "play-query=$PLAY_QUERY"
+      echo "series-query=$SERIES_QUERY"
     } >> "${GITHUB_OUTPUT:?--github-output needs GITHUB_OUTPUT}"
     say "wrote the connection details to GITHUB_OUTPUT"
   else
@@ -271,6 +307,7 @@ Ready. Put these in local.properties to point the instrumented tests at it:
   lugu.dev.user=$ABS_USER
   lugu.dev.pass=$ABS_PASS
   lugu.test.playQuery=$PLAY_QUERY
+  lugu.test.seriesQuery=$SERIES_QUERY
 
 From an emulator the address is $ABS_EMULATOR_URL — inside an AVD, localhost is the AVD.
 Stop it with: docker rm -f $ABS_CONTAINER

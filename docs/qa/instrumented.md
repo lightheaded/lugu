@@ -40,6 +40,7 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | `core:db` `DeviceMigrationTest` | No |
 | `SignInTest` | Yes |
 | `PlaybackResumptionTest` | Yes |
+| `NextInSeriesTest` | Yes, and a series on it |
 | `harness` `the_harness_outlives_a_force_stop_of_lugu` | No |
 | `harness` `..._after_the_process_is_killed` | Yes |
 | `harness` `a_force_stop_never_resumes_the_wrong_thing` | Yes |
@@ -85,6 +86,32 @@ never once executed there — it looked green and proved nothing. CI now seeds i
 before the emulator starts, and a step after the run **fails the job if any test skipped at
 all**. A skip on a runner no longer means "unrunnable"; it means the wiring broke.
 
+## The end of a book, and the one after it
+
+`NextInSeriesTest` watches the join that nothing had ever watched: a book reaches its end,
+and the next volume of its series begins. Every part of that path had a test and the join
+had none — `nextInSeriesAfter` against Room, the memberships against the migrations, the
+ask-first rule against `DefaultContinuationResolver` — and three suites that each stop one
+step short of the other two prove nothing about the step between them.
+
+Two things about it are deliberate.
+
+**The end is a real end.** The volume is walked forward to its last few seconds and then
+left alone, so what the service reacts to is the player running out of audio. Posting
+`STATE_ENDED` at it would prove the listener works and say nothing about whether anything
+ever calls it. The walk is `ProcessDeathResumptionTest`'s, in short steps with the position
+rechecked after each one, for the reason commit dfde4e1 records.
+
+**It fails rather than skips when the fixture is missing.** That is the opposite of the rule
+every other test here follows, and the fixture is why: the seeded catalogue had no series at
+all until this was written, so a check that skipped for want of one would have gone on
+reporting exactly what the missing fixture already reported — nothing, in green.
+
+It lives in `:app` rather than `:harness` because the join needs no kill and does need Room:
+the two volumes are named by their **sequence** in `item_series`, the cued one is asserted at
+the head of the `queue` table, and `askBeforeSuggestion` is turned on and put back in lugu's
+own DataStore. A black box could only report that *something* started playing.
+
 ## Pointing the tests at a server
 
 Nothing is committed. The tests read `BuildConfig` fields that come from the gitignored
@@ -95,16 +122,18 @@ lugu.dev.serverUrl=...
 lugu.dev.user=...
 lugu.dev.pass=...
 lugu.test.playQuery=...
+lugu.test.seriesQuery=...
 ```
 
-The same four values are also read from the environment as `LUGU_DEV_SERVER_URL`,
-`LUGU_DEV_USER`, `LUGU_DEV_PASS` and `LUGU_TEST_PLAY_QUERY`. **The environment wins where
-both exist**, which is how you point a machine that already has a server configured at a
-throwaway container for one command:
+The same five values are also read from the environment as `LUGU_DEV_SERVER_URL`,
+`LUGU_DEV_USER`, `LUGU_DEV_PASS`, `LUGU_TEST_PLAY_QUERY` and `LUGU_TEST_SERIES_QUERY`.
+**The environment wins where both exist**, which is how you point a machine that already
+has a server configured at a throwaway container for one command:
 
 ```sh
 LUGU_DEV_SERVER_URL=http://10.0.2.2:13378 LUGU_DEV_USER=… LUGU_DEV_PASS=… \
-LUGU_TEST_PLAY_QUERY="Lighthouse Wakes" ./gradlew connectedDebugAndroidTest
+LUGU_TEST_PLAY_QUERY="Lighthouse Wakes" LUGU_TEST_SERIES_QUERY="Riverton" \
+./gradlew connectedDebugAndroidTest
 ```
 
 This started out the other way round, on the reasoning that a stray variable should not be
@@ -129,11 +158,20 @@ scripts/seed-test-server.sh
 
 Builds one from nothing: an Audiobookshelf container, a generated root account, two
 libraries and a small invented catalogue — a chaptered 90-second book, a two-file book so
-that "crosses a file boundary" has a boundary, and three podcast episodes. It prints the
-four properties to paste into `local.properties` and takes about ninety seconds. Stop it
-with `docker rm -f lugu-test-abs`.
+that "crosses a file boundary" has a boundary, a two-volume series so that "the next
+volume began" has a next volume, and three podcast episodes. It prints the five properties
+to paste into `local.properties` and takes about ninety seconds. Stop it with
+`docker rm -f lugu-test-abs`.
 
-The library is three sine waves and the invented names AGENTS.md reserves. No real title,
+The series is the newest of those and the one that was missing longest. Audiobookshelf
+takes both the series and the volume number from the folder layout —
+`<author>/<series>/Vol. N - <title>` — so the scan alone is enough and no call after it is
+needed. That matters more than it sounds: an `album` tag is not a series, and the catalogue
+had only ever had tags. `nextInSeriesAfter` ignores a membership with no number, so a
+next-in-series test against the old fixture would have found nothing to continue to and
+passed for it.
+
+The library is sine waves and the invented names AGENTS.md reserves. No real title,
 author, address or credential is ever involved, and the password is generated per run.
 
 **From an emulator the address is `http://10.0.2.2:13378`, not localhost** — inside an AVD,
@@ -203,6 +241,13 @@ None of those rules reach release. Verified on the built APKs: the release APK s
 `lugu.test.playQuery` is the title the playback tests ask the library for. It is separate
 from the credentials on purpose: having a server is not the same as agreeing that a test may
 play something on it, and whoever sets this chooses what.
+
+`lugu.test.seriesQuery` is the same consent for a whole series, and it is a second key
+rather than a second use of the first because it costs more. `NextInSeriesTest` runs one
+volume to its end and lets the next one begin, so it moves the position of two books, and
+it puts both of them back to unstarted before it starts — on the server as well as in Room,
+because `nextInSeriesAfter` skips a volume anybody has already opened. Without that reset
+the test would pass once and report "no next volume" forever after.
 
 Never put any of these anywhere else. Not in a workflow file, not in a comment, not in a
 commit message.
