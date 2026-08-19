@@ -2039,7 +2039,13 @@ class LuguPlaybackService : MediaLibraryService() {
             player.prepare()
             // Cueing without playing is the whole of the "ask first" setting: the next
             // book is loaded and one press away, and nothing started on its own.
-            if (continuation.autoStart || startedByListener) player.play()
+            //
+            // The pause is not redundant, and the case it covers is the ordinary one. A
+            // player that has run out of audio still has `playWhenReady` set — reaching the
+            // end of a playlist does not clear it — so loading the next book into it starts
+            // that book the moment it is ready, whatever this branch decides. Without the
+            // pause, "ask first" asks nothing on the path it exists for.
+            if (continuation.autoStart || startedByListener) player.play() else player.pause()
         }
     }
 
