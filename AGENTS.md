@@ -15,10 +15,15 @@ to code, docs, tests, comments, commit messages and issue text alike.
   narrator names, no item counts from a real library — not in docs, not in test
   fixtures, not in code comments. Use the established invented set: *Lighthouse
   Wakes / Lighthouse Falls* by *James T. R. Corven*, narrated by *Jefferson Vale*,
-  in *The Breakwater* series; the *Riverton* series for sequence tests; *The
-  Tidelands* for a series with no number; *Example Series #N* in docs. Real
-  measurements may be described in proportions ("about a third of items"), never in
-  absolute counts or with named examples.
+  in *The Breakwater* series; the *Riverton* series for sequence tests, whose two
+  numbered volumes are *Riverton Dawn* (#1) and *Riverton Dusk* (#2) by *Nessa
+  Cardrow*, and which `scripts/seed-test-server.sh` builds as a real Audiobookshelf
+  series; *The Tidelands* for a series with no number; *Example Series #N* in docs.
+  The series is invented for the same reason every other name here is: a fixture that
+  names a real series describes somebody's shelf in a public repository, and a test
+  written against one is a test nobody else can run. Real measurements may be
+  described in proportions ("about a third of items"), never in absolute counts or
+  with named examples.
 - **No home-infrastructure detail.** Never name the VPN, proxy, DNS setup, tunnel
   configuration or anything else about the network the dev server sits behind.
   Describe network faults generically: "a misconfiguration on the network path".

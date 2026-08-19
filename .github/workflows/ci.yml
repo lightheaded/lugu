@@ -199,6 +199,7 @@ jobs:
           LUGU_DEV_USER: ${{ steps.abs.outputs.user }}
           LUGU_DEV_PASS: ${{ steps.abs.outputs.pass }}
           LUGU_TEST_PLAY_QUERY: ${{ steps.abs.outputs.play-query }}
+          LUGU_TEST_SERIES_QUERY: ${{ steps.abs.outputs.series-query }}
         with:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.target }}

@@ -31,6 +31,18 @@ internal object TestServerConfig {
     val hasServer: Boolean
         get() = url.isNotBlank() && username.isNotBlank() && password.isNotBlank()
 
+    /**
+     * The series the next-in-series test walks.
+     *
+     * A second consent rather than a second use of [playQuery]. That test plays one volume
+     * to its end and lets the next one begin, so it moves the position of two books rather
+     * than one, and whoever has a server says which series may be treated that way.
+     *
+     * The series needs at least two volumes with numbers on them. `scripts/seed-test-server.sh`
+     * builds one.
+     */
+    val seriesQuery: String get() = BuildConfig.TEST_SERIES_QUERY
+
     val canPlay: Boolean get() = hasServer && playQuery.isNotBlank()
 
     /** The reason a skipped test gives, written for whoever reads the run and wonders. */
@@ -41,4 +53,16 @@ internal object TestServerConfig {
     const val NO_QUERY =
         "No test title. Set lugu.test.playQuery in local.properties to something on the " +
             "server that is safe for a test to play."
+
+    /**
+     * Said as a failure, never as a skip.
+     *
+     * The next-in-series check exists because the join it watches had never run anywhere,
+     * and a missing fixture is exactly how it stayed that way. So the test fails here and
+     * names what is absent, rather than skipping and reporting green.
+     */
+    const val NO_SERIES =
+        "No test series. Set lugu.test.seriesQuery in local.properties to a series on the " +
+            "server with at least two numbered volumes, or run scripts/seed-test-server.sh, " +
+            "which builds one."
 }
