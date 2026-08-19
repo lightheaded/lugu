@@ -73,6 +73,44 @@ by hand. What no browser client can see is what the car *draws*, so the rest sta
       `adb shell content read --uri content://io.github.lightheaded.lugu.covers/cover/<itemId>`,
       which should return image bytes rather than an error
 
+## The dashboard's "For you" pane — added 20 August, and only a car can answer it
+
+lugu now serves a second root. A host that sets `EXTRA_SUGGESTED` in its root hints gets a
+root of its own, `lugu/suggested`, whose children are exactly what **Continue** holds, in
+the same order and playable. Google's design guidance says Android Auto draws those items
+in the "For you" pane on its dashboard — the screen the car shows when nothing plays — and
+that a host with no answer fills the pane from the top of the browse tree instead. For lugu
+that top row is Continue, a category rather than something to play, which is the reported
+fault.
+
+**Everything in that paragraph except lugu's own half is read off documentation.** The
+mechanism is certain: the constant, the conversion into `LibraryParams.isSuggested` and the
+answer back out are all in the Media3 1.11.0 source, and `AutoBrowseTreeTest` asserts both
+roots. What is not certain is that the pane Tom is looking at is the pane this fills. No
+browser client can see that, because no browser client is the dashboard.
+
+- [ ] ✅ The suggestion hint answers with `lugu/suggested`, and that root holds Continue's
+      rows — asserted without a car
+- [ ] Start something on the phone so Continue is not empty, then plug in and look at the
+      dashboard **before opening lugu**. The "For you" pane must offer that book or episode
+      by name, and pressing it must start it where it was left
+- [ ] Look at what the pane offered *before* this change went in, if it can still be
+      remembered. A pane that read "Continue" and did nothing useful is the fault; a pane
+      that already named a book is a sign this is not the surface Tom means
+- [ ] With nothing in progress, the pane is empty or absent — never an error, and lugu must
+      stay in the launcher afterwards
+
+**What a failure here means.** If the pane is unchanged, the hint was not the way in, and
+there are two candidates left, and one command separates them. lugu writes no line when a
+root is asked for, so add a temporary log of `params?.isSuggested` in `onGetLibraryRoot`,
+drive once, and read `adb logcat`. A root request that never carries the flag means this
+head unit or this Android Auto build does not ask for suggestions. A request that carries it
+and a pane that stays wrong means the pane is not fed by the app at all — it is Android
+Auto's own row, built from system history, and nothing in lugu can change it.
+
+Neither failure costs anything already built. The suggested root is correct whatever draws
+it, and it is served only to a host that asks for it, so nothing else can be affected.
+
 ## Cold start, which is the real test
 
 The phone will usually be freshly plugged in, the app not running, and the car may be in
