@@ -54,6 +54,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.formatLengthCompact
 import io.github.lightheaded.lugu.core.sync.StartTab
+import io.github.lightheaded.lugu.core.ui.Status
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 
 /** The two jobs the signed-in app does, in the order they are wanted. */
 private enum class HomeTab(val label: String, val icon: ImageVector) {

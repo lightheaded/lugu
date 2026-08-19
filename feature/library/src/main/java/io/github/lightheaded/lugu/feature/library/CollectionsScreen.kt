@@ -36,6 +36,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.ui.Status
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 
 /**
  * The collections of the library in view.

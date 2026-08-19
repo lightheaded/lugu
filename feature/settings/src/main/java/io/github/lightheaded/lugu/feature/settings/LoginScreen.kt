@@ -43,6 +43,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lightheaded.lugu.core.ui.ReservedMessage
+import io.github.lightheaded.lugu.core.ui.reservedSpace
 
 /**
  * Sign-in, plus the connection settings folded away underneath it.
@@ -108,6 +110,29 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .semantics { contentDescription = "Server address" },
         )
+
+        Spacer(Modifier.height(8.dp))
+        // Stated where the address was typed, not in a dialog that has to be dismissed.
+        // This is the ordinary way Audiobookshelf is run and the sign-in must not
+        // obstruct it; what it must not do is let the password go out in the clear
+        // without saying so. See docs/FEEDBACK.md — the wording is the decision.
+        //
+        // It is a standing condition of the address rather than a message about an
+        // action, so its space is reserved whether or not it is true: composed always,
+        // hidden with alpha when the address is https, and the same height in both
+        // states. Added and removed, it moved the username field, the password field and
+        // the Sign in button every time somebody typed or deleted an "s".
+        Text(
+            "This address is plain HTTP. Your password, your token and everything you " +
+                "listen to travel unencrypted — fine on your own network, not over the " +
+                "internet. Use https:// if your server offers it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .reservedSpace(state.isPlainHttp),
+        )
+
         Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(
@@ -138,35 +163,14 @@ fun LoginScreen(
                 .semantics { contentDescription = "Password" },
         )
 
-        if (state.isPlainHttp) {
-            Spacer(Modifier.height(12.dp))
-            // Stated where the address was typed, not in a dialog that has to be dismissed.
-            // This is the ordinary way Audiobookshelf is run and the sign-in must not
-            // obstruct it; what it must not do is let the password go out in the clear
-            // without saying so.
-            Text(
-                "This address is plain HTTP. Your password, your token and everything you " +
-                    "listen to travel unencrypted — fine on your own network, not over the " +
-                    "internet. Use https:// if your server offers it.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Plain HTTP warning" },
-            )
-        }
+        // Under the password box, because that is where a reader looks after a sign-in is
+        // refused, and in space that is reserved whether or not there is anything to say.
+        // The message that says the password was wrong must not be the thing that moves
+        // the Sign in button out from under the thumb that pressed it.
+        Spacer(Modifier.height(4.dp))
+        ReservedMessage(state.error, modifier = Modifier.fillMaxWidth())
 
-        state.error?.let { message ->
-            Spacer(Modifier.height(12.dp))
-            Text(
-                message,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
         Button(
             onClick = viewModel::submit,
             enabled = state.canSubmit,
@@ -306,14 +310,10 @@ private fun LoginHeaderDialog(draft: HeaderDraft, problem: String?, viewModel: L
                     singleLine = true,
                     modifier = Modifier.semantics { contentDescription = "Header value" },
                 )
-                problem?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                // A dialog is a column too, and a problem added to the bottom of it moved
+                // Save and Cancel down under the finger that had just reached for them.
+                Spacer(Modifier.height(4.dp))
+                ReservedMessage(problem)
             }
         },
         confirmButton = { TextButton(onClick = viewModel::saveDraft) { Text("Save") } },
@@ -340,14 +340,8 @@ private fun LoginCertificateDialog(state: LoginUiState, viewModel: LoginViewMode
                     ),
                     modifier = Modifier.semantics { contentDescription = "Certificate password" },
                 )
-                state.certificateProblem?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                Spacer(Modifier.height(4.dp))
+                ReservedMessage(state.certificateProblem)
             }
         },
         confirmButton = { TextButton(onClick = viewModel::confirmCertificate) { Text("Install") } },

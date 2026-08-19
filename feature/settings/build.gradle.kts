@@ -40,6 +40,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:ui"))
     implementation(project(":core:api"))
     implementation(project(":core:db"))
     implementation(project(":core:sync"))

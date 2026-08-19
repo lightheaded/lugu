@@ -155,6 +155,8 @@ class PlayerViewModel @Inject constructor(
 
     fun dismissContinuationNotice() = connection.dismissContinuationNotice()
 
+    fun dismissError() = connection.dismissError()
+
     private fun withBookmarkableItem(block: suspend (ActiveAccount, String) -> Unit) {
         viewModelScope.launch {
             val now = nowPlaying.value ?: return@launch
