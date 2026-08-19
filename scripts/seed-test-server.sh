@@ -48,6 +48,9 @@ PLAY_QUERY="Lighthouse Wakes"
 # "something followed something".
 SERIES_QUERY="Riverton"
 
+# Bumped whenever the generated catalogue changes. See generate_media.
+MEDIA_REVISION=2
+
 say() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
 
 # --------------------------------------------------------------------------------------
@@ -55,7 +58,14 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
 # --------------------------------------------------------------------------------------
 generate_media() {
   local ab="$ROOT/audiobooks" pc="$ROOT/podcasts"
-  if [ -f "$ROOT/.media-done" ]; then say "media already generated"; return; fi
+  # The marker carries the catalogue's revision, not just the fact that a run happened.
+  # A root outlives the container, so a checkout that adds a book meets a root that was
+  # filled before it existed. An unversioned marker made that root claim to be complete,
+  # and the failure landed two steps later as a scan that never reached the expected item
+  # count — which reads as a broken scanner rather than as a stale directory. Raise
+  # MEDIA_REVISION whenever the catalogue below changes.
+  if [ -f "$ROOT/.media-done-$MEDIA_REVISION" ]; then say "media already generated"; return; fi
+  rm -f "$ROOT"/.media-done*
   mkdir -p "$ab/James T. R. Corven/Lighthouse Wakes" \
            "$ab/Jefferson Vale/The Breakwater" \
            "$ab/Nessa Cardrow/$SERIES_QUERY/Vol. 1 - Riverton Dawn" \
@@ -130,7 +140,7 @@ META
       -metadata title="Episode $i" -metadata album="The Tidelands" \
       -c:a libmp3lame -b:a 32k "$pc/The Tidelands/Episode $i.mp3" -y
   done
-  touch "$ROOT/.media-done"
+  touch "$ROOT/.media-done-$MEDIA_REVISION"
   say "generated $(find "$ab" "$pc" -type f | wc -l | tr -d ' ') files, $(du -sh "$ROOT" | cut -f1)"
 }
 
