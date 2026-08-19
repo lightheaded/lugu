@@ -62,6 +62,15 @@ fun com.android.build.api.dsl.ApplicationBuildType.applyTestServer() {
     // credential — a title, which is why it is a separate key: whoever has a server still
     // has to say what on it is safe for a test to play.
     buildConfigField("String", "TEST_PLAY_QUERY", "\"${devProp("lugu.test.playQuery", "LUGU_TEST_PLAY_QUERY")}\"")
+    // The series the next-in-series test walks. A second key rather than a second use of
+    // the one above, for the same reason that one exists: this test plays a volume to its
+    // end and lets the next one begin, so it moves the position of two books. Whoever has
+    // a server still says which series may be treated that way.
+    buildConfigField(
+        "String",
+        "TEST_SERIES_QUERY",
+        "\"${devProp("lugu.test.seriesQuery", "LUGU_TEST_SERIES_QUERY")}\"",
+    )
 }
 
 android {
@@ -121,6 +130,7 @@ android {
             buildConfigField("String", "DEV_USER", "\"\"")
             buildConfigField("String", "DEV_PASS", "\"\"")
             buildConfigField("String", "TEST_PLAY_QUERY", "\"\"")
+            buildConfigField("String", "TEST_SERIES_QUERY", "\"\"")
             if (System.getenv("LUGU_KEYSTORE_PATH") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }

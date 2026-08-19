@@ -63,6 +63,12 @@ android {
 
         buildConfigField("boolean", "HAS_SERVER", hasServer.toString())
         buildConfigField("String", "PLAY_QUERY", quoted(devProp("lugu.test.playQuery", "LUGU_TEST_PLAY_QUERY")))
+        // The series fixture, read here for the same reason the title is: `:app` and this
+        // module must read the same keys the same way, or one of them plays from a server
+        // the other never signed in to. No test here uses it yet — the next-in-series check
+        // lives in `:app`, which needs Room — and the day one does, the wiring is already
+        // the wiring the app has.
+        buildConfigField("String", "SERIES_QUERY", quoted(devProp("lugu.test.seriesQuery", "LUGU_TEST_SERIES_QUERY")))
     }
 
     buildFeatures {
