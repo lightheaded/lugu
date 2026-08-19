@@ -122,8 +122,13 @@ a garage with no signal. This is the case that matters.
 - [ ] **Up next** lists what was queued on the phone, in that order
 - [ ] Playing something from it does not silently reorder the rest
 - [ ] Letting a book finish in the car starts the next queued item without a touch
-- [ ] With the queue empty, a finished book starts the next in its series (unless the
-      setting is off), and a finished episode starts the next episode
+- [ ] ✅ **With the queue empty, a finished book starts the next in its series.** This is a
+      machine check now: `NextInSeriesTest` in `:app` walks a seeded volume to its last
+      seconds, lets it end, and asserts that volume 2 begins — and, with "ask before a
+      suggestion" on, that volume 2 is loaded, cued at the head of the queue and silent. It
+      runs against the real seeded server on every CI emulator leg. What is left by hand is
+      the car itself: this check binds a `MediaController`, not a head unit
+- [ ] With the queue empty, a finished **episode** starts the next episode
 
 ## Failure modes to check on purpose
 
