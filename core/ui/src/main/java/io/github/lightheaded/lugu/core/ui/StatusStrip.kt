@@ -1,4 +1,4 @@
-package io.github.lightheaded.lugu.feature.library
+package io.github.lightheaded.lugu.core.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -34,13 +34,13 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 /**
- * What the app is doing, or what it has just done, in the one line that says so.
+ * What the app is doing, what it has just done, or what is true of it at the moment.
  *
- * Three kinds because they behave differently on screen and not because they read
+ * Four kinds because they behave differently on screen and not because they read
  * differently: work comes and goes on its own and must not be announced for the fraction of
  * a second it usually takes, a confirmation is a reply to something just pressed and has to
- * arrive at once, and a problem is the only one of the three that may not disappear by
- * itself.
+ * arrive at once, a problem is a reply that may not disappear by itself, and a note is a
+ * standing fact that lasts as long as the fact does.
  */
 sealed interface Status {
     val text: String
@@ -58,6 +58,16 @@ sealed interface Status {
 
     /** Something failed. Stays until it is dismissed or replaced. */
     data class Problem(override val text: String) : Status
+
+    /**
+     * Something is true right now and the app says so: the stream is transcoded, the
+     * address that was tested answered.
+     *
+     * It is not an event, so it neither arrives late nor takes itself away. It goes when it
+     * stops being true, and it can be put away by hand in the meantime — a fact that has
+     * been read once does not need to keep the top of the screen.
+     */
+    data class Note(override val text: String) : Status
 }
 
 /**
@@ -80,6 +90,33 @@ sealed interface Status {
  *
  * The text is the part Tom asked for and the part that has to earn its place: it sits over
  * the top edge of the content, so it is spent only while something is genuinely happening.
+ *
+ * ## The rule this component exists to keep
+ *
+ * Decided 20 August 2026, and it holds for every screen in lugu, not only for the two this
+ * strip started on:
+ *
+ * **A message may appear. Nothing else may move.** Which of the two mechanisms is used is
+ * decided by what the message is *about*, and never by which screen it is on.
+ *
+ * 1. **A message about the screen, or about the outcome of an action, is an overlay.** A
+ *    sync, a send failure, a playback error, the result of a connection test. It takes no
+ *    layout space at all: this strip, in a `Box`, pinned under the top bar and drawn over
+ *    the content.
+ * 2. **A message about the input in front of you stays with that input, in space that is
+ *    always reserved.** A rejected password belongs under the password box, because that is
+ *    where a reader looks. What it must not do is grow, so it is always composed and hidden
+ *    rather than added and removed. [ReservedMessage] is that, and [reservedSpace] is the
+ *    same thing for text the screen supplies itself.
+ * 3. **A standing condition of the input is not a message.** The sign-in screen's
+ *    plain-HTTP warning is true of the address as typed and does not come and go with an
+ *    action, so it gets permanently reserved space by rule 2.
+ *
+ * A dialog was rejected for all three: it stops a person to say something they can read in
+ * place.
+ *
+ * Whatever is hidden must be hidden from a screen reader as well, and whatever appears must
+ * announce itself. This strip is a polite live region; [ReservedMessage] is one too.
  */
 @Composable
 fun StatusStrip(
@@ -89,7 +126,7 @@ fun StatusStrip(
 ) {
     // Only work is gated on time. A confirmation and a failure are both replies to
     // something a person just did, and a reply that arrives half a second late reads as
-    // having been caused by whatever they did next.
+    // having been caused by whatever they did next. A note is not an event at all.
     val working = status as? Status.Working
     val showWork = settledVisibility(working != null)
 
@@ -100,7 +137,7 @@ fun StatusStrip(
     var last by remember { mutableStateOf<Status?>(null) }
 
     val shown: Status? = when {
-        status is Status.Problem || status is Status.Done -> status
+        status is Status.Problem || status is Status.Done || status is Status.Note -> status
         showWork -> working ?: last as? Status.Working
         else -> null
     }
@@ -125,6 +162,10 @@ fun StatusStrip(
         // Captured so the fade-out has something to draw after the state has already gone.
         val note = shown ?: last ?: return@AnimatedVisibility
         val problem = note is Status.Problem
+        // The two kinds that stay until something ends them are the two that can be put
+        // away by hand. Work and a confirmation both manage it themselves, and a tap target
+        // that usually does nothing is worse than none.
+        val dismissible = problem || note is Status.Note
         Column(Modifier.fillMaxWidth()) {
             when (note) {
                 is Status.Working -> if (note.fraction != null) {
@@ -151,9 +192,7 @@ fun StatusStrip(
                 // above it: without a shadow the band reads as a row that has cut the first
                 // line of content in half, rather than as something laid over it.
                 shadowElevation = 3.dp,
-                // Only a problem can be dismissed by hand; the other two manage it
-                // themselves, and a tap target that usually does nothing is worse than none.
-                modifier = if (problem) Modifier.clickable(onClick = onDismiss) else Modifier,
+                modifier = if (dismissible) Modifier.clickable(onClick = onDismiss) else Modifier,
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -173,18 +212,27 @@ fun StatusStrip(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        maxLines = 1,
+                        // Work is named by the app in a few words, so one line is the whole
+                        // of it and a second line would only be air. An outcome carries the
+                        // server's own words — why a probe stayed silent, why a send failed
+                        // — and those are the words the screen exists to deliver, so they
+                        // are allowed to wrap. Nothing moves either way: this is an overlay.
+                        maxLines = if (note is Status.Working) 1 else OUTCOME_LINES,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     // The band being tappable is invisible without this. A cross is the
                     // whole affordance; the tap target is the band, which is far larger
                     // than the mark that advertises it.
-                    if (problem) {
+                    if (dismissible) {
                         Icon(
                             Icons.Default.Close,
                             contentDescription = "Dismiss",
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            tint = if (problem) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -230,6 +278,15 @@ private const val LINGER_MS = 600L
 
 /** A short sentence, read once, by someone who already knows what they pressed. */
 private const val DONE_MS = 4_000L
+
+/**
+ * Enough for the longest answer the app gives: the reason a probe heard nothing back.
+ *
+ * A cut-off reason is the fault this screen exists to avoid — "could not connect" is the
+ * answer that sends people to re-read their router configuration when the address was a
+ * different service entirely.
+ */
+private const val OUTCOME_LINES = 4
 
 /** Thin on purpose: it is a fact about the app, not a thing to look at. */
 private val LINE_HEIGHT = 3.dp

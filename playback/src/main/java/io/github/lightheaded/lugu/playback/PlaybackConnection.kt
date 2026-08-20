@@ -130,6 +130,16 @@ class PlaybackConnection @Inject constructor(
 
     fun dismissContinuationNotice() = stateHolder.clearContinuationNotice()
 
+    /**
+     * Puts away a playback error that has been read.
+     *
+     * The error itself is cleared again by the next successful start, so this only takes
+     * away the report of one that has already happened. Nothing is retried by it.
+     */
+    fun dismissError() {
+        _state.value = _state.value.copy(error = null)
+    }
+
     init {
         scope.launch {
             while (true) {

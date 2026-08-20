@@ -1,12 +1,17 @@
-package io.github.lightheaded.lugu.feature.library
+package io.github.lightheaded.lugu.core.ui
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import org.junit.Rule
@@ -114,5 +119,77 @@ class StatusStripTest {
 
         compose.onNodeWithText("Could not reach the server").performClick()
         assertThat(dismissed).isTrue()
+    }
+
+    /**
+     * A note is a fact rather than an event, so none of the timing above applies to it: it
+     * is drawn at once and it is still there a minute later.
+     */
+    @Test
+    fun `a note arrives at once and stays`() {
+        var dismissed = false
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            StatusStrip(
+                status = Status.Note("Transcoding — seeking is less precise"),
+                onDismiss = { dismissed = true },
+            )
+        }
+
+        compose.mainClock.advanceTimeBy(16)
+        compose.onNodeWithText("Transcoding — seeking is less precise").assertIsDisplayed()
+
+        compose.mainClock.advanceTimeBy(60_000)
+        compose.onNodeWithText("Transcoding — seeking is less precise").assertIsDisplayed()
+        assertThat(dismissed).isFalse()
+    }
+
+    /**
+     * The two kinds that stay until something ends them are the two that can be put away by
+     * hand. A fact that has been read once does not need to keep the top of the screen.
+     */
+    @Test
+    fun `a note can be put away by hand`() {
+        var dismissed = false
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            StatusStrip(
+                status = Status.Note("An Audiobookshelf server answered"),
+                onDismiss = { dismissed = true },
+            )
+        }
+
+        compose.mainClock.advanceTimeBy(16)
+        compose.onNodeWithText("An Audiobookshelf server answered").performClick()
+        assertThat(dismissed).isTrue()
+    }
+
+    /**
+     * Work is named by the app in a few words and a confirmation carries the server's own,
+     * so only one of the two may wrap. Neither moves anything either way — this is an
+     * overlay — but a sync line that grew to four lines would cover the content it is
+     * drawn over.
+     */
+    @Test
+    fun `work keeps to one line and an outcome may wrap`() {
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            Column(Modifier.width(200.dp)) {
+                StatusStrip(status = Status.Working(LONG_TEXT), onDismiss = {})
+                StatusStrip(status = Status.Problem(LONG_TEXT), onDismiss = {})
+            }
+        }
+
+        compose.mainClock.advanceTimeBy(1_000)
+        val strips = compose.onAllNodesWithText(LONG_TEXT, substring = true)
+        val working = strips[0].fetchSemanticsNode().size.height
+        val problem = strips[1].fetchSemanticsNode().size.height
+        assertThat(problem).isGreaterThan(working)
+    }
+
+    private companion object {
+        /** Long enough to need more than one line in a narrow strip, and no library data. */
+        const val LONG_TEXT = "Nothing answered within the deadline lugu uses, and the " +
+            "reason given was that the connection was refused"
     }
 }

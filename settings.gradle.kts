@@ -27,6 +27,9 @@ include(":app")
 // kill lugu and watch what happens. It is not part of what ships and nothing depends on it.
 include(":harness")
 include(":core:model")
+// Compose parts shared by more than one feature. The feature modules are siblings and
+// cannot see each other, so anything two of them draw the same way lives here.
+include(":core:ui")
 include(":core:api")
 include(":core:db")
 include(":core:sync")
