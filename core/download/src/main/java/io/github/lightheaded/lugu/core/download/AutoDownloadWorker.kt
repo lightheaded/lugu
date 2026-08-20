@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -72,6 +73,18 @@ class AutoDownloadWorker @AssistedInject constructor(
 }
 
 /**
+ * The extras a new-episode notification carries to the activity it opens.
+ *
+ * Declared here, beside the code that writes them, rather than in `:app`: this module
+ * cannot see the app module, and a pair of string keys copied into two places is a pair of
+ * string keys that will disagree one day.
+ */
+object NewEpisodeIntent {
+    const val EXTRA_LIBRARY_ITEM_ID = "io.github.lightheaded.lugu.extra.LIBRARY_ITEM_ID"
+    const val EXTRA_EPISODE_ID = "io.github.lightheaded.lugu.extra.EPISODE_ID"
+}
+
+/**
  * Says when a podcast being listened to has published something.
  *
  * Off by default and one notification for the whole batch rather than one each: waking
@@ -109,22 +122,38 @@ class NewEpisodeNotifier @Inject constructor(
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(openApp())
+            .setContentIntent(openEpisode(tapTarget(episodes)))
             .setAutoCancel(true)
             .build()
 
         runCatching { NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification) }
     }
 
-    private fun openApp() = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        ?.let {
-            android.app.PendingIntent.getActivity(
-                context,
-                0,
-                it,
-                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-        }
+    /**
+     * Opens one episode's page, with the library underneath it.
+     *
+     * The launcher intent is still the base, so the activity starts the way it always
+     * starts and the graph comes up with Home at its root; the two ids ride on it as
+     * extras. That is what lets back from the episode page reach the library on a cold tap
+     * instead of leaving the app.
+     *
+     * `FLAG_UPDATE_CURRENT` with a fixed request code, because the notification id is fixed
+     * too: a second batch replaces the first notification, so its tap must replace the
+     * first one's extras as well. Without the flag the new notification would open the
+     * episode the old one was about.
+     */
+    private fun openEpisode(episode: NewEpisode): PendingIntent? {
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: return null
+        intent.putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, episode.libraryItemId)
+        intent.putExtra(NewEpisodeIntent.EXTRA_EPISODE_ID, episode.episodeId)
+        return PendingIntent.getActivity(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     private fun ensureChannel() {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -146,6 +175,23 @@ class NewEpisodeNotifier @Inject constructor(
         const val MAX_LISTED = 5
     }
 }
+
+/**
+ * Which episode a tap opens when the notification is about several.
+ *
+ * The batch is deliberate — one notification for eleven episodes rather than eleven
+ * notifications — so a tap has to mean something for a list rather than for one row. It
+ * opens the **first** episode in the list, which is the newest: `PodcastRefresher` returns
+ * them newest first, and the notification's own text names them in that order, so the tap
+ * lands on the episode the reader was already looking at.
+ *
+ * The alternative was to send a batch of more than one to Home and let the reader find
+ * them. That was rejected because it is the old behaviour under a new name: it throws away
+ * the one thing the notification knows exactly when it is most useful, and a batch of two
+ * is far commoner than a batch of eleven. Nothing is lost either way — back from the
+ * episode page is Home, which is where the rest of the batch is reachable from.
+ */
+internal fun tapTarget(episodes: List<NewEpisode>): NewEpisode = episodes.first()
 
 object DownloadScheduler {
     private const val AUTO_DOWNLOAD_WORK = "lugu-auto-download"
