@@ -16,6 +16,15 @@ import io.github.lightheaded.lugu.core.db.episodeKeyOf
 sealed interface BrowseNode {
     data object Root : BrowseNode
 
+    /**
+     * The second root, served only to a host that asks for suggestions.
+     *
+     * A host reaches it by setting `EXTRA_SUGGESTED` in its root hints, and it holds what
+     * [Continue] holds. It is a root and never a child, so nothing browses into it — see
+     * `BrowseTree.suggestedRoot`.
+     */
+    data object Suggested : BrowseNode
+
     data object Continue : BrowseNode
 
     data object UpNext : BrowseNode
@@ -46,6 +55,7 @@ sealed interface BrowseNode {
     val id: String
         get() = when (this) {
             Root -> ROOT
+            Suggested -> SUGGESTED_ROOT
             Continue -> CONTINUE
             UpNext -> UP_NEXT
             Downloaded -> DOWNLOADED
@@ -62,6 +72,14 @@ sealed interface BrowseNode {
 
     companion object {
         const val ROOT = "lugu/root"
+
+        /**
+         * A different id from [ROOT], because a host must be able to tell the two apart.
+         *
+         * A browser caches children against the id it was given. One id for both roots
+         * would make the suggestions and the browse tree overwrite each other.
+         */
+        const val SUGGESTED_ROOT = "lugu/suggested"
 
         private const val CONTINUE = "lugu/continue"
         private const val UP_NEXT = "lugu/up-next"
@@ -87,6 +105,7 @@ sealed interface BrowseNode {
 
         fun parse(id: String): BrowseNode = when {
             id == ROOT -> Root
+            id == SUGGESTED_ROOT -> Suggested
             id == CONTINUE -> Continue
             id == UP_NEXT -> UpNext
             id == DOWNLOADED -> Downloaded

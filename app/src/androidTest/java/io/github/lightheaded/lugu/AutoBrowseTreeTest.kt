@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
@@ -43,10 +44,11 @@ import org.junit.runner.RunWith
  *
  * Everything Android Auto does to lugu, it does through a `MediaBrowser` bound to
  * [LuguPlaybackService]. So does this: it binds as an ordinary Media3 browser client and
- * asks the same four questions a head unit asks — what is at the root, what is under this
- * node, what does this search return, and what commands does the session offer. What comes
- * back is the same `MediaItem` list the Desktop Head Unit would draw, which means the
- * structural half of docs/qa/auto.md can be asserted here rather than read off a screen.
+ * asks the same questions a head unit asks — what is at the root, what is at the *suggested*
+ * root, what is under this node, what does this search return, and what commands does the
+ * session offer. What comes back is the same `MediaItem` list the Desktop Head Unit would
+ * draw, which means the structural half of docs/qa/auto.md can be asserted here rather than
+ * read off a screen.
  *
  * **No server, and nothing on the network.** The tree is served from Room, which is the
  * whole design — a car connects the moment the phone is plugged in, often before any sync
@@ -288,6 +290,118 @@ class AutoBrowseTreeTest {
         }
     }
 
+    // -- The suggested root ---------------------------------------------------------------
+
+    /**
+     * The hint that reaches Android Auto's "For you" pane, and the root it is answered with.
+     *
+     * A host asks for suggestions by setting `EXTRA_SUGGESTED` in its root hints. A legacy
+     * browser's hints reach the session as `LibraryParams.isSuggested`, so a Media3 browser
+     * asks the same question by building the params directly. What must come back is a
+     * *different* root: one id for both roots would make a browser cache the suggestions
+     * over the browse tree.
+     *
+     * The flag must also come back, because the platform asks that of an app that can
+     * serve suggestions.
+     */
+    @Test
+    fun the_suggested_hint_answers_with_a_root_of_its_own() {
+        signInWithAFullLibrary()
+
+        val root = libraryRoot(suggestedParams())
+        assertThat(root.resultCode).isEqualTo(LibraryResult.RESULT_SUCCESS)
+        assertThat(root.value?.mediaId).isEqualTo(BrowseNode.SUGGESTED_ROOT)
+        assertThat(root.value?.mediaId).isNotEqualTo(BrowseNode.ROOT)
+        assertWithMessage("the suggestion flag is not repeated in the answer")
+            .that(root.params?.isSuggested)
+            .isTrue()
+    }
+
+    /**
+     * "For you" holds what Continue holds, in the same order, and every row can be pressed.
+     *
+     * This is the whole of the ask: a car is for carrying on with something, so the
+     * suggestion lugu makes is the one it already makes at the top of its tree. Asserted
+     * against Continue's own answer rather than against a written-out list, so the two
+     * cannot drift apart.
+     */
+    @Test
+    fun the_suggested_root_holds_what_continue_holds() {
+        signInWithAFullLibrary()
+
+        val suggested = childrenOf(BrowseNode.SUGGESTED_ROOT)
+        assertThat(suggested).isNotEmpty()
+        assertThat(suggested.map { it.mediaId })
+            .containsExactlyElementsIn(childrenOf(BrowseNode.Continue.id).map { it.mediaId })
+            .inOrder()
+        // Something to press, not something to open into.
+        assertThat(suggested.map { it.mediaMetadata.isPlayable }).doesNotContain(false)
+        assertThat(suggested.map { it.mediaMetadata.isBrowsable }).doesNotContain(true)
+    }
+
+    /**
+     * An account that has started nothing.
+     *
+     * Continue is legitimately empty for it, so the suggested root is too. Empty and
+     * successful, never an error — the same rule the ordinary root follows, for the same
+     * reason (androidx/media#3158).
+     */
+    @Test
+    fun a_suggested_root_with_nothing_in_progress_is_empty_rather_than_an_error() {
+        signIn()
+        seedLibraries()
+        seedBooks()
+
+        assertThat(libraryRoot(suggestedParams()).resultCode).isEqualTo(LibraryResult.RESULT_SUCCESS)
+        // [childrenOf] asserts the result code itself.
+        assertThat(childrenOf(BrowseNode.SUGGESTED_ROOT)).isEmpty()
+    }
+
+    /**
+     * Signed out, the suggested root behaves the way the ordinary root does.
+     *
+     * A dashboard pane is drawn before anything is browsed, so this is the state a host
+     * meets first on a phone nobody has signed in on. One row that explains itself, and no
+     * error anywhere on the path.
+     */
+    @Test
+    fun signed_out_the_suggested_root_answers_the_way_the_ordinary_root_does() {
+        // No sign-in: @Before has already deactivated whatever account the device had.
+        val root = libraryRoot(suggestedParams())
+        assertThat(root.resultCode).isEqualTo(LibraryResult.RESULT_SUCCESS)
+        assertThat(root.value?.mediaId).isEqualTo(BrowseNode.SUGGESTED_ROOT)
+
+        val children = childrenOf(BrowseNode.SUGGESTED_ROOT)
+        assertThat(children).hasSize(1)
+        assertThat(children.single().mediaMetadata.title.toString()).contains("Sign in")
+    }
+
+    /**
+     * Ordinary browsing is untouched.
+     *
+     * Three ways of not asking for suggestions — no params at all, params that say nothing,
+     * and params that say `false` — all get today's root and today's rows.
+     */
+    @Test
+    fun a_root_asked_for_without_the_suggestion_hint_is_unchanged() {
+        signInWithAFullLibrary()
+
+        listOf(
+            "no hints at all" to null,
+            "hints that say nothing" to LibraryParams.Builder().build(),
+            "the hint set to false" to LibraryParams.Builder().setSuggested(false).build(),
+            "a different hint" to LibraryParams.Builder().setOffline(true).build(),
+        ).forEach { (described, params) ->
+            val root = libraryRoot(params)
+            assertWithMessage("$described answered with an error").that(root.resultCode)
+                .isEqualTo(LibraryResult.RESULT_SUCCESS)
+            assertWithMessage("$described was served the suggested root").that(root.value?.mediaId)
+                .isEqualTo(BrowseNode.ROOT)
+        }
+
+        assertThat(titlesOf(childrenOf(BrowseNode.ROOT))).contains("Continue")
+    }
+
     // -- Search --------------------------------------------------------------------------
 
     /**
@@ -421,6 +535,23 @@ class AutoBrowseTreeTest {
         browser = null
         InstrumentationRegistry.getInstrumentation().runOnMainSync { held.release() }
     }
+
+    /** The root, asked for the way a host asks: with hints, or with none. */
+    private fun libraryRoot(params: LibraryParams?): LibraryResult<MediaItem> {
+        val connected = browser()
+        return onMainFuture { connected.getLibraryRoot(params) }
+    }
+
+    /**
+     * What a legacy browser's `EXTRA_SUGGESTED` hint becomes on the way in.
+     *
+     * `LegacyConversions.convertToLibraryParams` sets this field from that key, so a
+     * Media3 browser that sets the field asks the session the same question a car asks.
+     * What no browser client can do is prove that the car sets the key at all — see
+     * docs/qa/auto.md.
+     */
+    private fun suggestedParams(): LibraryParams =
+        LibraryParams.Builder().setSuggested(true).build()
 
     private fun childrenOf(parentId: String): List<MediaItem> {
         // Connected here rather than inside the block below: connecting itself hops to the

@@ -16,6 +16,7 @@ class BrowseNodeTest {
     fun `every node survives a round trip`() {
         val nodes = listOf(
             BrowseNode.Root,
+            BrowseNode.Suggested,
             BrowseNode.Continue,
             BrowseNode.UpNext,
             BrowseNode.Downloaded,
@@ -59,6 +60,18 @@ class BrowseNodeTest {
     fun `the series list is not a series`() {
         assertThat(BrowseNode.parse(BrowseNode.AllSeries.id)).isEqualTo(BrowseNode.AllSeries)
         assertThat(BrowseNode.parse(BrowseNode.Series("x").id)).isEqualTo(BrowseNode.Series("x"))
+    }
+
+    /**
+     * The two roots must not collide either.
+     *
+     * A browser caches children against the id it was given, so one id for both roots
+     * would make the suggestions and the browse tree overwrite each other.
+     */
+    @Test
+    fun `the suggested root is a different id from the root`() {
+        assertThat(BrowseNode.SUGGESTED_ROOT).isNotEqualTo(BrowseNode.ROOT)
+        assertThat(BrowseNode.parse(BrowseNode.SUGGESTED_ROOT)).isEqualTo(BrowseNode.Suggested)
     }
 
     @Test
