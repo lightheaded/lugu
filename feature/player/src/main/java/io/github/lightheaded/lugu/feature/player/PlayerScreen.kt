@@ -72,6 +72,8 @@ import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
+import io.github.lightheaded.lugu.core.ui.Status
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 import io.github.lightheaded.lugu.playback.PositionJump
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,11 +102,20 @@ fun PlayerScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // The transcoding notice is true for as long as the stream is, so it does not take
+    // itself away — but a fact that has been read once does not need to keep the top of
+    // the screen. Keyed on the item, because the next book is a different fact and the
+    // person who put this one away has not been asked about it.
+    var transcodingNoticeGone by remember(nowPlaying?.libraryItemId) { mutableStateOf(false) }
+
     /*
      * Both notices are overlays and neither is inline content, so announcing a
      * correction never reflows the screen. An inline banner made the cover art and the
      * whole transport shift down as it appeared and back up as it went — which is a
-     * worse interruption than the thing being announced.
+     * worse interruption than the thing being announced. The playback error and the
+     * transcoding notice were the two that had stayed inline; they are overlays now too,
+     * drawn by the strip at the top rather than as snackbars, because neither of them is
+     * a passing event with an action attached. See [StatusStrip] for the whole rule.
      *
      * `Indefinite` plus an explicit timeout rather than a `SnackbarDuration`: the
      * built-in durations are four and ten seconds and neither is configurable, and a
@@ -258,227 +269,253 @@ fun PlayerScreen(
             )
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.height(16.dp))
-            AsyncImage(
-                model = nowPlaying?.coverUrl,
-                contentDescription = nowPlaying?.title,
-                contentScale = ContentScale.Crop,
+        // A Box, so the two things the player has to say are drawn over the top of the
+        // screen and take no layout space at all. See [StatusStrip] for the rule.
+        Box(Modifier.fillMaxSize()) {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.8f)
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    // The cover is the biggest thing on the screen and looks like the
-                    // book, so it goes where the book does. Clipped first, so the ripple
-                    // follows the corners rather than the square behind them.
-                    .clickable(enabled = nowPlaying != null) {
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.height(16.dp))
+                AsyncImage(
+                    model = nowPlaying?.coverUrl,
+                    contentDescription = nowPlaying?.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        // The cover is the biggest thing on the screen and looks like the
+                        // book, so it goes where the book does. Clipped first, so the ripple
+                        // follows the corners rather than the square behind them.
+                        .clickable(enabled = nowPlaying != null) {
+                            nowPlaying?.libraryItemId?.let(onOpenItem)
+                        },
+                )
+
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    nowPlaying?.title ?: "Nothing playing",
+                    style = MaterialTheme.typography.headlineSmall,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    // The title is a link to the item wherever it is shown.
+                    modifier = Modifier.clickable(enabled = nowPlaying != null) {
                         nowPlaying?.libraryItemId?.let(onOpenItem)
                     },
-            )
-
-            Spacer(Modifier.height(24.dp))
-            Text(
-                nowPlaying?.title ?: "Nothing playing",
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                // The title is a link to the item wherever it is shown.
-                modifier = Modifier.clickable(enabled = nowPlaying != null) {
-                    nowPlaying?.libraryItemId?.let(onOpenItem)
-                },
-            )
-            nowPlaying?.author?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-
-            state.chapter?.let { chapter ->
-                /*
-                 * The readout is the way into the chapter list, because it is already
-                 * what someone is looking at when they wonder where they are. An item
-                 * with no chapters to choose between keeps the readout and loses the
-                 * tap: an affordance that opens an empty sheet is worse than none.
-                 */
-                val hasChapterList = state.chapterCount > 1
-                Spacer(Modifier.height(8.dp))
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(enabled = hasChapterList) { showChapterSheet = true }
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                ) {
+                nowPlaying?.author?.let {
                     Text(
-                        chapter.title,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (hasChapterList) {
+                }
+
+                state.chapter?.let { chapter ->
+                    /*
+                     * The readout is the way into the chapter list, because it is already
+                     * what someone is looking at when they wonder where they are. An item
+                     * with no chapters to choose between keeps the readout and loses the
+                     * tap: an affordance that opens an empty sheet is worse than none.
+                     */
+                    val hasChapterList = state.chapterCount > 1
+                    Spacer(Modifier.height(8.dp))
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(enabled = hasChapterList) { showChapterSheet = true }
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
                         Text(
-                            "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
-                                "${formatClock(state.chapterPositionSec)} / " +
-                                formatClock(state.chapterDurationSec),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            chapter.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        if (hasChapterList) {
+                            Text(
+                                "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
+                                    "${formatClock(state.chapterPositionSec)} / " +
+                                    formatClock(state.chapterDurationSec),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(24.dp))
-            Slider(
-                value = scrubbing ?: state.positionSec.toFloat(),
-                onValueChange = { scrubbing = it },
-                onValueChangeFinished = {
-                    scrubbing?.let { viewModel.seekTo(it.toDouble()) }
-                    scrubbing = null
-                },
-                valueRange = 0f..(state.durationSec.toFloat().coerceAtLeast(1f)),
-                modifier = Modifier.semantics {
-                    contentDescription = "Playback position"
-                    // Without this a Slider announces a percentage, which on a forty-hour
-                    // book is the least useful number available: "43 percent" is four
-                    // hours wide. The two figures either side of the bar are what a
-                    // sighted listener reads, so they are what this says.
-                    stateDescription = "${formatLength(scrubbing?.toDouble() ?: state.positionSec)} " +
-                        "of ${formatLength(state.durationSec)}"
-                },
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    formatClock(scrubbing?.toDouble() ?: state.positionSec),
-                    style = MaterialTheme.typography.labelMedium,
+                Spacer(Modifier.height(24.dp))
+                Slider(
+                    value = scrubbing ?: state.positionSec.toFloat(),
+                    onValueChange = { scrubbing = it },
+                    onValueChangeFinished = {
+                        scrubbing?.let { viewModel.seekTo(it.toDouble()) }
+                        scrubbing = null
+                    },
+                    valueRange = 0f..(state.durationSec.toFloat().coerceAtLeast(1f)),
+                    modifier = Modifier.semantics {
+                        contentDescription = "Playback position"
+                        // Without this a Slider announces a percentage, which on a forty-hour
+                        // book is the least useful number available: "43 percent" is four
+                        // hours wide. The two figures either side of the bar are what a
+                        // sighted listener reads, so they are what this says.
+                        stateDescription = "${formatLength(scrubbing?.toDouble() ?: state.positionSec)} " +
+                            "of ${formatLength(state.durationSec)}"
+                    },
                 )
-                Text(
-                    "-${formatClock(state.durationSec - (scrubbing?.toDouble() ?: state.positionSec))}",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(
+                        formatClock(scrubbing?.toDouble() ?: state.positionSec),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        "-${formatClock(state.durationSec - (scrubbing?.toDouble() ?: state.positionSec))}",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
 
-            Spacer(Modifier.height(24.dp))
-            /*
-             * Laid out by how often each control is actually used: seeking back to
-             * re-hear a missed sentence dominates, finding a place is next, and chapter
-             * skipping is occasional. So the seek pair flanks play/pause at full size
-             * and the chapter pair sits outside it, smaller and dimmer.
-             */
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (TransportButton.PREVIOUS_CHAPTER in settings.playerButtons) {
-                    IconButton(
-                        onClick = viewModel::previousChapter,
-                        enabled = state.chapterCount > 1,
-                        modifier = Modifier.size(40.dp),
+                Spacer(Modifier.height(24.dp))
+                /*
+                 * Laid out by how often each control is actually used: seeking back to
+                 * re-hear a missed sentence dominates, finding a place is next, and chapter
+                 * skipping is occasional. So the seek pair flanks play/pause at full size
+                 * and the chapter pair sits outside it, smaller and dimmer.
+                 */
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (TransportButton.PREVIOUS_CHAPTER in settings.playerButtons) {
+                        IconButton(
+                            onClick = viewModel::previousChapter,
+                            enabled = state.chapterCount > 1,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.SkipPrevious,
+                                contentDescription = "Previous chapter",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    FilledTonalIconButton(
+                        onClick = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
+                        modifier = Modifier.size(60.dp),
+                    ) {
+                        SeekIcon(
+                            seconds = settings.skipBackSec,
+                            icon = Icons.Default.Replay10,
+                            description = "Back ${settings.skipBackSec} seconds",
+                        )
+                    }
+
+                    FilledIconButton(
+                        onClick = viewModel::togglePlayPause,
+                        modifier = Modifier.size(76.dp),
                     ) {
                         Icon(
-                            Icons.Default.SkipPrevious,
-                            contentDescription = "Previous chapter",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (state.isPlaying) "Pause" else "Play",
+                            modifier = Modifier.size(38.dp),
                         )
                     }
-                }
 
-                FilledTonalIconButton(
-                    onClick = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
-                    modifier = Modifier.size(60.dp),
-                ) {
-                    SeekIcon(
-                        seconds = settings.skipBackSec,
-                        icon = Icons.Default.Replay10,
-                        description = "Back ${settings.skipBackSec} seconds",
-                    )
-                }
-
-                FilledIconButton(
-                    onClick = viewModel::togglePlayPause,
-                    modifier = Modifier.size(76.dp),
-                ) {
-                    Icon(
-                        if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (state.isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(38.dp),
-                    )
-                }
-
-                FilledTonalIconButton(
-                    onClick = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
-                    modifier = Modifier.size(60.dp),
-                ) {
-                    SeekIcon(
-                        seconds = settings.skipForwardSec,
-                        icon = Icons.Default.Forward30,
-                        description = "Forward ${settings.skipForwardSec} seconds",
-                    )
-                }
-
-                if (TransportButton.NEXT_CHAPTER in settings.playerButtons) {
-                    IconButton(
-                        onClick = viewModel::nextChapter,
-                        enabled = state.chapterCount > 1,
-                        modifier = Modifier.size(40.dp),
+                    FilledTonalIconButton(
+                        onClick = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+                        modifier = Modifier.size(60.dp),
                     ) {
-                        Icon(
-                            Icons.Default.SkipNext,
-                            contentDescription = "Next chapter",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        SeekIcon(
+                            seconds = settings.skipForwardSec,
+                            icon = Icons.Default.Forward30,
+                            description = "Forward ${settings.skipForwardSec} seconds",
                         )
+                    }
+
+                    if (TransportButton.NEXT_CHAPTER in settings.playerButtons) {
+                        IconButton(
+                            onClick = viewModel::nextChapter,
+                            enabled = state.chapterCount > 1,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.SkipNext,
+                                contentDescription = "Next chapter",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(16.dp))
-            PlayerActionRow(
-                speed = state.speed,
-                sleepArmed = sleep.isArmed,
-                canBookmark = canBookmark,
-                onSpeed = { showSpeedSheet = true },
-                onSleep = { showSleepSheet = true },
-                onAddBookmark = {
-                    viewModel.addBookmark()
-                    // The write lands in Room before the server hears about it, so the
-                    // confirmation is honest even with no signal.
-                    scope.launch {
-                        snackbarHostState.showSnackbar(
-                            "Bookmarked at ${formatClock(state.positionSec)}",
-                            withDismissAction = true,
-                        )
-                    }
-                },
-                onBookmarks = { showBookmarkSheet = true },
-                onHistory = { showHistorySheet = true },
-            )
-
-            Spacer(Modifier.height(8.dp))
-            state.error?.let {
                 Spacer(Modifier.height(16.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                PlayerActionRow(
+                    speed = state.speed,
+                    sleepArmed = sleep.isArmed,
+                    canBookmark = canBookmark,
+                    onSpeed = { showSpeedSheet = true },
+                    onSleep = { showSleepSheet = true },
+                    onAddBookmark = {
+                        viewModel.addBookmark()
+                        // The write lands in Room before the server hears about it, so the
+                        // confirmation is honest even with no signal.
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                "Bookmarked at ${formatClock(state.positionSec)}",
+                                withDismissAction = true,
+                            )
+                        }
+                    },
+                    onBookmarks = { showBookmarkSheet = true },
+                    onHistory = { showHistorySheet = true },
+                )
+
+                Spacer(Modifier.height(8.dp))
+                // The playback error and the transcoding notice used to end this column, and
+                // both of them moved it: the column is centred, so a line added at the bottom
+                // lifted the cover art, the title and the whole transport. They are drawn by
+                // the strip over the top of the screen instead, which is what the rewind and
+                // jump notices above already do.
             }
 
-            if (nowPlaying?.isTranscoded == true) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Transcoding — seeking is less precise",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            StatusStrip(
+                status = playerStatus(
+                    error = state.error,
+                    transcoded = nowPlaying?.isTranscoded == true,
+                    noticeGone = transcodingNoticeGone,
+                ),
+                onDismiss = {
+                    if (state.error != null) {
+                        viewModel.dismissError()
+                    } else {
+                        transcodingNoticeGone = true
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
+            )
         }
     }
+}
+
+/**
+ * The one thing worth saying about playback right now.
+ *
+ * A failure outranks the transcoding notice: a stream that will not play at all makes the
+ * precision of a seek beside the point.
+ */
+private fun playerStatus(error: String?, transcoded: Boolean, noticeGone: Boolean): Status? = when {
+    error != null -> Status.Problem(error)
+    transcoded && !noticeGone -> Status.Note("Transcoding — seeking is less precise")
+    else -> null
 }
 
 /** Compact bar shown above the library so playback is always one tap away. */

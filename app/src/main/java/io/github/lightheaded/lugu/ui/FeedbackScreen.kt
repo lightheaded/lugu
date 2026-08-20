@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.ui
 import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,6 +47,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.BuildConfig
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
+import io.github.lightheaded.lugu.core.ui.Status
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 import io.github.lightheaded.lugu.playback.NowPlaying
 import io.github.lightheaded.lugu.playback.PlaybackConnection
 import io.github.lightheaded.lugu.playback.PlayerUiState
@@ -135,6 +138,9 @@ class FeedbackViewModel @Inject constructor(
 
     fun setAttachPlaybackRecord(value: Boolean) =
         form.update { it.copy(attachPlaybackRecord = value) }
+
+    /** Puts away a send failure that has been read. The typed comment is kept. */
+    fun dismissError() = form.update { it.copy(error = null) }
 
     /** Send with crash reporting already on, which is the only transport there is. */
     fun send() {
@@ -303,94 +309,103 @@ fun FeedbackScreen(
             )
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            if (state.sent) {
-                Text(
-                    text = "Sent. Thank you — that is genuinely more useful than a stack " +
-                        "trace on its own.",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Button(onClick = onBack) { Text("Done") }
-                return@Column
-            }
-
-            if (state.refersToCrash) {
-                Text(
-                    text = "lugu crashed the last time it ran. What you write here will be " +
-                        "attached to that crash, so the two arrive together.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            OutlinedTextField(
-                value = state.comment,
-                onValueChange = viewModel::setComment,
-                label = { Text("What happened?") },
-                placeholder = { Text("What you were doing, and what it did instead") },
-                minLines = 4,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        // A Box, so that a send failure is drawn over the top of the form instead of
+        // added to it. As a line above the button it pushed Send out from under the thumb
+        // that had just pressed it, which invites a second press of a button that has
+        // moved somewhere else.
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Attach the playback record", style = MaterialTheme.typography.bodyLarge)
+                if (state.sent) {
                     Text(
-                        text = "The most useful thing here, and the most detailed. It is " +
-                            "shown in full below before anything is sent.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = "Sent. Thank you — that is genuinely more useful than a stack " +
+                            "trace on its own.",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Button(onClick = onBack) { Text("Done") }
+                    return@Column
+                }
+
+                if (state.refersToCrash) {
+                    Text(
+                        text = "lugu crashed the last time it ran. What you write here will be " +
+                            "attached to that crash, so the two arrive together.",
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                Switch(
-                    checked = state.attachPlaybackRecord,
-                    onCheckedChange = viewModel::setAttachPlaybackRecord,
-                )
-            }
 
-            PayloadDisclosure(
-                payload = state.payload,
-                expanded = showingPayload,
-                onToggle = { showingPayload = !showingPayload },
-            )
-
-            state.error?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
-            if (state.crashReportingEnabled) {
-                Button(
-                    onClick = viewModel::send,
-                    enabled = state.canSend,
+                OutlinedTextField(
+                    value = state.comment,
+                    onValueChange = viewModel::setComment,
+                    label = { Text("What happened?") },
+                    placeholder = { Text("What you were doing, and what it did instead") },
+                    minLines = 4,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.sending) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    } else {
-                        Text("Send")
-                    }
-                }
-            } else {
-                ReportingOffNotice(
-                    canSend = state.canSend,
-                    sending = state.sending,
-                    onEnableAndSend = viewModel::enableReportingAndSend,
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Attach the playback record", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = "The most useful thing here, and the most detailed. It is " +
+                                "shown in full below before anything is sent.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = state.attachPlaybackRecord,
+                        onCheckedChange = viewModel::setAttachPlaybackRecord,
+                    )
+                }
+
+                PayloadDisclosure(
+                    payload = state.payload,
+                    expanded = showingPayload,
+                    onToggle = { showingPayload = !showingPayload },
+                )
+
+                if (state.crashReportingEnabled) {
+                    Button(
+                        onClick = viewModel::send,
+                        enabled = state.canSend,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (state.sending) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        } else {
+                            Text("Send")
+                        }
+                    }
+                } else {
+                    ReportingOffNotice(
+                        canSend = state.canSend,
+                        sending = state.sending,
+                        onEnableAndSend = viewModel::enableReportingAndSend,
+                    )
+                }
             }
+
+            // The failure is a reply to the Send that was just pressed, so it goes
+            // where every other outcome in lugu goes: over the top of the screen,
+            // under the top bar, announced politely and moving nothing.
+            StatusStrip(
+                status = state.error?.let { Status.Problem(it) },
+                onDismiss = viewModel::dismissError,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
+            )
         }
     }
 }
