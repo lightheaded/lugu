@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import io.github.lightheaded.lugu.core.db.DownloadState
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
 import io.github.lightheaded.lugu.core.model.ItemSort
@@ -95,7 +96,7 @@ import org.robolectric.annotation.GraphicsMode
  * them can be rendered from fabricated state as it stands. What is rendered here instead
  * is each screen's own components — [ItemCard], [ShelfRowView], [ContinueCard],
  * [ListControlsBar], [SelectionBar], [DownloadButton], [RowActionsMenu],
- * [PodcastTrimSection] — arranged the way
+ * [PodcastTrimSection], [EpisodeRowView], [EpisodeDetail] — arranged the way
  * the screen arranges them. That covers the parts where the design decisions live and where a
  * regression would actually show; it does not cover the assembly, and a change to the
  * order of blocks in a screen file will not fail these.
@@ -166,6 +167,16 @@ class LibraryScreensScreenshotTest {
     @Test
     fun `a podcast page reads correctly in the dark`() {
         capture("item_podcast_dark", dark = true) { PodcastPagePreview() }
+    }
+
+    @Test
+    fun `an episode page reads its notes and offers the way in`() {
+        capture("episode_light", dark = false) { EpisodePagePreview() }
+    }
+
+    @Test
+    fun `an episode page reads correctly in the dark`() {
+        capture("episode_dark", dark = true) { EpisodePagePreview() }
     }
 
     @Test
@@ -282,29 +293,74 @@ private val PODCAST = LibraryItem(
  * last week into "3 days ago", which would make the picture depend on the day it was
  * taken.
  */
-private fun episode(id: String, title: String, season: String?, number: String, minutes: Int) =
+private fun episode(
+    id: String,
+    title: String,
+    season: String?,
+    number: String,
+    minutes: Int,
+    description: String? = null,
+) =
     PodcastEpisode(
         id = id,
         libraryItemId = "li_pod",
         title = title,
+        description = description,
         episodeNumber = number,
         season = season,
         publishedAtMs = 1_710_000_000_000L,
         durationSec = minutes * 60.0,
     )
 
+/**
+ * The state names come from [DownloadState] rather than from a hand-typed string.
+ *
+ * They were typed in upper case here, and the constants are lower case, so neither row
+ * matched any state the control knows: both drew the cancel ring meant for a download in
+ * flight, and the baselines recorded that as the picture of "downloaded". The point of
+ * these three rows is one row per state, so the names have to be the real ones.
+ */
 private val EPISODES = listOf(
     EpisodeRow(
         episode("ep_1", "The 40-metre band, and who is still on it", "2", "14", 74),
         progress(0.33, 74 * 60.0),
-        DownloadStatus("li_pod", "ep_1", "", null, "COMPLETED", 1f, 0, 0, null),
+        DownloadStatus("li_pod", "ep_1", "", null, DownloadState.COMPLETED, 1f, 0, 0, null),
     ),
     EpisodeRow(
         episode("ep_2", "Ferry timetables as numbers stations", "2", "13", 58),
         null,
-        DownloadStatus("li_pod", "ep_2", "", null, "DOWNLOADING", 0.35f, 0, 0, null),
+        DownloadStatus("li_pod", "ep_2", "", null, DownloadState.DOWNLOADING, 0.35f, 0, 0, null),
     ),
     EpisodeRow(episode("ep_3", "A quiet hour on 500 kHz", "2", "12", 41), null, null),
+)
+
+/**
+ * Show notes as a feed actually writes them: paragraphs, a link, and an entity.
+ *
+ * The markup is the point of the picture. Every one of these was drawn as a literal tag
+ * before there was anything to read HTML, and a baseline of the rendered form is what
+ * would catch that coming back.
+ */
+private val NOTES_EPISODE = episode(
+    id = "ep_notes",
+    title = "The 40-metre band, and who is still on it",
+    season = "2",
+    number = "14",
+    minutes = 74,
+    description = "<p>A quiet evening on the band with <b>Ada Merriweather</b>, who has " +
+        "been listening to it since she was nine.</p><p>Charts, logs &amp; a map of what " +
+        "was heard are at <a href=\"https://example.org/coastal/40m\">the show page</a>." +
+        "</p><ul><li>What a quiet sun does to the evenings</li><li>Why the ferries stopped " +
+        "answering</li></ul>",
+)
+
+private val NOTES_STATE = EpisodeUiState(
+    showTitle = "Coastal Signal",
+    episode = NOTES_EPISODE,
+    progressFraction = 0.33f,
+    positionSec = 0.33 * 74 * 60,
+    download = DownloadStatus("li_pod", "ep_notes", "", null, DownloadState.COMPLETED, 1f, 0, 0, null),
+    loaded = true,
 )
 
 /** A book on a shelf: no episode, and the whole book is what is being played. */
@@ -634,6 +690,44 @@ private fun PodcastPagePreview() {
 }
 
 /**
+ * One episode, with the two things the page is for: the notes, and the way in.
+ *
+ * Photographed because this is the only screen in lugu that renders markup, and the two
+ * ways it can go wrong are both silent. A tag printed as text looks like a rendering that
+ * merely reads oddly, and a link drawn in the body colour is a link nobody presses.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EpisodePagePreview() {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(NOTES_STATE.showTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                navigationIcon = {
+                    IconButton(onClick = {}) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        EpisodeDetail(
+            state = NOTES_STATE,
+            episode = NOTES_EPISODE,
+            onPlay = {},
+            onDownload = {},
+            onRemoveDownload = {},
+            onPlayNext = {},
+            onAddToQueue = {},
+            onSetFinished = {},
+            modifier = Modifier.fillMaxSize().padding(padding),
+        )
+    }
+}
+
+/**
  * The trim controls in the two states the whole section exists to distinguish.
  *
  * Folded away at the top: a show following the default, said in the quiet colour. Open
@@ -733,38 +827,28 @@ private fun GroupLinkPreview(prefix: String?, name: String) {
     }
 }
 
+/**
+ * The screen's own row rather than a copy of it.
+ *
+ * It used to be a copy, and the copy is what a play button on the right made untenable:
+ * the picture would have gone on showing two controls while the app showed three, and the
+ * baseline would have proved nothing about the change it exists to catch.
+ */
 @Composable
 private fun EpisodeRowPreview(row: EpisodeRow) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-            Text(
-                row.episode.title,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                episodeSubline(row.episode),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (row.progressFraction > 0f) {
-                Spacer(Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = { row.progressFraction },
-                    modifier = Modifier.fillMaxWidth().height(2.dp),
-                )
-            }
-        }
-        DownloadButton(download = row.download, onDownload = {}, onRemove = {}, compact = true)
-        RowActionsMenu(
-            onPlayNext = {},
-            onAddToQueue = {},
-            compact = true,
-            isFinished = row.isFinished,
-            onSetFinished = {},
-        )
-    }
+    EpisodeRowView(
+        row = row,
+        selectionActive = false,
+        isSelected = false,
+        onOpen = {},
+        onPlay = {},
+        onToggle = {},
+        onDownload = {},
+        onRemoveDownload = {},
+        onPlayNext = {},
+        onAddToQueue = {},
+        onSetFinished = {},
+    )
 }
 
 /**
