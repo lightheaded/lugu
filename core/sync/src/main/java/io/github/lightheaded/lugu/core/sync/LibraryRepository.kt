@@ -205,21 +205,18 @@ class LibraryRepository @Inject constructor(
 
     fun observeEpisodes(account: ActiveAccount, itemId: String): Flow<List<PodcastEpisode>> =
         episodeDao.observeForItem(account.serverId, account.userId, itemId).map { rows ->
-            rows.map {
-                PodcastEpisode(
-                    id = it.id,
-                    libraryItemId = it.libraryItemId,
-                    title = it.title,
-                    subtitle = it.subtitle,
-                    description = it.description,
-                    episodeNumber = it.episodeNumber,
-                    season = it.season,
-                    publishedAtMs = it.publishedAtMs,
-                    durationSec = it.durationSec,
-                    index = it.position,
-                )
-            }
+            rows.map { it.toDomain() }
         }
+
+    /**
+     * One episode, by its own id.
+     *
+     * Read once rather than observed, because the episode page reads a description and a
+     * description does not change under anyone. Taking it from the whole feed instead would
+     * mean holding a thousand rows in memory to draw one of them.
+     */
+    suspend fun episode(account: ActiveAccount, episodeId: String): PodcastEpisode? =
+        episodeDao.byId(account.serverId, account.userId, episodeId)?.toDomain()
 
     /**
      * The three ways a library is browsed other than by title.
@@ -787,4 +784,17 @@ internal fun LibraryItemEntity.toDomain(): LibraryItem = LibraryItem(
     addedAtMs = addedAtMs,
     updatedAtMs = updatedAtMs,
     coverPath = coverPath,
+)
+
+internal fun EpisodeEntity.toDomain(): PodcastEpisode = PodcastEpisode(
+    id = id,
+    libraryItemId = libraryItemId,
+    title = title,
+    subtitle = subtitle,
+    description = description,
+    episodeNumber = episodeNumber,
+    season = season,
+    publishedAtMs = publishedAtMs,
+    durationSec = durationSec,
+    index = position,
 )
