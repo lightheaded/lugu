@@ -2237,12 +2237,50 @@ class LuguPlaybackService : MediaLibraryService() {
             return true
         }
 
+        /**
+         * The root, and the other root.
+         *
+         * A host that wants suggestions rather than a tree asks for them in its root
+         * hints, with `BrowserRoot.EXTRA_SUGGESTED`. Android Auto uses the answer to fill
+         * the "For you" pane on its dashboard; a host that gets no answer fills that pane
+         * from the top of the browse tree instead, which for lugu is a category rather
+         * than something to play. See [BrowseTree.suggestedRoot].
+         *
+         * The hint arrives as a typed field. Android Auto is a legacy browser, so its root
+         * hints reach here through `LegacyConversions.convertToLibraryParams`, which sets
+         * `isRecent`, `isOffline` and `isSuggested` from the matching `BrowserRoot` keys
+         * and keeps the whole hint bundle in `extras` as well. Media3 1.11.0 reads only
+         * `isRecent` for itself, in `MediaLibrarySessionImpl.onGetLibraryRootOnHandler`,
+         * and passes everything else straight to this callback.
+         *
+         * The answer must repeat the hint, which is what the platform asks of an app that
+         * can serve suggestions. `LibraryParams` goes back the same way it came:
+         * `LegacyConversions.convertToRootHints` writes `EXTRA_SUGGESTED` from
+         * `isSuggested` on the params returned here, so the flag is set again rather than
+         * merely echoed.
+         *
+         * **Not `EXTRA_RECENT`.** That hint is the phone's own resumption carousel, Media3
+         * answers it inside the session for the system UI, and lugu serves it through
+         * `onPlaybackResumption`. The two hints are different questions from different
+         * surfaces. Do not merge them.
+         */
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
             params: MediaLibraryService.LibraryParams?,
-        ): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(LibraryResult.ofItem(browseTree.root(), params))
+        ): ListenableFuture<LibraryResult<MediaItem>> {
+            // Absent, false or malformed hints all take this branch, because a bundle that
+            // will not unpack cannot set the flag. Ordinary browsing is unchanged.
+            if (params?.isSuggested != true) {
+                return Futures.immediateFuture(LibraryResult.ofItem(browseTree.root(), params))
+            }
+            val answer = MediaLibraryService.LibraryParams.Builder()
+                .setExtras(params.extras)
+                .setOffline(params.isOffline)
+                .setSuggested(true)
+                .build()
+            return Futures.immediateFuture(LibraryResult.ofItem(browseTree.suggestedRoot(), answer))
+        }
 
         override fun onGetChildren(
             session: MediaLibrarySession,

@@ -64,6 +64,35 @@ class BrowseTree @Inject constructor(
      */
     fun root(): MediaItem = browsable(BrowseNode.Root, "lugu")
 
+    /**
+     * The second root, for a host that asks for suggestions instead of for the tree.
+     *
+     * Android Auto draws a "For you" pane on its dashboard — the screen it shows when
+     * nothing plays. An app fills that pane by answering the `EXTRA_SUGGESTED` root hint
+     * with a root of its own; the children of that root are read as an ordered list of
+     * suggestions, best first. An app that answers nothing gets the pane filled from the
+     * top of its browse tree instead, which for lugu is the *Continue* row — a category,
+     * not a thing to play, and therefore a pane that cannot be pressed to any purpose.
+     * That is the fault Tom reported. See `LuguPlaybackService.LibrarySessionCallback`
+     * for the hint itself and for what it is not.
+     *
+     * What this root holds is [BrowseNode.Continue]'s own rows, in the same order and
+     * playable. A car is for carrying on with something, not for finding something new,
+     * so the suggestion lugu makes is the one it already makes at the top of the tree.
+     *
+     * The rows carry **no completion extras**, and that is a decision rather than an
+     * omission. Every row here is part-heard by definition, so
+     * `DESCRIPTION_EXTRAS_KEY_COMPLETION_STATUS` would read "partially played" on all of
+     * them and separate nothing. The percentage beside it says more, but it is only read
+     * together with the status, and no Android Auto build known to us draws either:
+     * androidx/media issue 2127 (internal b/400925046) reports the partially-played
+     * indicator missing from Android Auto 13.7.650624 through at least 15.2.653614, with
+     * correct extras. So the extras would have no observable effect on any car that can
+     * be tested. Add them — here and on Continue together, so one book does not look
+     * different on two surfaces — once a car is seen to draw the indicator for any app.
+     */
+    fun suggestedRoot(): MediaItem = browsable(BrowseNode.Suggested, "lugu")
+
     suspend fun children(parentId: String): List<MediaItem> {
         val account = authRepository.account() ?: return listOf(
             disabled("Sign in on your phone to use lugu here"),
@@ -85,7 +114,11 @@ class BrowseTree @Inject constructor(
             // A row per episode is only useful if it says which episode it is, and that rule
             // is [ContinueLabel]'s: the same one the phone's own Continue shelf draws, held
             // in one place since the two had a copy each and were free to drift apart.
-            BrowseNode.Continue -> itemDao.observeInProgress(server, user).first()
+            //
+            // The suggested root answers with the same list, because "what would I carry on
+            // with" is the same question — see [suggestedRoot]. Signed out, neither reaches
+            // here: the account check above has already answered both with the sign-in row.
+            BrowseNode.Continue, BrowseNode.Suggested -> itemDao.observeInProgress(server, user).first()
                 .filter { library.isVisible(mediaTypeOf(it.item.mediaType)) }
                 .map { row ->
                     playable(
