@@ -498,41 +498,65 @@ I'd like to see show notes and decide whether I'd like to hear the episode from 
 
 | Item | Status |
 |---|---|
-| **The new-episode notification opens Home** | todo |
-| **There is no episode page** | todo — correct, there is not |
-| **Show notes are not shown anywhere** | todo |
+| **The new-episode notification opens Home** | done 20 Aug — it opens the episode |
+| **There is no episode page** | done 20 Aug |
+| **Show notes are not shown anywhere** | done 20 Aug, on the episode page and the show's |
 
-**The notification is the small half.** `NewEpisodeNotifier` builds its tap action from
-`getLaunchIntentForPackage`, which is the bare launcher intent: it says "open lugu" and
-carries nothing about which episode caused it. So it lands wherever the app would have
-landed anyway, and the notification's whole point — *this* episode, now — is lost at the
-moment it is acted on. It cannot be fixed on its own, because there is nowhere for it to go.
+**The notification was the small half.** `NewEpisodeNotifier` built its tap action from
+`getLaunchIntentForPackage`, which is the bare launcher intent: it said "open lugu" and
+carried nothing about which episode caused it. So it landed wherever the app would have
+landed anyway, and the notification's whole point — *this* episode, now — was lost at the
+moment it was acted on. It could not be fixed on its own, because there was nowhere for it
+to go. It now carries the library item id and the episode id as extras on that same
+launcher intent, and `MainActivity` routes them the way it already routes a spoken request.
 
-**There is no episode page, and an episode's own description is already on the phone.** The
-sync mirrors `description` onto every episode row and nothing has ever drawn it. The item
-page renders the *show's* description; the episode list draws a title and a subline of date,
-number and length. So the show notes for every episode of every followed podcast are
-sitting in Room, unread.
+**An episode's own description was already on the phone.** The sync mirrors `description`
+onto every episode row and nothing had ever drawn it. The item page rendered the *show's*
+description; the episode list drew a title and a subline of date, number and length. So the
+show notes for every episode of every followed podcast were sitting in Room, unread. The
+episode page draws them, and the show's own description now goes through the same renderer.
 
-Three things this needs decided before it is built, none of them large but none of them
-obvious:
+Three things had to be decided before it could be built. All three are answered.
 
-- **What a tap in the episode list means.** Today it is unambiguous and deliberately so:
-  tapping an episode plays it, and that was itself a fix — the player used to open showing
-  Play, inviting a press it could not honour. An episode page makes a tap ambiguous again,
-  so the page needs its own way in (the row's overflow, or a chevron) rather than stealing
-  the tap.
-- **Show notes are HTML.** A podcast feed's description is markup with links in it, and the
-  show description is currently rendered with a plain `Text`, so a feed that uses `<p>` and
-  `<a>` shows its tags. Whether that is already visibly wrong on the show's own page is
-  worth looking at while this is open; either way an episode page cannot ship rendering raw
-  markup, and links in show notes are usually the point of reading them.
-- **Where the page goes in the back stack**, since it is reachable from a notification with
-  the app not running. Landing on it from cold with no way back to the library is the
-  failure mode; the item page already solves this and the answer should be the same one.
+- **What a tap in the episode list means.** A tap opens the episode page, and a play button
+  to the right of the row plays the episode. This paragraph first argued the opposite — that
+  the page should take the row's overflow and leave the tap alone, because tapping to play
+  was itself a fix. Tom decided the other way, and the record says so rather than what was
+  proposed. The reason holds: the row already gives the title, the number, the date and the
+  length, so the only thing left to open a row *for* is the notes, and the button is quicker
+  than the tap ever was for somebody who has already decided. Long-press still selects, and
+  the right of the row is now three compact controls — play, download, more. That is the
+  ceiling; a fourth would squeeze the title, which is what tells one episode from another.
+- **Show notes are HTML**, and lugu reads it itself. There was no HTML handling anywhere in
+  this repository, so this set the precedent: `parseShowNotes` in `:core:model` turns the
+  markup into text plus spans, and a small composable turns those spans into an
+  `AnnotatedString` with real links. `HtmlCompat.fromHtml` was rejected twice over — it
+  returns an Android type, so the parsing could not sit with the rest of the pure logic or
+  be tested without Robolectric, and what it accepts is a property of the OS version, so the
+  same feed renders differently on two phones and a screenshot baseline moves on an upgrade
+  nobody connects to it. A parser dependency was rejected for size: the input is a
+  paragraph, and two hundred lines with no transitive graph is the smaller correct thing.
+  The ugly cases each have a stated answer and a test — an unclosed tag closes at the end,
+  a `<` in arithmetic stays as prose, an unknown entity is left exactly as written, and a
+  description with no markup at all keeps its own line breaks instead of being collapsed.
+  Only `http`, `https` and `mailto` links are offered.
+- **Where the page goes in the back stack**: on top of Home, never as a start destination —
+  which is what the item page does, and it is done the same way. The notification starts
+  `MainActivity` with the ordinary launcher intent, so the graph comes up with Home at its
+  root and the episode page is pushed onto it. Back therefore reaches the library whether
+  the app was running or had never been started, which was the failure mode to avoid.
 
-The play affordance belongs on that page too — the request is to *decide* from there, which
-means the decision and the action are in one place.
+**A tap on a batch opens the newest episode.** One notification covers the whole batch,
+deliberately, so a tap has to mean something for a list. It opens the first episode listed,
+which is the newest and the one the notification's own text names first. Sending a batch of
+more than one to Home was rejected as the old behaviour under a new name: it throws away
+what the notification knows exactly when it is most useful, and a batch of two is far
+commoner than a batch of eleven. Nothing is lost, because back from the page is Home.
+
+**The play affordance is on the page too** — the request was to *decide* from there, which
+means the decision and the action are in one place. The page carries the same row of
+controls the item page gives a book: play or resume, download, and an overflow holding play
+next, add to queue and the finished mark.
 
 ## Podcast trimming, and adverts
 

@@ -9,7 +9,7 @@ regression through, and dark mode is when most of this app is used.
 
 | Module | Baselines |
 | --- | --- |
-| `feature/library` | Home tab, Library tab, the grid with a selection running, a book page, a podcast page, the queue |
+| `feature/library` | Home tab, Library tab, the grid with a selection running, a book page, a podcast page, an episode page, the queue |
 | `feature/player` | The player, playing and paused |
 | `feature/settings` | Settings, settings filtered by a search, a search that matches nothing |
 | `app` | The "why playback stopped" record, full and empty |

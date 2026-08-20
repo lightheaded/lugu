@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -18,11 +19,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.lightheaded.lugu.core.download.NewEpisodeIntent
 import io.github.lightheaded.lugu.feature.library.BrowseGroupScreen
 import io.github.lightheaded.lugu.feature.library.BrowseScreen
 import io.github.lightheaded.lugu.feature.library.CollectionScreen
 import io.github.lightheaded.lugu.feature.library.CollectionsScreen
 import io.github.lightheaded.lugu.feature.library.DownloadsScreen
+import io.github.lightheaded.lugu.feature.library.EpisodeScreen
 import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
 import io.github.lightheaded.lugu.feature.library.QueueScreen
@@ -40,6 +43,8 @@ import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.PlaybackRecordScreen
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -50,14 +55,28 @@ class MainActivity : ComponentActivity() {
      */
     @Inject lateinit var playback: PlaybackConnection
 
+    /**
+     * The episode a notification asked for, waiting for the graph to exist.
+     *
+     * An intent arrives before anything is composed, and on a cold start there is no
+     * navigation controller to hand it to yet. So it is parked here and taken by [LuguApp]
+     * once the graph is up, which also means one path serves both a cold start and a tap
+     * while the app is already open.
+     */
+    private val pendingEpisode = MutableStateFlow<EpisodeTarget?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         handleSearchIntent(intent)
+        handleEpisodeIntent(intent)
         setContent {
             LuguTheme {
                 RequestNotificationPermission()
-                LuguApp()
+                LuguApp(
+                    pendingEpisode = pendingEpisode,
+                    onEpisodeHandled = { pendingEpisode.value = null },
+                )
             }
         }
     }
@@ -66,6 +85,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleSearchIntent(intent)
+        handleEpisodeIntent(intent)
     }
 
     private fun handleSearchIntent(intent: Intent?) {
@@ -73,6 +93,37 @@ class MainActivity : ComponentActivity() {
         val query = intent.getStringExtra(SearchManager.QUERY)?.takeIf { it.isNotBlank() } ?: return
         playback.playFromSearch(query)
     }
+
+    /**
+     * The new-episode notification, which is the second kind of intent this activity routes.
+     *
+     * The extras are stripped once read. An activity keeps the intent that started it, so a
+     * rotation runs `onCreate` again with the same one — and without this, turning the phone
+     * on the player screen would throw the reader back onto the episode page they had left.
+     */
+    private fun handleEpisodeIntent(intent: Intent?) {
+        val target = episodeTargetOf(intent) ?: return
+        intent?.removeExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID)
+        intent?.removeExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
+        pendingEpisode.value = target
+    }
+}
+
+/** One episode, named by the two ids a route needs. */
+internal data class EpisodeTarget(val itemId: String, val episodeId: String)
+
+/**
+ * What a notification's intent asks for, or null when it asks for nothing.
+ *
+ * A free function rather than a method, so the round trip — the notifier writes the extras,
+ * this reads them back — can be tested without an activity.
+ */
+internal fun episodeTargetOf(intent: Intent?): EpisodeTarget? {
+    val itemId = intent?.getStringExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID)
+        ?.takeIf { it.isNotBlank() } ?: return null
+    val episodeId = intent.getStringExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
+        ?.takeIf { it.isNotBlank() } ?: return null
+    return EpisodeTarget(itemId, episodeId)
 }
 
 private object Routes {
@@ -86,6 +137,16 @@ private object Routes {
      */
     const val HOME = "home"
     const val ITEM = "item/{itemId}"
+
+    /**
+     * One episode of one podcast.
+     *
+     * Nested under the item it belongs to rather than keyed on the episode id alone.
+     * Audiobookshelf's episode ids are unique on their own, but a route that reads
+     * `item/{itemId}/episode/{episodeId}` says what the page is part of, and the screen
+     * needs the item id anyway — to play, to download and to name the show in the bar.
+     */
+    const val EPISODE = "item/{itemId}/episode/{episodeId}"
     const val PLAYER = "player"
     const val SETTINGS = "settings"
     const val DOWNLOADS = "downloads"
@@ -102,6 +163,8 @@ private object Routes {
     const val BROWSE_GROUP = "browse/{kind}/{name}"
 
     fun item(itemId: String) = "item/$itemId"
+
+    fun episode(itemId: String, episodeId: String) = "item/$itemId/episode/$episodeId"
 
     fun browse(kind: String) = "browse/$kind"
 
@@ -130,9 +193,14 @@ private object Routes {
 }
 
 @Composable
-private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
+private fun LuguApp(
+    pendingEpisode: StateFlow<EpisodeTarget?>,
+    onEpisodeHandled: () -> Unit,
+    startViewModel: StartupViewModel = hiltViewModel(),
+) {
     val navController = rememberNavController()
     val startState by startViewModel.state.collectAsStateWithLifecycle()
+    val episodeTarget by pendingEpisode.collectAsStateWithLifecycle()
 
     // Wait for the signed-in check before choosing a start destination, so a returning
     // user never sees the login screen flash past.
@@ -210,10 +278,31 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
                     playerViewModel.play(itemId, episodeId)
                     navController.navigate(Routes.PLAYER)
                 },
+                // A tap on an episode reads it; the row's own play button plays it.
+                onOpenEpisode = { itemId, episodeId ->
+                    navController.navigate(Routes.episode(itemId, episodeId))
+                },
                 // The author, series and narrator on an item page are links now that there
                 // is somewhere for them to lead.
                 onBrowseGroup = { kind, name ->
                     navController.navigate(Routes.browseGroup(kind, name))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.EPISODE,
+            arguments = listOf(
+                navArgument("itemId") { type = NavType.StringType },
+                navArgument("episodeId") { type = NavType.StringType },
+            ),
+        ) {
+            val playerViewModel: PlayerViewModel = hiltViewModel()
+            EpisodeScreen(
+                onBack = { navController.popBackStack() },
+                onPlay = { itemId, episodeId ->
+                    playerViewModel.play(itemId, episodeId)
+                    navController.navigate(Routes.PLAYER)
                 },
             )
         }
@@ -301,5 +390,31 @@ private fun LuguApp(startViewModel: StartupViewModel = hiltViewModel()) {
         composable(Routes.LICENSES) {
             LicensesScreen(onBack = { navController.popBackStack() })
         }
+    }
+
+    /*
+     * The new-episode notification, landed.
+     *
+     * Written after the NavHost so the graph is up before this runs, and expressed as a
+     * navigation onto Home rather than as a start destination of its own — which is the
+     * same shape the item page has and the reason it works from cold: whatever the app was
+     * doing, back from here leads to the library.
+     *
+     * `launchSingleTop` covers the case the batch makes likely — the same notification
+     * tapped twice while the page is already open — which would otherwise stack the page on
+     * itself and need two presses of back to leave.
+     *
+     * A tap while signed out is dropped rather than queued. There is no library to open the
+     * episode from until somebody signs in, and a page that appears several minutes later
+     * on top of whatever they went on to do is worse than the notification going nowhere.
+     */
+    LaunchedEffect(episodeTarget, start) {
+        val target = episodeTarget ?: return@LaunchedEffect
+        if (start == Routes.HOME) {
+            navController.navigate(Routes.episode(target.itemId, target.episodeId)) {
+                launchSingleTop = true
+            }
+        }
+        onEpisodeHandled()
     }
 }

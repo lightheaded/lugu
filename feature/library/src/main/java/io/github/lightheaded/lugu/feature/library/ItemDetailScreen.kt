@@ -97,6 +97,7 @@ import java.util.Locale
 fun ItemDetailScreen(
     onBack: () -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
+    onOpenEpisode: (itemId: String, episodeId: String) -> Unit,
     onBrowseGroup: (kind: String, name: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ItemDetailViewModel = hiltViewModel(),
@@ -255,7 +256,10 @@ fun ItemDetailScreen(
 
             item.description?.takeIf { it.isNotBlank() }?.let { description ->
                 item {
-                    Text(description, style = MaterialTheme.typography.bodyMedium)
+                    // A show's description is markup exactly as an episode's is, and it was
+                    // drawn with a plain Text until the episode page needed the answer — so
+                    // a podcast whose description uses <p> was showing its tags here.
+                    ShowNotesText(html = description, style = MaterialTheme.typography.bodyMedium)
                 }
             }
 
@@ -318,6 +322,7 @@ fun ItemDetailScreen(
                     row = row,
                     selectionActive = state.selectionActive,
                     isSelected = row.episode.id in state.selectedIds,
+                    onOpen = { onOpenEpisode(item.id, row.episode.id) },
                     // Playing is the whole gesture: one call, and no navigation of its own.
                     // The caller starts playback and opens the player, and the transport's
                     // optimistic Play/Pause state is settled in PlaybackConnection, so
@@ -458,13 +463,30 @@ private fun EpisodeSelectionBar(state: ItemDetailUiState, viewModel: ItemDetailV
  * that is the order the questions come in: which one is this, is it the new one, and have
  * I got time for it. A title and a duration alone leave a feed of a thousand rows that
  * all look the same.
+ *
+ * ### What a tap means, and why it changed
+ *
+ * A tap opens the episode page; the play button beside the row plays it. Until the page
+ * existed a tap played, and that was itself a fix — the player used to open showing Play,
+ * inviting a press it could not honour. Making the tap open a page and leaving play to a
+ * button of its own is the reverse of what was first proposed for this work, which was to
+ * hide the page behind the overflow and leave the tap alone. Tom decided otherwise, and
+ * the reason holds: the row already says the title, the number, the date and the length,
+ * so the only thing left to open the row *for* is the notes, and a listener who has
+ * already decided has a button that is quicker than the tap ever was.
+ *
+ * The right-hand side is therefore three compact controls — play, download, more — rather
+ * than the two it was. That is the ceiling. A fourth would start to squeeze the title,
+ * which is the part of the row that tells one episode from another, and everything else
+ * worth offering is already inside the overflow.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun EpisodeRowView(
+internal fun EpisodeRowView(
     row: EpisodeRow,
     selectionActive: Boolean,
     isSelected: Boolean,
+    onOpen: () -> Unit,
     onPlay: () -> Unit,
     onToggle: () -> Unit,
     onDownload: () -> Unit,
@@ -486,7 +508,7 @@ private fun EpisodeRowView(
             .fillMaxWidth()
             .background(background)
             .combinedClickable(
-                onClick = { if (selectionActive) onToggle() else onPlay() },
+                onClick = { if (selectionActive) onToggle() else onOpen() },
                 onLongClick = onToggle,
             ),
         verticalAlignment = Alignment.CenterVertically,
@@ -525,6 +547,15 @@ private fun EpisodeRowView(
         // The per-row controls stand down in selection mode: a bar that acts on eight
         // episodes and a button that acts on one, side by side, is a trap.
         if (!selectionActive) {
+            IconButton(onClick = onPlay, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    // Named after the episode rather than left as "Play". A screen reader
+                    // going down this list would otherwise read the same word on every
+                    // row, with nothing to say which one it is about.
+                    contentDescription = "Play ${row.episode.title}",
+                )
+            }
             DownloadButton(
                 download = row.download,
                 onDownload = onDownload,
