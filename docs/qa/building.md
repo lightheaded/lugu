@@ -87,16 +87,30 @@ FAILURE: Build failed with an exception.
 Gradle build daemon disappeared unexpectedly (it may have been killed or may have crashed)
 ```
 
-That failure is the VM out of memory, not a fault in the code. Serialise the builds, cap
-the container with `--memory=6g`, and lower the heaps for the run:
+That failure is the VM out of memory, not a fault in the code.
+
+Lowering the heaps does not fix it. A full `build` runs lint on the release variants and
+R8 over the minified one, and those are the two hungriest things this project does — with
+the heap cut to 2.5 GB in a 6 GB container it still died, every time, in
+`lintVitalAnalyzeRelease`. **Give the VM more memory instead.** Docker Desktop → Settings
+→ Resources → Memory; 16 GB is comfortable, and the setting is stored as `MemoryMiB` in
+`~/Library/Group Containers/group.com.docker/settings-store.json`. Docker must restart to
+take it, which stops every running container.
+
+With that headroom, run one build at a time and let it have the heap the project asks for:
 
 ```sh
-docker run --rm --platform linux/amd64 --memory=6g --memory-swap=6g \
+docker run --rm --platform linux/amd64 --memory=12g --memory-swap=12g \
   -v "$WORK:/work" -v "$GRADLE_CACHE:/gradle" -w /work lugu-build:1 \
-  ./gradlew build --no-daemon --console=plain --no-parallel --max-workers=3 \
-    -Dorg.gradle.jvmargs="-Xmx2560m -Dfile.encoding=UTF-8" \
+  ./gradlew build --no-daemon --console=plain --max-workers=4 \
+    -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8" \
     -Dkotlin.daemon.jvmargs="-Xmx1024m"
 ```
+
+If more memory is not available, build in pieces rather than all at once.
+`testDebugUnitTest` proves every unit and screenshot test, and `assembleDebug` plus
+`assembleDebugAndroidTest` prove that everything compiles. Together they cover almost all
+of what `build` covers, and each of them fits where the whole does not.
 
 `git archive HEAD | tar -x -C "$WORK"` is the alternative to `rsync` when only committed
 work needs to be built.
