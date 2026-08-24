@@ -476,19 +476,30 @@ private fun HomeTabPreview() {
             )
         }
         item {
+            // Every card here is part-heard, so every cover wears the play badge — the
+            // warning that a tap starts audio. The header chevron is on every shelf,
+            // because every shelf links to the Library tab.
             ShelfRowView(
                 title = ShelfKind.CONTINUE.label,
                 cards = CONTINUE_CARDS,
                 coverUrlFor = { null },
                 onOpenCard = {},
+                onMore = {},
             )
         }
         item {
+            // The counterpart: nothing on a next-in-series shelf has been started, so no
+            // card carries a badge and a tap opens the book's page. One card rather than
+            // three, so the "See all" tile a truncated row grows at its end sits inside
+            // the frame — at the row's real length it is exactly the part of the screen
+            // a baseline cannot reach.
             ShelfRowView(
                 title = ShelfKind.NEXT_IN_SERIES.label,
-                cards = GRID_BOOKS.drop(1).map(::card),
+                cards = GRID_BOOKS.drop(1).filter { it.progress == null }.take(1).map(::card),
                 coverUrlFor = { null },
                 onOpenCard = {},
+                onMore = {},
+                hasMore = true,
             )
         }
     }

@@ -52,7 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.formatLengthCompact
+import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
@@ -168,6 +170,14 @@ fun HomeScreen(
                     onOpenItem = onOpenItem,
                     onPlay = onPlay,
                     onTogglePlayPause = viewModel::togglePlayPause,
+                    // A shelf is a preview; the rest of it is the Library tab wearing the
+                    // nearest filter. The filter is set through the same stored preference
+                    // the chips write, so the landing reads exactly as if the chip had
+                    // been pressed — visible on the chips, and changeable right there.
+                    onOpenShelf = { kind ->
+                        libraryViewModel.setFilter(kind.libraryFilter())
+                        chosen = HomeTab.LIBRARY
+                    },
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )
 
@@ -216,6 +226,22 @@ private fun StartTab.toHomeTab(): HomeTab = when (this) {
 }
 
 /**
+ * The Library filter nearest to what a shelf is a preview of.
+ *
+ * The grid cannot ask every question a shelf asks — it has no filter for "next in a
+ * series you started" or "short enough for a sitting" — so each shelf maps to the
+ * filter that *contains* it: a superset, never a different answer. The jump means
+ * "show me more of this", and more of it is exactly what a superset shows. Note also
+ * that shelves set to span every library land in a grid scoped to the selected one,
+ * which is the grid's standing rule rather than something the jump changes.
+ */
+private fun ShelfKind.libraryFilter(): ListFilter = when (this) {
+    ShelfKind.CONTINUE, ShelfKind.ALMOST_FINISHED, ShelfKind.PICK_IT_BACK_UP -> ListFilter.IN_PROGRESS
+    ShelfKind.DOWNLOADED -> ListFilter.DOWNLOADED
+    ShelfKind.NEXT_IN_SERIES, ShelfKind.SHORT_LISTENS -> ListFilter.UNPLAYED
+}
+
+/**
  * The shelves, and the one thing most likely to be wanted.
  *
  * Resuming is the commonest thing anyone does here and used to cost four steps — open,
@@ -230,16 +256,19 @@ private fun HomeTabContent(
     onOpenItem: (String) -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     onTogglePlayPause: () -> Unit,
+    onOpenShelf: (ShelfKind) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // A tap on a shelf card means "carry on" for anything already started, and "tell me
     // about this" for anything not. It is a judgement call: opening the page for a book
     // someone is halfway through adds a step to the one action they almost certainly
     // wanted, while playing something unheard on a single tap is a surprise nobody asked
-    // for. The episode id comes from the card itself, so a podcast episode on the continue
-    // shelf plays that episode rather than the top of the feed.
+    // for. The card states the rule itself — see [ShelfCard.tapResumes], which is also
+    // what draws the play badge, so the badge and the tap cannot drift apart. The episode
+    // id comes from the card itself, so a podcast episode on the continue shelf plays
+    // that episode rather than the top of the feed.
     val onOpenCard: (ShelfCard) -> Unit = { card ->
-        if (card.progress != null) onPlay(card.itemId, card.episodeId) else onOpenItem(card.itemId)
+        if (card.tapResumes) onPlay(card.itemId, card.episodeId) else onOpenItem(card.itemId)
     }
 
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -286,6 +315,8 @@ private fun HomeTabContent(
                 cards = shelf.cards,
                 coverUrlFor = coverUrlFor,
                 onOpenCard = onOpenCard,
+                onMore = { onOpenShelf(shelf.kind) },
+                hasMore = shelf.hasMore,
             )
         }
 

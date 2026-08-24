@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,9 +27,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -314,6 +317,13 @@ private const val NOTE_MS = 4_000L
  * The continue shelf overrides them because what is being continued there may be one
  * episode of a podcast, and a card headed with the name of the show would be the same card
  * three times over for somebody with three episodes on the go.
+ *
+ * [playsOnTap] is the caller saying that a tap on this card starts audio, and the card
+ * saying so back to the reader as a play badge on the cover. Two cards side by side on a
+ * shelf used to do different things — one resumed, one opened a page — with nothing on
+ * either to say which; audio with no warning is a surprise, and a page where a play was
+ * expected is a broken promise. The badge is the warning, and the click label says the
+ * same thing to TalkBack, which cannot see a badge.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -326,9 +336,14 @@ internal fun ItemCard(
     title: String = row.item.title,
     subtitle: String? = row.item.authorName,
     onLongClick: (() -> Unit)? = null,
+    playsOnTap: Boolean = false,
 ) {
     Column(
-        modifier = modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = modifier.combinedClickable(
+            onClickLabel = if (playsOnTap) "play" else "open",
+            onLongClick = onLongClick,
+            onClick = onClick,
+        ),
     ) {
         Box(
             modifier = Modifier
@@ -357,6 +372,27 @@ internal fun ItemCard(
                         .height(3.dp)
                         .semantics { contentDescription = row.progressDescription },
                 )
+            }
+            if (playsOnTap) {
+                // Above the progress strip rather than over it: both facts are drawn at
+                // the bottom edge, and the badge covering the bar would hide the very
+                // progress that makes this card resume. The icon is decorative to
+                // TalkBack — the click label already says "play" where it matters.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 6.dp, bottom = 9.dp)
+                        .size(28.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
             if (isSelected) {
                 // A scrim over the whole cover and a tick in the middle of it. An outline
@@ -405,6 +441,12 @@ internal fun ItemCard(
  * decide that. Keyed on [ShelfCard.key] rather than on the item id: the continue shelf
  * lists episodes, so one podcast can be on it several times, and a duplicate key is a
  * crash in Compose rather than a card that merely looks wrong.
+ *
+ * [onMore] is where the rest of this shelf lives — the Library tab, filtered to the same
+ * kind of thing. It is reachable from the header at one end and, when [hasMore] says the
+ * row was cut short, from a "See all" tile at the other: the header is where somebody
+ * decides to see more before scrolling, and the end of the row is where they find out
+ * they want to.
  */
 @Composable
 internal fun ShelfRowView(
@@ -413,14 +455,33 @@ internal fun ShelfRowView(
     coverUrlFor: (String) -> String?,
     onOpenCard: (ShelfCard) -> Unit,
     modifier: Modifier = Modifier,
+    onMore: (() -> Unit)? = null,
+    hasMore: Boolean = false,
 ) {
     if (cards.isEmpty()) return
     Column(modifier = modifier) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (onMore != null) {
+                        Modifier.clickable(onClickLabel = "show all in the Library tab", onClick = onMore)
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (onMore != null) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -432,7 +493,48 @@ internal fun ShelfRowView(
                     onClick = { onOpenCard(card) },
                     title = card.title,
                     subtitle = card.secondary,
+                    playsOnTap = card.tapResumes,
                     modifier = Modifier.width(140.dp),
+                )
+            }
+            if (hasMore && onMore != null) {
+                item(key = "see-all") {
+                    SeeAllCard(onClick = onMore, modifier = Modifier.width(140.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The tile after the last card, for the moment the row runs out and the appetite has not.
+ *
+ * Cover-sized and cover-shaped so the row ends with a full member of itself rather than
+ * with a small link hanging in space — and so the reader's thumb, already in the rhythm
+ * of the row, lands on it the same way it landed on the covers.
+ */
+@Composable
+private fun SeeAllCard(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable(onClickLabel = "show all in the Library tab", onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "See all",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

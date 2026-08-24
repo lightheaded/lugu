@@ -85,4 +85,18 @@ class ShelfCardTest {
 
         assertThat(playing.isLoaded(episodeCard("e1", 0.5))).isFalse()
     }
+
+    @Test
+    fun `a started thing resumes on tap and an untouched thing does not`() {
+        // The same rule draws the play badge, so this is also the test that the badge
+        // appears exactly on the cards whose tap starts audio.
+        val started = ShelfCard(
+            ShelfEntry(book, playedDurationSec = book.durationSec),
+            MediaProgress(libraryItemId = "book", progress = 0.25),
+        )
+        val untouched = ShelfCard(ShelfEntry(book, playedDurationSec = book.durationSec), null)
+
+        assertThat(started.tapResumes).isTrue()
+        assertThat(untouched.tapResumes).isFalse()
+    }
 }

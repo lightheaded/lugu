@@ -68,12 +68,37 @@ data class ShelfCard(
     /** What the grid's card wants, since a shelf card is drawn by the same component. */
     val row: LibraryRow get() = LibraryRow(entry.item, progress)
 
+    /**
+     * Whether a tap on this card resumes playback rather than opening the item's page.
+     *
+     * The judgement is the home tab's — a tap means "carry on" for anything already
+     * started and "tell me about this" for anything not — but it lives on the card so the
+     * play badge the card wears and the tap the screen handles read one rule. Stated in
+     * two places, the badge would eventually promise a play the tap does not do.
+     */
+    val tapResumes: Boolean get() = progress != null
+
     private val playedDurationSec: Double
         get() = entry.playedDurationSec.takeIf { it > 0.0 } ?: entry.item.durationSec
 }
 
-/** One computed shelf, already paired with whatever progress its entries have. */
-data class ShelfRow(val kind: ShelfKind, val cards: List<ShelfCard>)
+/**
+ * One computed shelf, already paired with whatever progress its entries have.
+ *
+ * [hasMore] means the queries found more than the row shows. The row is a preview capped
+ * at [SHELF_ROW_MAX] — the full answer lives on the Library tab, and a shelf that scrolled
+ * sideways through fifty covers was a worse way to read it than the grid already there.
+ */
+data class ShelfRow(val kind: ShelfKind, val cards: List<ShelfCard>, val hasMore: Boolean = false)
+
+/**
+ * How many cards a shelf shows before pointing at the Library tab instead.
+ *
+ * The queries behind the shelves return up to 50; sideways is a direction for a handful
+ * of suggestions, not for reading a list of that size. Anyone who wants the rest gets
+ * them as a grid, through the shelf's header or the "See all" tile at the end of the row.
+ */
+private const val SHELF_ROW_MAX = 10
 
 /**
  * What the player has loaded, as a shelf needs to compare against it.
@@ -217,9 +242,10 @@ class HomeViewModel @Inject constructor(
             val rows = visible.map { shelf ->
                 ShelfRow(
                     shelf.kind,
-                    shelf.entries.map { entry ->
+                    shelf.entries.take(SHELF_ROW_MAX).map { entry ->
                         ShelfCard(entry, progress[ProgressKey(entry.item.id, entry.episodeId)])
                     },
+                    hasMore = shelf.entries.size > SHELF_ROW_MAX,
                 )
             }
             HomeUiState(

@@ -927,6 +927,39 @@ behind an identity-aware proxy the browser is turned away before it ever reaches
 Audiobookshelf, and the refusal comes from the proxy, in the proxy's words, which will not
 mention lugu. The row says so whenever either is configured.
 
+## What a tap does, and where the rest of a shelf lives
+
+> *It should be clear when clicking on something will start playing. When I click on
+> stuff in "Continue listening" it starts playing immediately; "Next in series" opens
+> the book's page. Each section — Downloaded, Pick it back up — should open in Library
+> with appropriate filters applied. I don't want to scroll sideways infinitely, and
+> sometimes want to see more.*
+
+| Item | Status |
+|---|---|
+| A play badge on every shelf card whose tap starts audio | done 20 Aug |
+| Shelf headers open the Library tab with the nearest filter | done 20 Aug |
+| Shelf rows capped at ten cards, with a "See all" tile at the end | done 20 Aug |
+
+**The tap rule was invisible.** The rule itself was sound: a tap on a started thing
+resumes it, and a tap on an untouched thing opens its page. Audio with no warning is a
+surprise, and a page where a play was expected is a broken promise. The fault was that
+nothing on the card said which promise it made. Every card whose tap starts audio now
+wears a play badge on its cover. The rule is stated once, on the card
+(`ShelfCard.tapResumes`), so the badge and the tap handler cannot drift apart — and the
+badge follows the *rule*, not the shelf: a started book on the Downloaded shelf plays on
+tap and says so. TalkBack hears the same fact through the click label, because it cannot
+see a badge.
+
+**A shelf is a preview, not the list.** Each row now shows at most ten cards. The header
+and, where the row was cut short, a "See all" tile at its end open the Library tab with
+the nearest filter applied: Downloaded lands on *Downloaded*; Continue, Almost finished
+and Pick it back up land on *In progress*; Next in series and Short listens land on *Not
+started*. The grid has no filter for "next in a series you started", so the mapping is a
+superset — more of the same kind of thing, never a different answer. The jump writes the
+same stored filter the chips write, so the landing reads exactly as if the chip had been
+pressed, and the chip is right there to change it.
+
 ## Earlier findings
 
 - **Notification rewind reset the book to zero, unrecoverably.** Fixed: transport
