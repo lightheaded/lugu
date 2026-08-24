@@ -5,18 +5,34 @@ work items. Each item gives the desired end state, the approach, the files it ow
 the risk to watch. The plan exists to make parallel work safe: the *ownership* section
 of each item is the contract that keeps two workers out of one file.
 
-**Status: none of the twelve is implemented.** Agents started this work on 21 August
-2026 and again on 24 August 2026. Both runs stopped before any agent wrote code, so
-`main` is unchanged at `c06bd67`. Treat every item below as open.
+**Status on 24 August 2026: four of the twelve are done.** Items 3, 8, 9 and 10 are
+implemented and on `main`. The other eight are open.
+
+Two agent runs on 21 and 24 August stopped before either wrote code, so the four that
+landed were written directly. The eight that remain are open for the same reason they
+were listed: nothing about them changed.
+
+**What blocks the visible ones.** Items 5, 7 and 12 change what a screen looks like, so
+they invalidate committed Roborazzi baselines. A baseline must be recorded on a Linux
+host that matches the CI runner, and the machine this work ran on is an arm64 Mac, where
+even an emulated amd64 container is the wrong host. So a visible change cannot be
+finished here: the code is easy and the baseline is not. Do those items where a matching
+Linux host is available, and record the baselines in the same pass.
 
 Read [docs/FEEDBACK.md](FEEDBACK.md) before you start any item. It holds the design
 laws these fixes must obey, and it records ideas the project rejected with reasons.
 
 ## The three laws every item obeys
 
-1. **A message may appear, and nothing else may move.** Transient notices render
-   through `core/ui/StatusStrip.kt`. Layout never shifts. No snackbars. No dialogs for
-   information.
+1. **A message may appear, and nothing else may move.** Layout never shifts, and a
+   dialog is never used to say something that can be read in place. Which mechanism
+   carries the message depends on what the message is:
+   - A status with nothing to press — a sync, a failure, a standing fact — is
+     `core/ui/StatusStrip.kt`, an overlay that holds no layout space.
+   - A message that offers an action, which in practice means Undo, is a snackbar from
+     the screen's own host. `PlayerScreen.kt` is the worked example: an indefinite
+     snackbar, `actionLabel = "Undo"`, wrapped in `withTimeoutOrNull(noticeMillis)`, and
+     a timeout that keeps the change. A snackbar overlays as well, so it moves nothing.
 2. **Undo over confirmation.** A destructive action runs at once and offers undo. Undo
    restores the previous state exactly. Do not add a confirmation dialog.
 3. **Offline first.** Every screen renders from the local Room database.
@@ -81,7 +97,7 @@ download at once, with no undo. While a download runs, one tap cancels it, even 
 **Desired.** The delete still costs one tap. It becomes undoable.
 
 **Approach.** Defer the file deletion. Mark the download pending-delete in
-`:core:download`, show an undo notice through the StatusStrip pattern, and remove the
+`:core:download`, offer Undo in a snackbar as item 3 now does, and remove the
 files only after the undo window ends. Undo inside the window restores at once, because
 nothing was deleted yet. While pending-delete, the item renders as not downloaded. A
 tap on a running download still cancels, and undo re-enqueues it. Make the control say
@@ -91,17 +107,23 @@ what a tap does: "Delete download" or "Cancel download", not "Downloaded".
 
 ## 3. Make queue "Clear" and row removal undoable
 
+**Done (f87a6ea).**
+
 **Current.** `QueueScreen.kt:102` empties the whole queue in one silent tap.
 `QueueScreen.kt:321-323` removes one row the same way. The queue is the one list the
 listener builds by hand.
 
 **Desired.** Both actions still act at once, and both offer undo.
 
-**Approach.** Snapshot the queue before the change. Show a notice through the
-StatusStrip pattern: "Cleared queue (N items) — Undo" and "Removed <title> — Undo".
-Undo restores the snapshot: same items, same order, same positions. Follow the timing of
-the existing undo pattern. Do not add a selection mode; `docs/FEEDBACK.md` rejected
-long-press-select on the queue, because long-press means drag there.
+**Approach.** Snapshot the queue before the change and offer Undo in a snackbar, the way
+the player offers it: "Cleared the queue — 7 entries" and "Removed <title>".
+
+**What was built.** `QueueRepository.snapshot` and `restore` copy the stored rows, so the
+restore keeps the order, the time each entry was added and whether a continuation rule
+suggested an entry. Rebuilding from what the screen shows would have turned suggestions
+into choices. The window is the `noticeSeconds` setting the player's notices already use.
+Removing a selection offers the same undo. No selection mode was added, because
+`docs/FEEDBACK.md` rejected long-press-select on this screen: long-press means drag here.
 
 ## 4. Give the player a landscape layout
 
@@ -161,6 +183,8 @@ one. Keep it typographically quiet. Fix the search field in the same pass:
 
 ## 8. Keep the scroll position of both tabs
 
+**Done (4912a70).**
+
 **Current.** `HomeScreen.kt:160-181` switches tab content with a `when`, so the hidden
 tab leaves composition and its lazy-list state dies. A glance at the other tab costs the
 position in a long grid.
@@ -174,6 +198,8 @@ position. Do not add a per-tab back stack; `docs/FEEDBACK.md` rejected that.
 
 ## 9. Guard sign-out without a dialog
 
+**Done (bb7f3c2).**
+
 **Current.** `SettingsScreen.kt:1110-1118`. One tap signs out. Tokens are dropped and the
 session ends. A slip while scrolling settings is not recoverable.
 
@@ -181,11 +207,16 @@ session ends. A slip while scrolling settings is not recoverable.
 
 **Approach.** The first tap arms the row: the label becomes "Tap again to sign out",
 tinted with the error color, and the row disarms itself after a few seconds. The second
-tap inside that window signs out. Announce the armed state for accessibility. If the row
-gets a consequence line, read the sign-out code first and write only what is true about
-downloads and local data.
+tap inside that window signs out. Announce the armed state for accessibility.
+
+**What was built.** The arm window is four seconds. A screen reader hears which state the
+button is in, through `stateDescription`. No consequence line was added under the label:
+the unarmed row draws exactly as before, which keeps the settings baselines valid. A line
+about what sign-out keeps is still worth adding, together with a baseline re-record.
 
 ## 10. Let a password manager fill the sign-in form
+
+**Done (c885799).**
 
 **Current.** `LoginScreen.kt:98-166`. The fields carry no autofill semantics, so
 password managers cannot fill them. The password field has no show-password toggle. The
@@ -200,6 +231,12 @@ password visibility, with correct content descriptions. Set the IME actions: ser
 to Next, user name to Next, password to Done, and let Done submit through the same code
 path as the button. Give the server URL field `KeyboardType.Uri` and no autocorrect.
 Keep the debug prefill from `local.properties` working.
+
+**What was built.** `ContentType.Username` and `ContentType.Password` through the
+`semantics` block, beside the content descriptions that were already there. The IME flow
+turned out to be correct already, so only autocorrect was turned off on the address and
+the user name. The reveal state is `remember` and not `rememberSaveable`, on purpose: a
+revealed password must not come back revealed after the process is recreated.
 
 ## 11. Remove the dark flash at cold start
 
