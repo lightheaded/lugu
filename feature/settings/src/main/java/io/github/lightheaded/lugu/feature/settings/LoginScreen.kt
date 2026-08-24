@@ -33,13 +33,19 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,6 +71,10 @@ fun LoginScreen(
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Deliberately not rememberSaveable: a revealed password must not come back revealed
+    // after the process is recreated with the screen still on somebody's desk.
+    var passwordShown by remember { mutableStateOf(false) }
 
     val pickCertificate = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -103,6 +113,7 @@ fun LoginScreen(
             singleLine = true,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Uri,
+                autoCorrectEnabled = false,
                 imeAction = ImeAction.Next,
             ),
             keyboardActions = KeyboardActions(onNext = { viewModel.checkServer() }),
@@ -140,10 +151,16 @@ fun LoginScreen(
             onValueChange = viewModel::onUsernameChange,
             label = { Text("Username") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardOptions = KeyboardOptions(
+                autoCorrectEnabled = false,
+                imeAction = ImeAction.Next,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .semantics { contentDescription = "Username" },
+                .semantics {
+                    contentDescription = "Username"
+                    contentType = ContentType.Username
+                },
         )
         Spacer(Modifier.height(12.dp))
 
@@ -152,7 +169,19 @@ fun LoginScreen(
             onValueChange = viewModel::onPasswordChange,
             label = { Text("Password") },
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (passwordShown) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
+            trailingIcon = {
+                IconButton(onClick = { passwordShown = !passwordShown }) {
+                    Icon(
+                        if (passwordShown) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (passwordShown) "Hide password" else "Show password",
+                    )
+                }
+            },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done,
@@ -160,7 +189,10 @@ fun LoginScreen(
             keyboardActions = KeyboardActions(onDone = { viewModel.submit() }),
             modifier = Modifier
                 .fillMaxWidth()
-                .semantics { contentDescription = "Password" },
+                .semantics {
+                    contentDescription = "Password"
+                    contentType = ContentType.Password
+                },
         )
 
         // Under the password box, because that is where a reader looks after a sign-in is
