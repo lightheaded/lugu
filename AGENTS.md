@@ -139,6 +139,60 @@ Two things to keep true:
   detailed section before publishing — useful in git history, not useful to
   someone reading a release.
 
+## Many agents at once — how to split work without collisions
+
+These rules come from a run of twelve parallel agents on the UX audit
+([docs/UX-FIX-PLAN.md](docs/UX-FIX-PLAN.md)). They apply to the agent that hands out
+the work and to every agent that does a piece of it.
+
+**Split by file, not by feature.** Two features often live in one file, and two agents
+in one file produce a merge conflict that neither of them can see. Write the ownership
+map before you start: every file that the work touches belongs to exactly one agent.
+`PlayerScreen.kt` is the example that matters here — it holds the full player and the
+mini player, so three separate findings appear to need it.
+
+**Name the read-only files too.** An agent that must understand a file it may not edit
+needs to be told both facts. "You may read `PlayerScreen.kt`. Another agent owns it. If
+your change needs an edit there, describe the edit in your report instead."
+
+**One agent, one worktree, one commit.** Give each agent an isolated worktree. Inside
+it, an agent works only in its own directory, and never pushes, fetches or switches
+branches. It ends with one commit: a conventional subject that stands alone as a
+release-note line, and a body in Simplified Technical English. The release job builds
+its notes from commit messages, so a weak message is a missing release note.
+
+**Never run Gradle inside a parallel agent.** Several Gradle daemons at once exhaust
+the memory of a development machine, and the build that dies is somebody else's. An
+agent verifies by reading code: imports, types and call sites by hand. The orchestrator
+compiles once, after the merge.
+
+**Never let an agent record a screenshot baseline.** A baseline recorded anywhere but a
+Linux host that matches CI fails verification in CI. Agents must not create, change or
+delete a `*.png` baseline. Re-record after the merge, on Linux — see the screenshot
+section above.
+
+**Tell the agent to edit early.** An agent that reads for a long time and then loses its
+budget leaves nothing behind: an unchanged worktree is discarded automatically. An agent
+that saved edits leaves work that survives. Instruct it to read only what it needs, and
+to start with the smallest of its findings.
+
+**Start agents in batches.** All twelve agents of the audit run died together on one
+spend limit, and every worktree vanished. Four at a time keeps an interruption from
+wiping every branch.
+
+**Hand over the design laws, not just the task.** An agent that never read
+[docs/FEEDBACK.md](docs/FEEDBACK.md) adds a confirmation dialog to a project that
+rejected dialogs, and re-raises an idea the docs already refused with a reason. Quote
+the laws in the brief, and name the rejected ideas that sit near the task.
+
+**Restate the privacy rules in every brief.** The rules at the top of this file apply to
+everything an agent writes: code, fixtures, comments, commit messages and its own
+report. An agent that never saw them invents a book title from a real shelf.
+
+**Ask for a report you can act on.** Branch name, worktree path, files changed, the
+decisions it made, what it could not verify, and its commit subject. "What I could not
+verify" is the most valuable line, because it tells the orchestrator where to look.
+
 ## Housekeeping
 
 - All commits are signed; the pre-push hook refuses unsigned ones. Never bypass it

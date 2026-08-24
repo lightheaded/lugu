@@ -2,7 +2,10 @@
 
 Everything deliberately left undone, so nothing depends on someone remembering it.
 Items originating from user testing live in [FEEDBACK.md](FEEDBACK.md) and are
-cross-referenced here rather than duplicated.
+cross-referenced here rather than duplicated. Items found by the UX audit of 20 August
+live in [UX-AUDIT.md](UX-AUDIT.md), and the twelve highest of them have work items in
+[UX-FIX-PLAN.md](UX-FIX-PLAN.md); the audit marks which of its findings this file
+already records, so neither list repeats the other.
 
 Each entry says *why* it is not done, because that is what decides whether it still
 matters later.
