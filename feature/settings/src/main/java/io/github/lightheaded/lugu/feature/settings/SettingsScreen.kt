@@ -48,6 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -70,7 +72,14 @@ import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.core.ui.ReservedMessage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * How long the sign-out button stays armed. Long enough to reach with the same hand,
+ * short enough that an armed button nobody meant to touch disarms before it is forgotten.
+ */
+private const val SIGN_OUT_ARM_MILLIS = 4_000L
 
 /**
  * Settings, grouped by what the listener is trying to change rather than by which
@@ -1107,14 +1116,42 @@ private fun settingEntries(
                         onClick = { openLink(WebClient.home(account.baseUrl)) },
                     )
                 }
+                // Signing out drops the tokens, so it is the one action here that undo
+                // cannot answer — and it sat one stray tap away from a thumb scrolling
+                // settings. It arms instead of asking: the first tap changes what the
+                // button says, the second one does it, and the button disarms itself if
+                // nothing follows. A dialog was not the answer, for the reason the rest of
+                // this app does not use them.
+                var armed by remember { mutableStateOf(false) }
+                if (armed) {
+                    LaunchedEffect(Unit) {
+                        delay(SIGN_OUT_ARM_MILLIS)
+                        armed = false
+                    }
+                }
                 TextButton(
                     onClick = {
-                        viewModel.signOut()
-                        onSignedOut()
+                        if (armed) {
+                            viewModel.signOut()
+                            onSignedOut()
+                        } else {
+                            armed = true
+                        }
                     },
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics {
+                            stateDescription = if (armed) {
+                                "Armed. Tap again to sign out."
+                            } else {
+                                "Needs two taps."
+                            }
+                        },
                 ) {
-                    Text("Sign out", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        if (armed) "Tap again to sign out" else "Sign out",
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             },
         )
