@@ -163,27 +163,17 @@ fun HomeScreen(
             }
         },
     ) { padding ->
-        // A Box, so the status line is drawn *over* the top of the content instead of
-        // above it. Laid out as a sibling in a Column it would push both tabs down as it
-        // appeared and let them spring back as it went, which is the movement it exists to
-        // remove. Overlaying costs the top few pixels of a scrolling list for as long as
-        // something is genuinely happening, and costs nothing at all the rest of the time.
-        Box(Modifier.fillMaxSize()) {
-            when (tab) {
-                // Nothing at all until the start tab is known, which is a frame at most.
-                null -> Unit
+        when (tab) {
+            null -> Unit
 
-                HomeTab.HOME -> HomeTabContent(
+            HomeTab.HOME -> Box(Modifier.fillMaxSize()) {
+                HomeTabContent(
                     state = state,
                     playingNow = playingNow,
                     coverUrlFor = { viewModel.coverUrl(it) },
                     onOpenItem = onOpenItem,
                     onPlay = onPlay,
                     onTogglePlayPause = viewModel::togglePlayPause,
-                    // A shelf is a preview; the rest of it is the Library tab wearing the
-                    // nearest filter. The filter is set through the same stored preference
-                    // the chips write, so the landing reads exactly as if the chip had
-                    // been pressed — visible on the chips, and changeable right there.
                     onOpenShelf = { kind ->
                         libraryViewModel.setFilter(kind.libraryFilter())
                         chosen = HomeTab.LIBRARY
@@ -191,26 +181,22 @@ fun HomeScreen(
                     listState = homeListState,
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )
-
-                HomeTab.LIBRARY -> LibraryScreen(
-                    onOpenItem = onOpenItem,
-                    onBrowse = onBrowse,
-                    onOpenCollections = onOpenCollections,
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    viewModel = libraryViewModel,
-                    gridState = libraryGridState,
+                StatusStrip(
+                    status = libraryState.statusLine(),
+                    onDismiss = libraryViewModel::dismissStatus,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = padding.calculateTopPadding()),
                 )
             }
 
-            // Shown on both tabs, because a sync is a property of the app rather than of
-            // whichever tab happens to be in front — and because switching tabs while one
-            // is running should not look like it stopped.
-            StatusStrip(
-                status = libraryState.statusLine(),
-                onDismiss = libraryViewModel::dismissStatus,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = padding.calculateTopPadding()),
+            HomeTab.LIBRARY -> LibraryScreen(
+                onOpenItem = onOpenItem,
+                onBrowse = onBrowse,
+                onOpenCollections = onOpenCollections,
+                modifier = Modifier.fillMaxSize().padding(padding),
+                viewModel = libraryViewModel,
+                gridState = libraryGridState,
             )
         }
     }
@@ -224,7 +210,7 @@ fun HomeScreen(
  * news. A confirmation outranks work in progress, because it is the reply to something just
  * pressed and the sync will still be running a moment later to say so.
  */
-private fun LibraryUiState.statusLine(): Status? = when {
+internal fun LibraryUiState.statusLine(): Status? = when {
     error != null -> Status.Problem(error)
     message != null -> Status.Done(message)
     isSyncing -> Status.Working(syncNote?.text ?: "Syncing", syncNote?.fraction)

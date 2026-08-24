@@ -63,6 +63,7 @@ import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.ItemSort
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.sync.BrowseKind
+import io.github.lightheaded.lugu.core.ui.StatusStrip
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -220,6 +221,12 @@ fun LibraryScreen(
                         modifier = Modifier.align(Alignment.CenterEnd),
                     )
                 }
+
+                StatusStrip(
+                    status = state.statusLine(),
+                    onDismiss = viewModel::dismissStatus,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
     }
