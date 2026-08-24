@@ -16,6 +16,17 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+/**
+ * A copy of the whole queue, held only long enough for an undo to use it.
+ *
+ * Opaque on purpose: it carries stored rows, which are the database's business and not a
+ * screen's. A caller can say how many there were and hand it back, and nothing else.
+ */
+class QueueSnapshot internal constructor(internal val entries: List<QueueEntity>) {
+    val size: Int get() = entries.size
+    val isEmpty: Boolean get() = entries.isEmpty()
+}
+
 /** One thing waiting to be played. */
 data class QueueItem(
     val libraryItemId: String,
@@ -118,6 +129,23 @@ class QueueRepository @Inject constructor(
 
     suspend fun clear(account: ActiveAccount) {
         queueDao.clear(account.serverId, account.userId)
+    }
+
+    /**
+     * The queue exactly as it is stored, so that an undo can put it back.
+     *
+     * Taken at the entity level rather than from [observe], because that is what makes the
+     * restore exact: position, the time each entry was added, and whether a continuation
+     * rule put it there rather than the listener all survive the round trip. Rebuilding
+     * from titles would quietly turn suggestions into choices and lose the original order.
+     */
+    suspend fun snapshot(account: ActiveAccount): QueueSnapshot =
+        QueueSnapshot(queueDao.all(account.serverId, account.userId))
+
+    /** Puts [snapshot] back, replacing whatever is queued now. */
+    suspend fun restore(account: ActiveAccount, snapshot: QueueSnapshot) {
+        queueDao.clear(account.serverId, account.userId)
+        if (snapshot.entries.isNotEmpty()) queueDao.upsertAll(snapshot.entries)
     }
 
     /**
