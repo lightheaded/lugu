@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -108,6 +111,13 @@ fun HomeScreen(
     var chosen by rememberSaveable { mutableStateOf<HomeTab?>(null) }
     val tab = chosen ?: startTab?.toHomeTab()
 
+    // Hoisted above the `when` below, because the tab that is not in front leaves
+    // composition and takes any state it owns with it. Held here, each tab keeps the place
+    // it was left at — a glance at the other tab no longer costs a position deep in a long
+    // grid. Both remember across a rotation, which is what rememberLazy*State already does.
+    val homeListState = rememberLazyListState()
+    val libraryGridState = rememberLazyGridState()
+
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -178,6 +188,7 @@ fun HomeScreen(
                         libraryViewModel.setFilter(kind.libraryFilter())
                         chosen = HomeTab.LIBRARY
                     },
+                    listState = homeListState,
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )
 
@@ -187,6 +198,7 @@ fun HomeScreen(
                     onOpenCollections = onOpenCollections,
                     modifier = Modifier.fillMaxSize().padding(padding),
                     viewModel = libraryViewModel,
+                    gridState = libraryGridState,
                 )
             }
 
@@ -257,6 +269,7 @@ private fun HomeTabContent(
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     onTogglePlayPause: () -> Unit,
     onOpenShelf: (ShelfKind) -> Unit,
+    listState: LazyListState,
     modifier: Modifier = Modifier,
 ) {
     // A tap on a shelf card means "carry on" for anything already started, and "tell me
@@ -271,7 +284,11 @@ private fun HomeTabContent(
         if (card.tapResumes) onPlay(card.itemId, card.episodeId) else onOpenItem(card.itemId)
     }
 
-    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(
+        modifier = modifier,
+        state = listState,
+        contentPadding = PaddingValues(bottom = 16.dp),
+    ) {
         state.continueCard?.let { card ->
             item {
                 // Whether this card is the thing in the player is a question about the

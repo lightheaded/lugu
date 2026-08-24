@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -86,9 +87,11 @@ fun LibraryScreen(
     onOpenCollections: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LibraryViewModel = hiltViewModel(),
+    // Hoisted by the tab shell, so the grid keeps its place while the other tab is in
+    // front. A caller that owns no such state gets one of its own and loses nothing.
+    gridState: LazyGridState = rememberLazyGridState(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
 
     // Getting out of selection mode is the commonest thing to want, and back is where
