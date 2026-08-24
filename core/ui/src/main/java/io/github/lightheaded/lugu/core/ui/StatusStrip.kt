@@ -74,7 +74,17 @@ sealed interface Status {
  * The line under the top bar where lugu says what it is doing.
  *
  * **It must be laid out as an overlay** — inside a `Box`, aligned to the top of the content,
- * never as a child of the `Column` it appears above. That is the whole point of it. What it
+ * never as a child of the `Column` it appears above. That is the whole point of it.
+ *
+ * **The `Box` it overlays must contain only scrollable content.** When the strip shows a
+ * [Status.Problem] or a [Status.Note], its `Surface` is clickable and intercepts every touch
+ * under it. If the `Box` also holds fixed controls — library picker chips, browse links,
+ * filter bars — those controls become untappable for as long as the strip is visible. On the
+ * Library tab the strip therefore lives inside the grid `Box`, below the chips and controls
+ * in the `Column`; on the Home tab it overlays the scrolling `LazyColumn`, which has no
+ * fixed controls at its top.
+ *
+ * What it
  * replaces was a spinner in the top bar's actions, which is a right-aligned row: a spinner
  * appearing at the end of it pushed the queue, downloads and settings buttons sideways and
  * then let them slide back, so the app twitched every time a sync started and finished —
