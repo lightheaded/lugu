@@ -89,7 +89,20 @@ fun HomeScreen(
     onBrowse: (kind: String) -> Unit,
     onOpenCollections: () -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
-    bottomContent: @Composable () -> Unit,
+    /**
+     * The bottom of the screen, drawn by the shell around the tab bar this screen hands in.
+     *
+     * Home has a tab bar and every other route does not, which is the only reason the
+     * mini player used to be composed twice — once by the shell for the other routes and
+     * once here through a slot. So the tab bar travels out through this slot instead, and
+     * the shell puts the mini player above it with one call. Home now knows neither that
+     * the mini player exists nor which of the two sits lower.
+     *
+     * What Home does keep is the floor: the tab bar is the last thing in the slot, so it
+     * stays the lowest thing on the screen and takes the gesture inset itself, the way
+     * `NavigationBar` does by default.
+     */
+    bottomBar: @Composable (tabBar: @Composable () -> Unit) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
@@ -143,13 +156,11 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            Column {
-                // Whatever is playing outlives the tab it was started from, so the mini
-                // player is part of the shell rather than of either tab. It sits above the
-                // tab bar, where every other media app puts it — the tabs are the floor of
-                // the screen, and a control that moves between them reads as belonging to
-                // neither.
-                bottomContent()
+            // The tabs are the floor of the screen, where every other media app puts them,
+            // and whatever the shell draws above them is the shell's business. Handing the
+            // tab bar out rather than composing the shell's bar in here is what keeps one
+            // mini player for the whole app: see the [bottomBar] parameter.
+            bottomBar {
                 NavigationBar {
                     HomeTab.entries.forEach { entry ->
                         NavigationBarItem(

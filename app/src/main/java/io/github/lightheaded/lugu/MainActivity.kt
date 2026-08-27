@@ -10,7 +10,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -274,17 +273,30 @@ private fun LuguApp(
         }
     }
 
-    // Whatever is playing outlives the screen it was started from, so the mini player
-    // belongs to the shell and not to any one destination. Home is the one exception: it
-    // draws its own copy right above its own tab bar (see HomeScreen's bottomBar), so the
-    // tab bar stays the floor of the screen the way every other media app places it. Every
-    // other route gets the shell's copy instead, because leaving Home must not mean losing
-    // sight of what is playing. The full player already shows playback state in full, and
-    // the sign-in flow has nothing to play, so both are left alone.
+    /*
+     * Whatever is playing outlives the screen it was started from, so the mini player
+     * belongs to the shell and not to any one destination. It is composed by
+     * `MiniPlayer`, which is now the one place in the app that draws the bar, decides
+     * what sits under it and decides which of the two takes the gesture inset.
+     *
+     * Home is the route that made that necessary. Home owns the bottom of its own screen:
+     * its tab bar is the floor, as every other media app places it. So Home hands its tab
+     * bar out through its `bottomBar` slot, this file passes it in as the mini player's
+     * floor, and the bar lands above it — with no second copy of the bar and no second
+     * rule about the inset. Every other route hands in no floor, so the bar is the lowest
+     * thing on the screen and takes the inset itself.
+     *
+     * The full player already shows playback state in full and the sign-in flow has
+     * nothing to play, so both are left alone.
+     */
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+
+    // True where the destination draws the bottom of its own screen. Only Home does.
+    val routeOwnsItsBottom = currentRoute == Routes.HOME
+
     val showShellMiniPlayer = currentRoute != null &&
-        currentRoute != Routes.HOME &&
+        !routeOwnsItsBottom &&
         currentRoute != Routes.PLAYER &&
         currentRoute != Routes.LOGIN
 
@@ -296,27 +308,37 @@ private fun LuguApp(
         snackbarHost = { SnackbarHost(shellSnackbarHostState) },
         bottomBar = {
             // MiniPlayer itself renders nothing when there is nothing to play, so no
-            // separate playable check is needed here — an empty composable measures to
-            // zero height, and the padding below falls back to the system bar inset alone.
+            // separate playable check is needed here — with no floor to draw either it
+            // emits no layout node at all, and the padding below then falls back to the
+            // system bar inset alone.
             if (showShellMiniPlayer) {
-                MiniPlayer(
-                    onOpen = { navController.navigate(Routes.PLAYER) },
-                    // MiniPlayer is the lowest thing on screen here, unlike on Home where
-                    // the tab bar sits under it and already claims the gesture-bar inset.
-                    modifier = Modifier.navigationBarsPadding(),
-                )
+                MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) })
             }
         },
     ) { shellPadding ->
         NavHost(
             navController = navController,
             startDestination = start,
-            // Reused by every destination without an edit of its own: each screen's own
-            // Scaffold still asks for the system bar inset it always did, but that inset
-            // is already spent here, so it is consumed rather than counted twice.
-            modifier = Modifier
-                .padding(shellPadding)
-                .consumeWindowInsets(shellPadding),
+            /*
+             * Reused by every destination without an edit of its own: each screen's own
+             * Scaffold still asks for the system bar inset it always did, but that inset
+             * is already spent here, so it is consumed rather than counted twice.
+             *
+             * Home is left to do all of it. A `Scaffold` with an empty bottom bar hands
+             * its content the system bar inset as bottom padding, which would lift Home's
+             * tab bar off the floor of the screen and leave a band of the shell's own
+             * colour under it — and the tab bar, not the shell, is what has to paint
+             * behind the gesture bar. Adding nothing here leaves Home exactly as it was
+             * before the shell existed: its top bar takes the status bar, its tab bar
+             * takes the gesture inset.
+             */
+            modifier = if (routeOwnsItsBottom) {
+                Modifier
+            } else {
+                Modifier
+                    .padding(shellPadding)
+                    .consumeWindowInsets(shellPadding)
+            },
         ) {
             composable(Routes.LOGIN) {
                 LoginScreen(
@@ -346,7 +368,14 @@ private fun LuguApp(
                         playerViewModel.play(itemId, episodeId)
                         navController.navigate(Routes.PLAYER)
                     },
-                    bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
+                    // The same call as the shell's own bottom bar above, with Home's tab
+                    // bar handed in as the floor under the mini player.
+                    bottomBar = { tabBar ->
+                        MiniPlayer(
+                            onOpen = { navController.navigate(Routes.PLAYER) },
+                            floor = tabBar,
+                        )
+                    },
                 )
             }
 
@@ -440,6 +469,10 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     // Consistent navigation: the title is a link to the item wherever it appears.
                     onOpenItem = { navController.navigate(Routes.item(it)) },
+                    // The same route Home's top bar opens, so the queue is one screen and
+                    // not two. The player is where a listener asks "what is after this",
+                    // and until now only Home could answer.
+                    onOpenQueue = { navController.navigate(Routes.QUEUE) },
                 )
             }
 
