@@ -1,19 +1,24 @@
 package io.github.lightheaded.lugu.feature.player
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -53,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -66,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import io.github.lightheaded.lugu.core.model.SleepTimerState
 import io.github.lightheaded.lugu.core.model.formatClock
 import io.github.lightheaded.lugu.core.model.formatLength
 import io.github.lightheaded.lugu.core.model.formatSpeedNumber
@@ -74,6 +81,8 @@ import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
+import io.github.lightheaded.lugu.playback.NowPlaying
+import io.github.lightheaded.lugu.playback.PlayerUiState
 import io.github.lightheaded.lugu.playback.PositionJump
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -255,6 +264,26 @@ fun PlayerScreen(
         )
     }
 
+    val addBookmark: () -> Unit = {
+        viewModel.addBookmark()
+        // The write lands in Room before the server hears about it, so the
+        // confirmation is honest even with no signal.
+        scope.launch {
+            snackbarHostState.showSnackbar(
+                "Bookmarked at ${formatClock(state.positionSec)}",
+                withDismissAction = true,
+            )
+        }
+    }
+
+    // Landscape gets its own arrangement so the transport is never clipped, but every
+    // sheet, snackbar and the status strip stay wired at this level and so work the same
+    // in both: only which composables draw the cover, the seek bar and the transport
+    // changes below, never how a chapter, the sleep timer, the speed sheet or a notice
+    // is reached.
+    val isLandscape =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     Scaffold(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -272,217 +301,52 @@ fun PlayerScreen(
         // A Box, so the two things the player has to say are drawn over the top of the
         // screen and take no layout space at all. See [StatusStrip] for the rule.
         Box(Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Spacer(Modifier.height(16.dp))
-                AsyncImage(
-                    model = nowPlaying?.coverUrl,
-                    contentDescription = nowPlaying?.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth(0.8f)
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        // The cover is the biggest thing on the screen and looks like the
-                        // book, so it goes where the book does. Clipped first, so the ripple
-                        // follows the corners rather than the square behind them.
-                        .clickable(enabled = nowPlaying != null) {
-                            nowPlaying?.libraryItemId?.let(onOpenItem)
-                        },
-                )
-
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    nowPlaying?.title ?: "Nothing playing",
-                    style = MaterialTheme.typography.headlineSmall,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    // The title is a link to the item wherever it is shown.
-                    modifier = Modifier.clickable(enabled = nowPlaying != null) {
-                        nowPlaying?.libraryItemId?.let(onOpenItem)
-                    },
-                )
-                nowPlaying?.author?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                state.chapter?.let { chapter ->
-                    /*
-                     * The readout is the way into the chapter list, because it is already
-                     * what someone is looking at when they wonder where they are. An item
-                     * with no chapters to choose between keeps the readout and loses the
-                     * tap: an affordance that opens an empty sheet is worse than none.
-                     */
-                    val hasChapterList = state.chapterCount > 1
-                    Spacer(Modifier.height(8.dp))
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(enabled = hasChapterList) { showChapterSheet = true }
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Text(
-                            chapter.title,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (hasChapterList) {
-                            Text(
-                                "Chapter ${state.chapterIndex + 1} of ${state.chapterCount} · " +
-                                    "${formatClock(state.chapterPositionSec)} / " +
-                                    formatClock(state.chapterDurationSec),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-                Slider(
-                    value = scrubbing ?: state.positionSec.toFloat(),
-                    onValueChange = { scrubbing = it },
-                    onValueChangeFinished = {
+            if (isLandscape) {
+                LandscapePlayerContent(
+                    padding = padding,
+                    nowPlaying = nowPlaying,
+                    state = state,
+                    settings = settings,
+                    sleep = sleep,
+                    canBookmark = canBookmark,
+                    scrubbing = scrubbing,
+                    onScrub = { scrubbing = it },
+                    onScrubFinished = {
                         scrubbing?.let { viewModel.seekTo(it.toDouble()) }
                         scrubbing = null
                     },
-                    valueRange = 0f..(state.durationSec.toFloat().coerceAtLeast(1f)),
-                    modifier = Modifier.semantics {
-                        contentDescription = "Playback position"
-                        // Without this a Slider announces a percentage, which on a forty-hour
-                        // book is the least useful number available: "43 percent" is four
-                        // hours wide. The two figures either side of the bar are what a
-                        // sighted listener reads, so they are what this says.
-                        stateDescription = "${formatLength(scrubbing?.toDouble() ?: state.positionSec)} " +
-                            "of ${formatLength(state.durationSec)}"
-                    },
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        formatClock(scrubbing?.toDouble() ?: state.positionSec),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Text(
-                        "-${formatClock(state.durationSec - (scrubbing?.toDouble() ?: state.positionSec))}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-
-                Spacer(Modifier.height(24.dp))
-                /*
-                 * Laid out by how often each control is actually used: seeking back to
-                 * re-hear a missed sentence dominates, finding a place is next, and chapter
-                 * skipping is occasional. So the seek pair flanks play/pause at full size
-                 * and the chapter pair sits outside it, smaller and dimmer.
-                 */
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (TransportButton.PREVIOUS_CHAPTER in settings.playerButtons) {
-                        IconButton(
-                            onClick = viewModel::previousChapter,
-                            enabled = state.chapterCount > 1,
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.SkipPrevious,
-                                contentDescription = "Previous chapter",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-
-                    FilledTonalIconButton(
-                        onClick = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
-                        modifier = Modifier.size(60.dp),
-                    ) {
-                        SeekIcon(
-                            seconds = settings.skipBackSec,
-                            icon = Icons.Default.Replay10,
-                            description = "Back ${settings.skipBackSec} seconds",
-                        )
-                    }
-
-                    FilledIconButton(
-                        onClick = viewModel::togglePlayPause,
-                        modifier = Modifier.size(76.dp),
-                    ) {
-                        Icon(
-                            if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (state.isPlaying) "Pause" else "Play",
-                            modifier = Modifier.size(38.dp),
-                        )
-                    }
-
-                    FilledTonalIconButton(
-                        onClick = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
-                        modifier = Modifier.size(60.dp),
-                    ) {
-                        SeekIcon(
-                            seconds = settings.skipForwardSec,
-                            icon = Icons.Default.Forward30,
-                            description = "Forward ${settings.skipForwardSec} seconds",
-                        )
-                    }
-
-                    if (TransportButton.NEXT_CHAPTER in settings.playerButtons) {
-                        IconButton(
-                            onClick = viewModel::nextChapter,
-                            enabled = state.chapterCount > 1,
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.SkipNext,
-                                contentDescription = "Next chapter",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-                PlayerActionRow(
-                    speed = state.speed,
-                    sleepArmed = sleep.isArmed,
-                    canBookmark = canBookmark,
+                    onOpenItem = onOpenItem,
+                    onOpenChapters = { showChapterSheet = true },
+                    viewModel = viewModel,
                     onSpeed = { showSpeedSheet = true },
                     onSleep = { showSleepSheet = true },
-                    onAddBookmark = {
-                        viewModel.addBookmark()
-                        // The write lands in Room before the server hears about it, so the
-                        // confirmation is honest even with no signal.
-                        scope.launch {
-                            snackbarHostState.showSnackbar(
-                                "Bookmarked at ${formatClock(state.positionSec)}",
-                                withDismissAction = true,
-                            )
-                        }
-                    },
+                    onAddBookmark = addBookmark,
                     onBookmarks = { showBookmarkSheet = true },
                     onHistory = { showHistorySheet = true },
                 )
-
-                Spacer(Modifier.height(8.dp))
-                // The playback error and the transcoding notice used to end this column, and
-                // both of them moved it: the column is centred, so a line added at the bottom
-                // lifted the cover art, the title and the whole transport. They are drawn by
-                // the strip over the top of the screen instead, which is what the rewind and
-                // jump notices above already do.
+            } else {
+                PortraitPlayerContent(
+                    padding = padding,
+                    nowPlaying = nowPlaying,
+                    state = state,
+                    settings = settings,
+                    sleep = sleep,
+                    canBookmark = canBookmark,
+                    scrubbing = scrubbing,
+                    onScrub = { scrubbing = it },
+                    onScrubFinished = {
+                        scrubbing?.let { viewModel.seekTo(it.toDouble()) }
+                        scrubbing = null
+                    },
+                    onOpenItem = onOpenItem,
+                    onOpenChapters = { showChapterSheet = true },
+                    viewModel = viewModel,
+                    onSpeed = { showSpeedSheet = true },
+                    onSleep = { showSleepSheet = true },
+                    onAddBookmark = addBookmark,
+                    onBookmarks = { showBookmarkSheet = true },
+                    onHistory = { showHistorySheet = true },
+                )
             }
 
             StatusStrip(
@@ -502,6 +366,448 @@ fun PlayerScreen(
                     .align(Alignment.TopCenter)
                     .padding(top = padding.calculateTopPadding()),
             )
+        }
+    }
+}
+
+/**
+ * The portrait layout, unchanged from before the landscape layout existed: cover, title,
+ * chapter readout, seek bar and transport in one centred column. Kept as one function, with
+ * the same modifiers and the same order, so the committed screenshot baselines still match.
+ */
+@Composable
+private fun PortraitPlayerContent(
+    padding: PaddingValues,
+    nowPlaying: NowPlaying?,
+    state: PlayerUiState,
+    settings: PlayerSettings,
+    sleep: SleepTimerState,
+    canBookmark: Boolean,
+    scrubbing: Float?,
+    onScrub: (Float) -> Unit,
+    onScrubFinished: () -> Unit,
+    onOpenItem: (String) -> Unit,
+    onOpenChapters: () -> Unit,
+    viewModel: PlayerViewModel,
+    onSpeed: () -> Unit,
+    onSleep: () -> Unit,
+    onAddBookmark: () -> Unit,
+    onBookmarks: () -> Unit,
+    onHistory: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(16.dp))
+        CoverArt(
+            coverUrl = nowPlaying?.coverUrl,
+            title = nowPlaying?.title,
+            enabled = nowPlaying != null,
+            onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+            modifier = Modifier.fillMaxWidth(0.8f).aspectRatio(1f),
+        )
+
+        Spacer(Modifier.height(24.dp))
+        TitleAndAuthor(
+            title = nowPlaying?.title ?: "Nothing playing",
+            author = nowPlaying?.author,
+            enabled = nowPlaying != null,
+            onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+        )
+
+        state.chapter?.let { chapter ->
+            /*
+             * The readout is the way into the chapter list, because it is already
+             * what someone is looking at when they wonder where they are. An item
+             * with no chapters to choose between keeps the readout and loses the
+             * tap: an affordance that opens an empty sheet is worse than none.
+             */
+            Spacer(Modifier.height(8.dp))
+            ChapterReadout(
+                title = chapter.title,
+                hasChapterList = state.chapterCount > 1,
+                chapterIndex = state.chapterIndex,
+                chapterCount = state.chapterCount,
+                chapterPositionSec = state.chapterPositionSec,
+                chapterDurationSec = state.chapterDurationSec,
+                onOpen = onOpenChapters,
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SeekBar(
+            scrubbing = scrubbing,
+            positionSec = state.positionSec,
+            durationSec = state.durationSec,
+            onScrub = onScrub,
+            onScrubFinished = onScrubFinished,
+        )
+
+        Spacer(Modifier.height(24.dp))
+        /*
+         * Laid out by how often each control is actually used: seeking back to
+         * re-hear a missed sentence dominates, finding a place is next, and chapter
+         * skipping is occasional. So the seek pair flanks play/pause at full size
+         * and the chapter pair sits outside it, smaller and dimmer.
+         */
+        TransportRow(
+            isPlaying = state.isPlaying,
+            chapterCount = state.chapterCount,
+            playerButtons = settings.playerButtons,
+            skipBackSec = settings.skipBackSec,
+            skipForwardSec = settings.skipForwardSec,
+            onPreviousChapter = viewModel::previousChapter,
+            onNextChapter = viewModel::nextChapter,
+            onSeekBack = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
+            onSeekForward = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+            onTogglePlayPause = viewModel::togglePlayPause,
+        )
+
+        Spacer(Modifier.height(16.dp))
+        PlayerActionRow(
+            speed = state.speed,
+            sleepArmed = sleep.isArmed,
+            canBookmark = canBookmark,
+            onSpeed = onSpeed,
+            onSleep = onSleep,
+            onAddBookmark = onAddBookmark,
+            onBookmarks = onBookmarks,
+            onHistory = onHistory,
+        )
+
+        Spacer(Modifier.height(8.dp))
+        // The playback error and the transcoding notice used to end this column, and
+        // both of them moved it: the column is centred, so a line added at the bottom
+        // lifted the cover art, the title and the whole transport. They are drawn by
+        // the strip over the top of the screen instead, which is what the rewind and
+        // jump notices above already do.
+    }
+}
+
+/**
+ * The landscape layout: cover and titles on one side, seek bar and transport on the
+ * other, so the transport is never clipped off the bottom of a phone turned sideways.
+ *
+ * Every sheet (chapters, sleep timer, speed, bookmarks, position history) and every
+ * notice (rewind, jump, continuation, the trim notice, the transcoding status) is wired
+ * at the [PlayerScreen] level and drawn as an overlay or a bottom sheet, so all of them
+ * stay reachable here exactly as they do in portrait — this function only rearranges the
+ * cover, the titles, the seek bar and the transport.
+ */
+@Composable
+private fun LandscapePlayerContent(
+    padding: PaddingValues,
+    nowPlaying: NowPlaying?,
+    state: PlayerUiState,
+    settings: PlayerSettings,
+    sleep: SleepTimerState,
+    canBookmark: Boolean,
+    scrubbing: Float?,
+    onScrub: (Float) -> Unit,
+    onScrubFinished: () -> Unit,
+    onOpenItem: (String) -> Unit,
+    onOpenChapters: () -> Unit,
+    viewModel: PlayerViewModel,
+    onSpeed: () -> Unit,
+    onSleep: () -> Unit,
+    onAddBookmark: () -> Unit,
+    onBookmarks: () -> Unit,
+    onHistory: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            CoverArt(
+                coverUrl = nowPlaying?.coverUrl,
+                title = nowPlaying?.title,
+                enabled = nowPlaying != null,
+                onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+                // Bounded by the row's height rather than by width, because width is the
+                // scarce dimension in landscape and height is what a phone on its side
+                // still has plenty of.
+                modifier = Modifier.fillMaxHeight(0.75f).aspectRatio(1f, matchHeightConstraintsFirst = true),
+            )
+            Spacer(Modifier.height(8.dp))
+            TitleAndAuthor(
+                title = nowPlaying?.title ?: "Nothing playing",
+                author = nowPlaying?.author,
+                enabled = nowPlaying != null,
+                onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+            )
+        }
+
+        Spacer(Modifier.width(16.dp))
+
+        Column(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            state.chapter?.let { chapter ->
+                ChapterReadout(
+                    title = chapter.title,
+                    hasChapterList = state.chapterCount > 1,
+                    chapterIndex = state.chapterIndex,
+                    chapterCount = state.chapterCount,
+                    chapterPositionSec = state.chapterPositionSec,
+                    chapterDurationSec = state.chapterDurationSec,
+                    onOpen = onOpenChapters,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            SeekBar(
+                scrubbing = scrubbing,
+                positionSec = state.positionSec,
+                durationSec = state.durationSec,
+                onScrub = onScrub,
+                onScrubFinished = onScrubFinished,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(8.dp))
+            TransportRow(
+                isPlaying = state.isPlaying,
+                chapterCount = state.chapterCount,
+                playerButtons = settings.playerButtons,
+                skipBackSec = settings.skipBackSec,
+                skipForwardSec = settings.skipForwardSec,
+                onPreviousChapter = viewModel::previousChapter,
+                onNextChapter = viewModel::nextChapter,
+                onSeekBack = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
+                onSeekForward = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+                onTogglePlayPause = viewModel::togglePlayPause,
+            )
+
+            Spacer(Modifier.height(4.dp))
+            PlayerActionRow(
+                speed = state.speed,
+                sleepArmed = sleep.isArmed,
+                canBookmark = canBookmark,
+                onSpeed = onSpeed,
+                onSleep = onSleep,
+                onAddBookmark = onAddBookmark,
+                onBookmarks = onBookmarks,
+                onHistory = onHistory,
+            )
+        }
+    }
+}
+
+/** The cover art. The biggest thing on the screen, and it looks like the book, so it goes
+ * where the book does. Clipped first, so the ripple follows the corners rather than the
+ * square behind them. [modifier] carries the size, which differs between portrait and
+ * landscape. */
+@Composable
+private fun CoverArt(
+    coverUrl: String?,
+    title: String?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AsyncImage(
+        model = coverUrl,
+        contentDescription = title,
+        contentScale = ContentScale.Crop,
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(enabled = enabled, onClick = onOpen),
+    )
+}
+
+/** The title is a link to the item wherever it is shown. */
+@Composable
+private fun TitleAndAuthor(
+    title: String,
+    author: String?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+) {
+    Text(
+        title,
+        style = MaterialTheme.typography.headlineSmall,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.clickable(enabled = enabled, onClick = onOpen),
+    )
+    author?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The current chapter, and the way into the chapter list. */
+@Composable
+private fun ChapterReadout(
+    title: String,
+    hasChapterList: Boolean,
+    chapterIndex: Int,
+    chapterCount: Int,
+    chapterPositionSec: Double,
+    chapterDurationSec: Double,
+    onOpen: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = hasChapterList, onClick = onOpen)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (hasChapterList) {
+            Text(
+                "Chapter ${chapterIndex + 1} of $chapterCount · " +
+                    "${formatClock(chapterPositionSec)} / " +
+                    formatClock(chapterDurationSec),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** The seek slider and the elapsed/remaining readout beside it. */
+@Composable
+private fun SeekBar(
+    scrubbing: Float?,
+    positionSec: Double,
+    durationSec: Double,
+    onScrub: (Float) -> Unit,
+    onScrubFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Slider(
+        value = scrubbing ?: positionSec.toFloat(),
+        onValueChange = onScrub,
+        onValueChangeFinished = onScrubFinished,
+        valueRange = 0f..(durationSec.toFloat().coerceAtLeast(1f)),
+        modifier = modifier.semantics {
+            contentDescription = "Playback position"
+            // Without this a Slider announces a percentage, which on a forty-hour
+            // book is the least useful number available: "43 percent" is four
+            // hours wide. The two figures either side of the bar are what a
+            // sighted listener reads, so they are what this says.
+            stateDescription = "${formatLength(scrubbing?.toDouble() ?: positionSec)} " +
+                "of ${formatLength(durationSec)}"
+        },
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            formatClock(scrubbing?.toDouble() ?: positionSec),
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            "-${formatClock(durationSec - (scrubbing?.toDouble() ?: positionSec))}",
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+/** Previous chapter, seek back, play/pause, seek forward, next chapter. */
+@Composable
+private fun TransportRow(
+    isPlaying: Boolean,
+    chapterCount: Int,
+    playerButtons: Set<TransportButton>,
+    skipBackSec: Int,
+    skipForwardSec: Int,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
+    onSeekBack: () -> Unit,
+    onSeekForward: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (TransportButton.PREVIOUS_CHAPTER in playerButtons) {
+            IconButton(
+                onClick = onPreviousChapter,
+                enabled = chapterCount > 1,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Default.SkipPrevious,
+                    contentDescription = "Previous chapter",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        FilledTonalIconButton(
+            onClick = onSeekBack,
+            modifier = Modifier.size(60.dp),
+        ) {
+            SeekIcon(
+                seconds = skipBackSec,
+                icon = Icons.Default.Replay10,
+                description = "Back $skipBackSec seconds",
+            )
+        }
+
+        FilledIconButton(
+            onClick = onTogglePlayPause,
+            modifier = Modifier.size(76.dp),
+        ) {
+            Icon(
+                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Pause" else "Play",
+                modifier = Modifier.size(38.dp),
+            )
+        }
+
+        FilledTonalIconButton(
+            onClick = onSeekForward,
+            modifier = Modifier.size(60.dp),
+        ) {
+            SeekIcon(
+                seconds = skipForwardSec,
+                icon = Icons.Default.Forward30,
+                description = "Forward $skipForwardSec seconds",
+            )
+        }
+
+        if (TransportButton.NEXT_CHAPTER in playerButtons) {
+            IconButton(
+                onClick = onNextChapter,
+                enabled = chapterCount > 1,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Default.SkipNext,
+                    contentDescription = "Next chapter",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
