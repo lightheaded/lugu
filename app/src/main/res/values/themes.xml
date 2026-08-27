@@ -1,4 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Lugu" parent="android:Theme.Material.NoActionBar" />
+    <!--
+      Light half of the DayNight pair; see values-night/themes.xml for the dark half. Split
+      across the two files rather than one theme, because the platform picks the right file
+      from the device's own day/night setting before a single frame is drawn — no library
+      and no runtime check needed for that part.
+    -->
+    <style name="Theme.Lugu" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!--
+      Shown between process start and the first composed frame. MainActivity holds it on
+      screen with setKeepOnScreenCondition until the signed-in check ends, so nothing
+      renders blank and nothing flashes the platform default before Theme.Lugu takes over.
+      The background and the glyph are the ones the launcher icon already uses.
+    -->
+    <style name="Theme.Lugu.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Lugu</item>
+    </style>
 </resources>

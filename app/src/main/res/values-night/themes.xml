@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Dark half of the DayNight pair. Same style name as values/themes.xml on purpose — the
+      platform resolves one or the other from the device's day/night setting, so a listener
+      in light mode never sees this dark window background flash past at cold start.
+    -->
+    <style name="Theme.Lugu" parent="android:Theme.Material.NoActionBar" />
+</resources>

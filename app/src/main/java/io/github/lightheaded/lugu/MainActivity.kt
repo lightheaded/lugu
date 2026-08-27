@@ -8,14 +8,22 @@ import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
@@ -65,9 +73,18 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingEpisode = MutableStateFlow<EpisodeTarget?>(null)
 
+    /**
+     * The same signed-in check [LuguApp] waits on to pick a start destination — resolved
+     * here too, so the splash screen below can hold on exactly as long as that check runs
+     * and not a frame longer.
+     */
+    private val startup: StartupViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        splashScreen.setKeepOnScreenCondition { startup.state.value == StartupState.Checking }
         handleSearchIntent(intent)
         handleEpisodeIntent(intent)
         setContent {
@@ -214,181 +231,220 @@ private fun LuguApp(
     // what they were doing is the moment right after it broke.
     CrashPrompt(onOpenFeedback = { navController.navigate(Routes.FEEDBACK) })
 
-    NavHost(navController = navController, startDestination = start) {
-        composable(Routes.LOGIN) {
-            LoginScreen(
-                onSignedIn = {
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
-                },
-                devServerUrl = BuildConfig.DEV_SERVER_URL,
-                devUsername = BuildConfig.DEV_USER,
-                devPassword = BuildConfig.DEV_PASS,
-            )
-        }
+    // Whatever is playing outlives the screen it was started from, so the mini player
+    // belongs to the shell and not to any one destination. Home is the one exception: it
+    // draws its own copy right above its own tab bar (see HomeScreen's bottomBar), so the
+    // tab bar stays the floor of the screen the way every other media app places it. Every
+    // other route gets the shell's copy instead, because leaving Home must not mean losing
+    // sight of what is playing. The full player already shows playback state in full, and
+    // the sign-in flow has nothing to play, so both are left alone.
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val showShellMiniPlayer = currentRoute != null &&
+        currentRoute != Routes.HOME &&
+        currentRoute != Routes.PLAYER &&
+        currentRoute != Routes.LOGIN
 
-        composable(Routes.HOME) {
-            val playerViewModel: PlayerViewModel = hiltViewModel()
-            HomeScreen(
-                onOpenItem = { navController.navigate(Routes.item(it)) },
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
-                onOpenQueue = { navController.navigate(Routes.QUEUE) },
-                onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
-                onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
-                // A shelf tap on something already in progress means "carry on", so it
-                // plays rather than opening a page and asking again.
-                onPlay = { itemId, episodeId ->
-                    playerViewModel.play(itemId, episodeId)
-                    navController.navigate(Routes.PLAYER)
-                },
-                bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
-            )
-        }
-
-        composable(Routes.DOWNLOADS) {
-            DownloadsScreen(
-                onBack = { navController.popBackStack() },
-                onOpenItem = { navController.navigate(Routes.item(it)) },
-            )
-        }
-
-        composable(Routes.QUEUE) {
-            val playerViewModel: PlayerViewModel = hiltViewModel()
-            QueueScreen(
-                onBack = { navController.popBackStack() },
-                // Tapping a queued item plays it now rather than opening its page: the
-                // queue is a list of things to play, so that is what a tap must mean.
-                onPlay = { itemId, episodeId ->
-                    playerViewModel.play(itemId, episodeId)
-                    navController.navigate(Routes.PLAYER)
-                },
-            )
-        }
-
-        composable(
-            route = Routes.ITEM,
-            arguments = listOf(navArgument("itemId") { type = NavType.StringType }),
+    Scaffold(
+        bottomBar = {
+            // MiniPlayer itself renders nothing when there is nothing to play, so no
+            // separate playable check is needed here — an empty composable measures to
+            // zero height, and the padding below falls back to the system bar inset alone.
+            if (showShellMiniPlayer) {
+                MiniPlayer(
+                    onOpen = { navController.navigate(Routes.PLAYER) },
+                    // MiniPlayer is the lowest thing on screen here, unlike on Home where
+                    // the tab bar sits under it and already claims the gesture-bar inset.
+                    modifier = Modifier.navigationBarsPadding(),
+                )
+            }
+        },
+    ) { shellPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = start,
+            // Reused by every destination without an edit of its own: each screen's own
+            // Scaffold still asks for the system bar inset it always did, but that inset
+            // is already spent here, so it is consumed rather than counted twice.
+            modifier = Modifier
+                .padding(shellPadding)
+                .consumeWindowInsets(shellPadding),
         ) {
-            val playerViewModel: PlayerViewModel = hiltViewModel()
-            ItemDetailScreen(
-                onBack = { navController.popBackStack() },
-                onPlay = { itemId, episodeId ->
-                    playerViewModel.play(itemId, episodeId)
-                    navController.navigate(Routes.PLAYER)
-                },
-                // A tap on an episode reads it; the row's own play button plays it.
-                onOpenEpisode = { itemId, episodeId ->
-                    navController.navigate(Routes.episode(itemId, episodeId))
-                },
-                // The author, series and narrator on an item page are links now that there
-                // is somewhere for them to lead.
-                onBrowseGroup = { kind, name ->
-                    navController.navigate(Routes.browseGroup(kind, name))
-                },
-            )
-        }
+            composable(Routes.LOGIN) {
+                LoginScreen(
+                    onSignedIn = {
+                        navController.navigate(Routes.HOME) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    },
+                    devServerUrl = BuildConfig.DEV_SERVER_URL,
+                    devUsername = BuildConfig.DEV_USER,
+                    devPassword = BuildConfig.DEV_PASS,
+                )
+            }
 
-        composable(
-            route = Routes.EPISODE,
-            arguments = listOf(
-                navArgument("itemId") { type = NavType.StringType },
-                navArgument("episodeId") { type = NavType.StringType },
-            ),
-        ) {
-            val playerViewModel: PlayerViewModel = hiltViewModel()
-            EpisodeScreen(
-                onBack = { navController.popBackStack() },
-                onPlay = { itemId, episodeId ->
-                    playerViewModel.play(itemId, episodeId)
-                    navController.navigate(Routes.PLAYER)
-                },
-            )
-        }
+            composable(Routes.HOME) {
+                val playerViewModel: PlayerViewModel = hiltViewModel()
+                HomeScreen(
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
+                    onOpenQueue = { navController.navigate(Routes.QUEUE) },
+                    onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
+                    onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
+                    // A shelf tap on something already in progress means "carry on", so it
+                    // plays rather than opening a page and asking again.
+                    onPlay = { itemId, episodeId ->
+                        playerViewModel.play(itemId, episodeId)
+                        navController.navigate(Routes.PLAYER)
+                    },
+                    bottomContent = { MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) }) },
+                )
+            }
 
-        composable(
-            route = Routes.BROWSE,
-            arguments = listOf(navArgument("kind") { type = NavType.StringType }),
-        ) {
-            BrowseScreen(
-                onBack = { navController.popBackStack() },
-                onOpenGroup = { kind, name ->
-                    navController.navigate(Routes.browseGroup(kind, name))
-                },
-            )
-        }
+            composable(Routes.DOWNLOADS) {
+                DownloadsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
 
-        composable(
-            route = Routes.BROWSE_GROUP,
-            arguments = listOf(
-                navArgument("kind") { type = NavType.StringType },
-                navArgument("name") { type = NavType.StringType },
-            ),
-        ) {
-            BrowseGroupScreen(
-                onBack = { navController.popBackStack() },
-                onOpenItem = { navController.navigate(Routes.item(it)) },
-            )
-        }
+            composable(Routes.QUEUE) {
+                val playerViewModel: PlayerViewModel = hiltViewModel()
+                QueueScreen(
+                    onBack = { navController.popBackStack() },
+                    // Tapping a queued item plays it now rather than opening its page: the
+                    // queue is a list of things to play, so that is what a tap must mean.
+                    onPlay = { itemId, episodeId ->
+                        playerViewModel.play(itemId, episodeId)
+                        navController.navigate(Routes.PLAYER)
+                    },
+                )
+            }
 
-        composable(Routes.PLAYER) {
-            PlayerScreen(
-                onBack = { navController.popBackStack() },
-                // Consistent navigation: the title is a link to the item wherever it appears.
-                onOpenItem = { navController.navigate(Routes.item(it)) },
-            )
-        }
+            composable(
+                route = Routes.ITEM,
+                arguments = listOf(navArgument("itemId") { type = NavType.StringType }),
+            ) {
+                val playerViewModel: PlayerViewModel = hiltViewModel()
+                ItemDetailScreen(
+                    onBack = { navController.popBackStack() },
+                    onPlay = { itemId, episodeId ->
+                        playerViewModel.play(itemId, episodeId)
+                        navController.navigate(Routes.PLAYER)
+                    },
+                    // A tap on an episode reads it; the row's own play button plays it.
+                    onOpenEpisode = { itemId, episodeId ->
+                        navController.navigate(Routes.episode(itemId, episodeId))
+                    },
+                    // The author, series and narrator on an item page are links now that there
+                    // is somewhere for them to lead.
+                    onBrowseGroup = { kind, name ->
+                        navController.navigate(Routes.browseGroup(kind, name))
+                    },
+                )
+            }
 
-        composable(Routes.SETTINGS) {
-            SettingsScreen(
-                onBack = { navController.popBackStack() },
-                onSignedOut = {
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                },
-                onOpenLicenses = { navController.navigate(Routes.LICENSES) },
-                onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
-                onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
-                onOpenConnection = { navController.navigate(Routes.CONNECTION) },
-            )
-        }
+            composable(
+                route = Routes.EPISODE,
+                arguments = listOf(
+                    navArgument("itemId") { type = NavType.StringType },
+                    navArgument("episodeId") { type = NavType.StringType },
+                ),
+            ) {
+                val playerViewModel: PlayerViewModel = hiltViewModel()
+                EpisodeScreen(
+                    onBack = { navController.popBackStack() },
+                    onPlay = { itemId, episodeId ->
+                        playerViewModel.play(itemId, episodeId)
+                        navController.navigate(Routes.PLAYER)
+                    },
+                )
+            }
 
-        composable(Routes.CONNECTION) {
-            ConnectionScreen(onBack = { navController.popBackStack() })
-        }
+            composable(
+                route = Routes.BROWSE,
+                arguments = listOf(navArgument("kind") { type = NavType.StringType }),
+            ) {
+                BrowseScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenGroup = { kind, name ->
+                        navController.navigate(Routes.browseGroup(kind, name))
+                    },
+                )
+            }
 
-        composable(Routes.COLLECTIONS) {
-            CollectionsScreen(
-                onBack = { navController.popBackStack() },
-                onOpenCollection = { navController.navigate(Routes.collection(it)) },
-            )
-        }
+            composable(
+                route = Routes.BROWSE_GROUP,
+                arguments = listOf(
+                    navArgument("kind") { type = NavType.StringType },
+                    navArgument("name") { type = NavType.StringType },
+                ),
+            ) {
+                BrowseGroupScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
 
-        composable(
-            route = Routes.COLLECTION,
-            arguments = listOf(navArgument("collectionId") { type = NavType.StringType }),
-        ) {
-            CollectionScreen(
-                onBack = { navController.popBackStack() },
-                onOpenItem = { navController.navigate(Routes.item(it)) },
-            )
-        }
+            composable(Routes.PLAYER) {
+                PlayerScreen(
+                    onBack = { navController.popBackStack() },
+                    // Consistent navigation: the title is a link to the item wherever it appears.
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
 
-        composable(Routes.PLAYBACK_RECORD) {
-            PlaybackRecordScreen(
-                onBack = { navController.popBackStack() },
-                onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
-            )
-        }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onSignedOut = {
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
+                    onOpenLicenses = { navController.navigate(Routes.LICENSES) },
+                    onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
+                    onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
+                    onOpenConnection = { navController.navigate(Routes.CONNECTION) },
+                )
+            }
 
-        composable(Routes.FEEDBACK) {
-            FeedbackScreen(onBack = { navController.popBackStack() })
-        }
+            composable(Routes.CONNECTION) {
+                ConnectionScreen(onBack = { navController.popBackStack() })
+            }
 
-        composable(Routes.LICENSES) {
-            LicensesScreen(onBack = { navController.popBackStack() })
+            composable(Routes.COLLECTIONS) {
+                CollectionsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenCollection = { navController.navigate(Routes.collection(it)) },
+                )
+            }
+
+            composable(
+                route = Routes.COLLECTION,
+                arguments = listOf(navArgument("collectionId") { type = NavType.StringType }),
+            ) {
+                CollectionScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
+
+            composable(Routes.PLAYBACK_RECORD) {
+                PlaybackRecordScreen(
+                    onBack = { navController.popBackStack() },
+                    onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
+                )
+            }
+
+            composable(Routes.FEEDBACK) {
+                FeedbackScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.LICENSES) {
+                LicensesScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 
