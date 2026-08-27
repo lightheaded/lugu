@@ -10,6 +10,8 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
+import io.github.lightheaded.lugu.core.sync.CredentialKind
+import io.github.lightheaded.lugu.core.sync.CredentialLossReport
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.HeadsetAction
@@ -50,6 +52,15 @@ data class SettingsUiState(
     /** What went wrong the last time a device was being chosen, if anything. */
     val autoPlayMessage: String? = null,
     /**
+     * Why the app asked for a password again, when encrypted storage is the reason.
+     *
+     * Null in every ordinary case. Set only after a store was rebuilt because it could not
+     * be decrypted — see `EncryptedTokenStore`. A login screen with no explanation reads as
+     * "the app forgot me", which is the wrong lesson to teach about a store that just
+     * protected itself.
+     */
+    val credentialLossMessage: String? = null,
+    /**
      * Whether a browser sent to this server would get there under its own steam.
      *
      * False when a custom header or a client certificate is what gets lugu in, because
@@ -58,6 +69,12 @@ data class SettingsUiState(
      * refusal and says nothing about lugu.
      */
     val webClientReachable: Boolean = true,
+)
+
+/** The one-off messages, gathered so the top-level `combine` keeps to five flows. */
+private data class Notices(
+    val autoPlayMessage: String?,
+    val credentialLossMessage: String?,
 )
 
 /**
@@ -86,6 +103,7 @@ class SettingsViewModel @Inject constructor(
     private val companionDevices: CompanionDevices,
     private val pairedDevices: PairedDevices,
     private val connectionPrefs: ConnectionPrefs,
+    private val credentialLosses: CredentialLossReport = CredentialLossReport(),
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -121,14 +139,19 @@ class SettingsViewModel @Inject constructor(
     private val webClientReachable: Flow<Boolean> = connectionPrefs.observeCertificate()
         .map { certificate -> certificate == null && connectionPrefs.configuredAddresses().isEmpty() }
         // The store is encrypted, so reading it opens the Android keystore — and that can
-        // fail: it is absent under Robolectric, and `EncryptedSharedPreferences` is known to
-        // throw on some devices after a restore or a key rotation. Unguarded, one throw here
-        // takes the whole settings screen down, which is a wildly disproportionate outcome for
-        // a sentence of warning text. `true` is the right fallback rather than a shrug: if
-        // this cannot be read, lugu is not presenting a header or a certificate either, so a
-        // browser is on equal terms with the app.
+        // fail: it is absent under Robolectric, and the deprecated library throws on some
+        // devices after a restore or a key rotation. `ConnectionPrefs` now answers "no
+        // headers" instead of throwing, so this guard is the second line rather than the
+        // first, and it stays: one throw here takes the whole settings screen down, which is
+        // a wildly disproportionate outcome for a sentence of warning text. `true` is the
+        // right fallback rather than a shrug: if this cannot be read, lugu is not presenting
+        // a header or a certificate either, so a browser is on equal terms with the app.
         .catch { emit(true) }
         .flowOn(Dispatchers.IO)
+
+    private val notices = combine(autoPlayMessage, credentialLosses.lost) { message, lost ->
+        Notices(autoPlayMessage = message, credentialLossMessage = lostMessage(lost))
+    }
 
     private val storedSettings = combine(
         prefs.settings,
@@ -145,8 +168,8 @@ class SettingsViewModel @Inject constructor(
         authRepository.observeAccount(),
         crashReportingPrefs.enabled,
         query,
-        autoPlayMessage,
-    ) { stored, account, crashReporting, text, message ->
+        notices,
+    ) { stored, account, crashReporting, text, noticed ->
         SettingsUiState(
             settings = stored.player,
             downloads = stored.downloads,
@@ -155,7 +178,8 @@ class SettingsViewModel @Inject constructor(
             queue = stored.queue,
             library = stored.library,
             query = text,
-            autoPlayMessage = message,
+            autoPlayMessage = noticed.autoPlayMessage,
+            credentialLossMessage = noticed.credentialLossMessage,
             webClientReachable = stored.webClientReachable,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
@@ -225,6 +249,33 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setAutoPlayWaitSec(seconds) }
 
     fun dismissAutoPlayMessage() = autoPlayMessage.update { null }
+
+    fun dismissCredentialLossMessage() = credentialLosses.acknowledge()
+
+    /**
+     * Says what was lost, and what to do about it, in the listener's terms.
+     *
+     * The cause is named because it is not the app's fault and not theirs: a device restore
+     * or a lock-screen change replaces the key that the store was built on. A certificate
+     * gets its own sentence, because nobody can recall one from memory.
+     */
+    private fun lostMessage(lost: Set<CredentialKind>): String? {
+        val tokens = CredentialKind.Tokens in lost
+        val connection = CredentialKind.ConnectionSettings in lost
+        return when {
+            tokens && connection ->
+                "This device replaced the key that protects stored credentials, which happens " +
+                    "after a restore. The sign-in and the connection settings are gone. Sign in " +
+                    "again, and add any custom headers or client certificate again."
+            tokens ->
+                "This device replaced the key that protects the stored sign-in, which happens " +
+                    "after a restore. Please sign in again."
+            connection ->
+                "This device replaced the key that protects the connection settings, which " +
+                    "happens after a restore. Add any custom headers or client certificate again."
+            else -> null
+        }
+    }
 
     /** Opens the system's device picker. The result comes back through [onDevicePicked]. */
     fun chooseAutoPlayDevice() {
