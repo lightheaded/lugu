@@ -1352,11 +1352,18 @@ class LuguPlaybackService : MediaLibraryService() {
             return
         }
 
-        val volume = SleepFade.volumeFor(remaining, currentSettings.sleep.fadeSeconds)
-        stateHolder.updateSleepTimer(remaining, isFading = volume < 1.0f)
-        player.volume = volume
+        // The decision is taken in [sleepTickFor] and carried out here. A player cannot be
+        // built in a unit test, and the arithmetic of the last tick is what goes wrong.
+        val tick = sleepTickFor(
+            remainingSec = remaining,
+            fadeSeconds = currentSettings.sleep.fadeSeconds,
+            tickMs = SLEEP_TICK_MS,
+            speed = speed,
+        )
+        stateHolder.updateSleepTimer(remaining, isFading = tick.isFading)
+        player.volume = tick.volume
 
-        if (SleepCountdown.isDue(remaining, SLEEP_TICK_MS, speed)) {
+        if (tick.stops) {
             // Declared before the pause, so the stop that follows is attributed to the
             // timer rather than recorded as one nobody asked for.
             stopAttributor.declare(StopAttributor.REASON_SLEEP_TIMER, System.currentTimeMillis())
@@ -1367,8 +1374,9 @@ class LuguPlaybackService : MediaLibraryService() {
             stateHolder.clearSleepTimer()
             player.pause()
             // Restore the volume so the next play is not silent — the commonest way a
-            // fade-out implementation leaves the app apparently broken.
-            player.volume = 1.0f
+            // fade-out implementation leaves the app apparently broken. The value comes
+            // from the tick rather than from a literal here, so a test can assert it.
+            player.volume = tick.volumeAfterStop
             // Whatever played through the fade was not really heard, so the next play
             // starts before it rather than where the ear gave up.
             pendingSleepRewindSec = currentSettings.sleep.rewindOnWakeSec.toDouble().takeIf { it > 0 }
