@@ -330,7 +330,7 @@ class DownloadRepository @Inject constructor(
     suspend fun remove(account: ActiveAccount, itemId: String, episodeId: String?) {
         val episodeKey = episodeKeyOf(episodeId)
         val row = downloadDao.get(account.serverId, account.userId, itemId, episodeKey) ?: return
-        removeRow(account, row)
+        removeRow(row)
     }
 
     /**
@@ -391,11 +391,45 @@ class DownloadRepository @Inject constructor(
     suspend fun finalizeDeferred(account: ActiveAccount, snapshot: DownloadEntity) {
         val current = downloadDao.get(account.serverId, account.userId, snapshot.libraryItemId, snapshot.episodeKey)
         if (current?.state != DownloadState.PENDING_DELETE) return
-        removeRow(account, current)
+        removeRow(current)
+    }
+
+    /**
+     * Finalises every pending-delete row still on the device, and returns how many.
+     *
+     * Meant for startup, not for the undo path -- [finalizeDeferred] is what a live undo
+     * window uses. A row still pending-delete when the app starts has already lost its undo
+     * by definition: the snackbar that offered it cannot have survived the process dying or
+     * the screen that held it being left, so nothing here can still be waiting on a tap.
+     *
+     * Left stranded, such a row would stay invisible in three places at once -- excluded
+     * from [observeAll] and [observeForItem] so no screen offers it back, excluded from the
+     * engine's `unfinished` so the download engine never revisits it, and subtracted from
+     * the storage readout so its bytes read as free when they are still on disk. This is the
+     * one pass that actually removes them.
+     *
+     * Takes no [ActiveAccount]: a stranded row can belong to any account on the device, and
+     * [removeRow] needs nothing from one that the row itself does not already carry.
+     */
+    suspend fun sweepPendingDeletes(): Int {
+        var swept = 0
+        for (row in downloadDao.pendingDelete()) {
+            // Re-read before the delete, and guard exactly as restoreDeferred and
+            // finalizeDeferred do. The query above is a snapshot, and a fresh download can
+            // claim the same key between that snapshot and this iteration -- a cold start
+            // is precisely when a listener reopens an item and taps download again. Without
+            // this check the sweep matches by key and removes a row that belongs to the new
+            // download, and cancels the Media3 requests it just issued.
+            val current = downloadDao.get(row.serverId, row.userId, row.libraryItemId, row.episodeKey)
+            if (current?.state != DownloadState.PENDING_DELETE) continue
+            removeRow(current)
+            swept += 1
+        }
+        return swept
     }
 
     /** The actual deletion: the engine's bytes for every track, then the row, then the cover. */
-    private suspend fun removeRow(account: ActiveAccount, row: DownloadEntity) {
+    private suspend fun removeRow(row: DownloadEntity) {
         val manifest = runCatching {
             AbsJson.decodeFromString(DownloadManifest.serializer(), row.tracksJson)
         }.getOrNull()
@@ -409,7 +443,7 @@ class DownloadRepository @Inject constructor(
                 )
             }
         }
-        downloadDao.delete(account.serverId, account.userId, row.libraryItemId, row.episodeKey)
+        downloadDao.delete(row.serverId, row.userId, row.libraryItemId, row.episodeKey)
         if (downloadDao.countForItem(row.libraryItemId) == 0) coverStore.remove(row.libraryItemId)
     }
 
