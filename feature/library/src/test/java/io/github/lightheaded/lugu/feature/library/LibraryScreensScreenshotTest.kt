@@ -14,14 +14,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
@@ -30,9 +26,7 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -64,6 +58,7 @@ import io.github.lightheaded.lugu.core.db.DownloadState
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
 import io.github.lightheaded.lugu.core.model.ItemSort
+import io.github.lightheaded.lugu.core.model.Library
 import io.github.lightheaded.lugu.core.model.LibraryItem
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaProgress
@@ -71,7 +66,6 @@ import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 import io.github.lightheaded.lugu.core.model.formatLengthCompact
-import io.github.lightheaded.lugu.core.sync.BrowseKind
 import io.github.lightheaded.lugu.core.sync.QueueItem
 import io.github.lightheaded.lugu.core.sync.ShelfEntry
 import io.github.lightheaded.lugu.core.sync.ShelfKind
@@ -92,14 +86,21 @@ import org.robolectric.annotation.GraphicsMode
  * dark mode is when most of this app is used.
  *
  * On what is being photographed. Every screen in lugu takes a Hilt view model of a final
- * class whose dependencies are final classes over Room, DataStore and Ktor, so none of
- * them can be rendered from fabricated state as it stands. What is rendered here instead
- * is each screen's own components — [ItemCard], [ShelfRowView], [ContinueCard],
- * [ListControlsBar], [SelectionBar], [DownloadButton], [RowActionsMenu],
- * [PodcastTrimSection], [EpisodeRowView], [EpisodeDetail] — arranged the way
- * the screen arranges them. That covers the parts where the design decisions live and where a
- * regression would actually show; it does not cover the assembly, and a change to the
- * order of blocks in a screen file will not fail these.
+ * class whose dependencies are final classes over Room, DataStore and Ktor, so no test can
+ * give one fabricated state.
+ *
+ * The Library tab is past that. `LibraryScreen` keeps the view model and hands everything
+ * it draws to [LibraryContent], which takes plain state and plain callbacks, so
+ * [LibraryTabPreview] and [LibrarySelectionPreview] photograph the real screen. A change
+ * to the order of the blocks in `LibraryScreen.kt` now fails those two.
+ *
+ * Every other picture here is still of a screen's own components — [ItemCard],
+ * [ShelfRowView], [ContinueCard], [ListControlsBar], [DownloadButton], [RowActionsMenu],
+ * [PodcastTrimSection], [EpisodeRowView], [EpisodeDetail] — arranged the
+ * way the screen arranges them. That covers the parts where the design decisions live and
+ * where a regression shows. It does not cover the assembly: a change to the order of the
+ * blocks in one of those screen files does not fail these. Give each remaining screen the
+ * same split to close the gap.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -534,80 +535,97 @@ private fun ContinueCardStatesPreview() {
     }
 }
 
+/**
+ * The Library tab, drawn by the screen's own composable.
+ *
+ * [LibraryContent] is the whole content of `LibraryScreen`, so this picture covers the
+ * order of the blocks as well as the blocks themselves: the library picker chips, the
+ * browse links with Collections at the end of them, the search and sort row, the filter
+ * chips and the grid. This test used to build that order by hand, and so could not fail
+ * when the screen changed it — two blocks swapped in `LibraryScreen.kt` left the baseline
+ * untouched.
+ *
+ * Two libraries in the state, because the picker draws only with more than one, and the
+ * picker is the fixed control the status strip must never cover. See the Compose overlay
+ * rule in `CLAUDE.md`.
+ */
 @Composable
 private fun LibraryTabPreview() {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BrowseKind.entries.forEach { kind ->
-                TextButton(onClick = {}) {
-                    Text(kind.label, style = MaterialTheme.typography.labelLarge)
-                }
-            }
-        }
-        ListControlsBar(
-            query = "",
-            onQueryChange = {},
-            searchPlaceholder = "Search title, author, narrator, series",
-            sortOptions = ItemSort.entries.filter { it != ItemSort.SIZE }.map { SortOption(it.id, it.label) },
-            selectedSortId = ItemSort.TITLE.id,
-            onSortSelected = {},
-            filters = ListFilter.entries,
-            selectedFilter = ListFilter.ALL,
-            onFilterSelected = {},
-        )
-        ItemGridPreview(selected = emptySet())
-    }
+    LibraryContent(
+        state = LIBRARY_STATE,
+        coverUrlFor = { null },
+        controls = INERT_CONTROLS,
+        selection = INERT_SELECTION,
+        onOpenItem = {},
+        onBrowse = {},
+        onOpenCollections = {},
+    )
 }
 
 /**
- * The grid with a selection running.
+ * The same screen with a selection running.
  *
  * The scrim and the tick are the whole point of this one. The first attempt marked a
  * chosen card with a two-pixel outline, which disappears against a busy jacket at arm's
  * length — and on a grid that means acting on the wrong eight books.
+ *
+ * The selection bar comes from the state rather than from a hand-built bar, so the picture
+ * also proves what the screen replaces while a selection runs: the browse links and the
+ * search row go, and the picker chips stay.
  */
 @Composable
 private fun LibrarySelectionPreview() {
-    Column {
-        SelectionBar(
-            selectedCount = 3,
-            onClear = {},
-            onSelectAll = {},
-            actions = listOf(
-                SelectionAction("Download", Icons.Default.Download, {}),
-                SelectionAction("Add to queue", Icons.AutoMirrored.Filled.PlaylistAdd, {}),
-                SelectionAction("Mark as finished", Icons.Default.TaskAlt, {}),
-                SelectionAction("Mark as not finished", Icons.Default.RemoveDone, {}),
-            ),
-        )
-        ItemGridPreview(selected = setOf("li_1", "li_3", "li_4"))
-    }
+    LibraryContent(
+        state = LIBRARY_STATE.copy(
+            selectionActive = true,
+            selectedIds = setOf("li_1", "li_3", "li_4"),
+        ),
+        coverUrlFor = { null },
+        controls = INERT_CONTROLS,
+        selection = INERT_SELECTION,
+        onOpenItem = {},
+        onBrowse = {},
+        onOpenCollections = {},
+    )
 }
 
-@Composable
-private fun ItemGridPreview(selected: Set<String>) {
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 140.dp),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        items(GRID_BOOKS, key = { it.item.id }) { row ->
-            ItemCard(
-                row = row,
-                coverUrl = null,
-                onClick = {},
-                isSelected = row.item.id in selected,
-                onLongClick = {},
-            )
-        }
-    }
-}
+/**
+ * The Library tab's state, with nothing in flight.
+ *
+ * No error, no note and no sync, so the status strip says nothing and draws nothing. The
+ * strip has pictures of its own in `core:ui`, and a strip in these would cover the grid
+ * they exist for. Six rows is well under the fast-scroll rail's threshold, so no rail
+ * either — which is what the hand-built version drew too.
+ */
+private val LIBRARY_STATE = LibraryUiState(
+    libraries = listOf(
+        Library("lib_books", "Books", MediaType.BOOK, 0),
+        Library("lib_pods", "Podcasts", MediaType.PODCAST, 1),
+    ),
+    selectedLibraryId = "lib_books",
+    items = GRID_BOOKS,
+    sort = ItemSort.TITLE,
+    filter = ListFilter.ALL,
+)
+
+/** Every control wired to nothing: a picture takes no input. */
+private val INERT_CONTROLS = LibraryControlActions(
+    onSelectLibrary = {},
+    onQueryChange = {},
+    onSortSelected = {},
+    onFilterSelected = {},
+    onPullToRefresh = {},
+    onDismissStatus = {},
+)
+
+private val INERT_SELECTION = LibrarySelectionActions(
+    onToggle = {},
+    onClear = {},
+    onSelectAll = {},
+    onDownload = {},
+    onAddToQueue = {},
+    onSetFinished = {},
+)
 
 /**
  * A book's page: resume, download and the queue menu on one row, then the group links.

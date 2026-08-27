@@ -80,8 +80,10 @@ import kotlinx.coroutines.launch
  * player do not blink out of existence when the tab changes. That is also why the
  * selection bar is inside this screen rather than replacing the shell's top bar: the bar
  * up there belongs to both tabs, and a selection on this one has no business changing it.
+ *
+ * This function holds the view model and the two behaviours that need it. Everything that
+ * is drawn lives in [LibraryContent], which takes plain state and plain callbacks.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     onOpenItem: (String) -> Unit,
@@ -94,11 +96,107 @@ fun LibraryScreen(
     gridState: LazyGridState = rememberLazyGridState(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
 
     // Getting out of selection mode is the commonest thing to want, and back is where
     // people reach for it first — before they find the cross on the bar.
     BackHandler(enabled = state.selectionActive) { viewModel.clearSelection() }
+
+    // A batch action changes nothing on screen, so it says what it did and then stops
+    // saying it. A note that stays until the next one reads as a state the screen is in.
+    LaunchedEffect(state.message) {
+        if (state.message != null) {
+            delay(NOTE_MS)
+            viewModel.dismissMessage()
+        }
+    }
+
+    LibraryContent(
+        state = state,
+        coverUrlFor = { viewModel.coverUrl(it) },
+        controls = LibraryControlActions(
+            onSelectLibrary = viewModel::selectLibrary,
+            onQueryChange = viewModel::onQueryChange,
+            onSortSelected = viewModel::setSort,
+            onFilterSelected = viewModel::setFilter,
+            onPullToRefresh = viewModel::pullToRefresh,
+            onDismissStatus = viewModel::dismissStatus,
+        ),
+        selection = LibrarySelectionActions(
+            onToggle = viewModel::toggleSelection,
+            onClear = viewModel::clearSelection,
+            onSelectAll = viewModel::selectAllVisible,
+            onDownload = viewModel::downloadSelected,
+            onAddToQueue = viewModel::addSelectedToQueue,
+            onSetFinished = viewModel::setSelectedFinished,
+        ),
+        onOpenItem = onOpenItem,
+        onBrowse = onBrowse,
+        onOpenCollections = onOpenCollections,
+        modifier = modifier,
+        gridState = gridState,
+    )
+}
+
+/**
+ * What the controls above the grid can ask for.
+ *
+ * One class rather than six loose parameters, and grouped the way the screen groups the
+ * controls themselves: this is the row that is on screen while no selection runs.
+ */
+internal data class LibraryControlActions(
+    val onSelectLibrary: (String) -> Unit,
+    val onQueryChange: (String) -> Unit,
+    val onSortSelected: (ItemSort) -> Unit,
+    val onFilterSelected: (ListFilter) -> Unit,
+    val onPullToRefresh: () -> Unit,
+    val onDismissStatus: () -> Unit,
+)
+
+/**
+ * What a selection can ask for.
+ *
+ * The counterpart group: the bar that replaces the controls once rows are picked, plus the
+ * tap and the long press on a card, which are how a selection grows and shrinks.
+ */
+internal data class LibrarySelectionActions(
+    val onToggle: (String) -> Unit,
+    val onClear: () -> Unit,
+    val onSelectAll: () -> Unit,
+    val onDownload: () -> Unit,
+    val onAddToQueue: () -> Unit,
+    val onSetFinished: (Boolean) -> Unit,
+)
+
+/**
+ * The Library tab as it is drawn, with no view model in it.
+ *
+ * Split out so that a screenshot test can photograph the real screen. Every view model in
+ * this app is a final class over final Room, DataStore and Ktor classes, so no test can
+ * give one fabricated state. That used to mean the Library baselines showed the screen's
+ * own components in the order the *test* put them in, which cannot catch a change to the
+ * order of the blocks in this file. This function is that order, and the test calls it.
+ *
+ * ## Where the status strip sits, and why
+ *
+ * Inside the [Box] that wraps the grid, and below the library picker chips in the [Column]
+ * — never over them. [StatusStrip] is clickable while it says anything, so it takes every
+ * touch under it, and the chips are a fixed control. See the Compose overlay rule in
+ * `CLAUDE.md`. `LibraryGridTest` taps a chip and fails if this order moves.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun LibraryContent(
+    state: LibraryUiState,
+    coverUrlFor: (String) -> String?,
+    controls: LibraryControlActions,
+    selection: LibrarySelectionActions,
+    onOpenItem: (String) -> Unit,
+    onBrowse: (kind: String) -> Unit,
+    onOpenCollections: () -> Unit,
+    modifier: Modifier = Modifier,
+    gridState: LazyGridState = rememberLazyGridState(),
+) {
+    val scope = rememberCoroutineScope()
 
     // The rail indexes whatever the grid is ordered by, so the letters come from the field
     // that did the ordering rather than always from the title.
@@ -115,15 +213,6 @@ fun LibraryScreen(
         derivedStateOf { letterKeys.getOrNull(gridState.firstVisibleItemIndex)?.let(::initialOf) }
     }
 
-    // A batch action changes nothing on screen, so it says what it did and then stops
-    // saying it. A note that stays until the next one reads as a state the screen is in.
-    LaunchedEffect(state.message) {
-        if (state.message != null) {
-            delay(NOTE_MS)
-            viewModel.dismissMessage()
-        }
-    }
-
     Column(modifier = modifier) {
         if (state.libraries.size > 1) {
             LazyRow(
@@ -133,7 +222,7 @@ fun LibraryScreen(
                 items(state.libraries, key = { it.id }) { library ->
                     FilterChip(
                         selected = library.id == state.selectedLibraryId,
-                        onClick = { viewModel.selectLibrary(library.id) },
+                        onClick = { controls.onSelectLibrary(library.id) },
                         label = { Text(library.name) },
                     )
                 }
@@ -141,14 +230,23 @@ fun LibraryScreen(
         }
 
         if (state.selectionActive) {
-            LibrarySelectionBar(state = state, viewModel = viewModel)
+            LibrarySelectionBar(selectedCount = state.selectedIds.size, actions = selection)
         } else {
             BrowseLinks(onBrowse = onBrowse, onOpenCollections = onOpenCollections)
 
             ListControlsBar(
                 query = state.query,
-                onQueryChange = viewModel::onQueryChange,
-                searchPlaceholder = "Search title, author, narrator, series",
+                onQueryChange = controls.onQueryChange,
+                // One word, because this box is the only child of its row that carries a
+                // weight: the sort chip takes its natural width first, so "Recently added"
+                // leaves the box narrower than "Title" does. The old label listed every
+                // field a query reaches and was cut after the first of them, which said
+                // the opposite of the truth — a box that looks like it matches titles and
+                // nothing else. The fields are now named where there is room to read them:
+                // to a screen reader through the search description, and to everybody in
+                // the no-matches line, which is the moment the question gets asked.
+                searchPlaceholder = "Search",
+                searchDescription = SEARCH_FIELDS,
                 // Size is offered on the downloads screen, where it means bytes on the
                 // phone. The server's own size field counts the ebook and anything flagged
                 // excluded, so ordering the library by it would rank books by something
@@ -157,10 +255,10 @@ fun LibraryScreen(
                     .filter { it != ItemSort.SIZE }
                     .map { SortOption(it.id, it.label) },
                 selectedSortId = state.sort.id,
-                onSortSelected = { viewModel.setSort(ItemSort.fromId(it)) },
+                onSortSelected = { controls.onSortSelected(ItemSort.fromId(it)) },
                 filters = ListFilter.entries,
                 selectedFilter = state.filter,
-                onFilterSelected = viewModel::setFilter,
+                onFilterSelected = controls.onFilterSelected,
             )
         }
 
@@ -175,7 +273,7 @@ fun LibraryScreen(
         // the server rather than being what makes content appear.
         PullToRefreshBox(
             isRefreshing = state.isPulling,
-            onRefresh = viewModel::pullToRefresh,
+            onRefresh = controls.onPullToRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -183,8 +281,8 @@ fun LibraryScreen(
                     LibraryEmptyState(
                         content = libraryEmptyContent(
                             state = state,
-                            onClearSearch = { viewModel.onQueryChange("") },
-                            onClearFilter = { viewModel.setFilter(ListFilter.ALL) },
+                            onClearSearch = { controls.onQueryChange("") },
+                            onClearFilter = { controls.onFilterSelected(ListFilter.ALL) },
                         ),
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -208,16 +306,16 @@ fun LibraryScreen(
                         items(state.items, key = { it.item.id }) { row ->
                             ItemCard(
                                 row = row,
-                                coverUrl = viewModel.coverUrl(row.item.id),
+                                coverUrl = coverUrlFor(row.item.id),
                                 onClick = {
                                     if (state.selectionActive) {
-                                        viewModel.toggleSelection(row.item.id)
+                                        selection.onToggle(row.item.id)
                                     } else {
                                         onOpenItem(row.item.id)
                                     }
                                 },
                                 isSelected = row.item.id in state.selectedIds,
-                                onLongClick = { viewModel.toggleSelection(row.item.id) },
+                                onLongClick = { selection.onToggle(row.item.id) },
                             )
                         }
                     }
@@ -237,7 +335,7 @@ fun LibraryScreen(
 
                 StatusStrip(
                     status = state.statusLine(),
-                    onDismiss = viewModel::dismissStatus,
+                    onDismiss = controls.onDismissStatus,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
             }
@@ -268,7 +366,11 @@ private fun libraryEmptyContent(
     onClearFilter: () -> Unit,
 ): LibraryEmptyContent = when {
     state.query.isNotBlank() -> LibraryEmptyContent(
-        line = "No matches for “${state.query}”.",
+        // The one place the breadth of the search fits and is worth reading. The box is
+        // too narrow to name the fields, and this line is the moment somebody wants to
+        // know which fields were tried before the grid came back empty.
+        line = "No matches for “${state.query}” in titles, authors, narrators, " +
+            "series or descriptions.",
         actionLabel = "Clear search",
         onAction = onClearSearch,
     )
@@ -354,31 +456,31 @@ private fun BrowseLinks(
  * batch is meant to go, and would guess wrong half the time.
  */
 @Composable
-private fun LibrarySelectionBar(state: LibraryUiState, viewModel: LibraryViewModel) {
-    val any = state.selectedIds.isNotEmpty()
+private fun LibrarySelectionBar(selectedCount: Int, actions: LibrarySelectionActions) {
+    val any = selectedCount > 0
 
     SelectionBar(
-        selectedCount = state.selectedIds.size,
-        onClear = viewModel::clearSelection,
-        onSelectAll = viewModel::selectAllVisible,
+        selectedCount = selectedCount,
+        onClear = actions.onClear,
+        onSelectAll = actions.onSelectAll,
         actions = listOf(
-            SelectionAction("Download", Icons.Default.Download, viewModel::downloadSelected, any),
+            SelectionAction("Download", Icons.Default.Download, actions.onDownload, any),
             SelectionAction(
                 "Add to queue",
                 Icons.AutoMirrored.Filled.PlaylistAdd,
-                viewModel::addSelectedToQueue,
+                actions.onAddToQueue,
                 any,
             ),
             SelectionAction(
                 "Mark as finished",
                 Icons.Default.TaskAlt,
-                { viewModel.setSelectedFinished(true) },
+                { actions.onSetFinished(true) },
                 any,
             ),
             SelectionAction(
                 "Mark as not finished",
                 Icons.Default.RemoveDone,
-                { viewModel.setSelectedFinished(false) },
+                { actions.onSetFinished(false) },
                 any,
             ),
         ),
@@ -397,6 +499,16 @@ private fun LibraryRow.fastScrollKey(sort: ItemSort): String =
 
 /** Long enough to read a short sentence, short enough not to become part of the screen. */
 private const val NOTE_MS = 4_000L
+
+/**
+ * Which fields a library query reaches, for a reader who cannot see the box.
+ *
+ * The search box itself says only "Search". This sentence has no width limit, so it can
+ * carry the whole list. It must agree with the no-matches line in [libraryEmptyContent]
+ * and with the row the search runs against, which `LibraryRepository.toFtsRow` builds from
+ * the title, the subtitle, the author, the narrator, the series and the description.
+ */
+private const val SEARCH_FIELDS = "Search by title, author, narrator, series or description"
 
 /**
  * One cover, with what it is under it.

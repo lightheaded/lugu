@@ -32,6 +32,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.ListFilter
 
@@ -76,6 +79,16 @@ fun ListControlsBar(
      * ambiguity nobody reports and everybody misreads.
      */
     labelFor: (ListFilter) -> String = { it.label },
+    /**
+     * The full breadth of the search, for a reader who cannot see the box.
+     *
+     * [searchPlaceholder] must stay short, because the box is the one control in the row
+     * that gives way. That leaves nothing on screen to say which fields a query reaches.
+     * A screen reader has no width limit, so it gets the whole list here. Where this is
+     * null, the label is the spoken name, which is correct for a box that searches the one
+     * obvious thing.
+     */
+    searchDescription: String? = null,
 ) {
     Column(modifier) {
         Row(
@@ -86,7 +99,12 @@ fun ListControlsBar(
             OutlinedTextField(
                 value = query,
                 onValueChange = onQueryChange,
-                label = { Text(searchPlaceholder, maxLines = 1) },
+                // Ellipsis, not the default hard clip. The label is the only text in this
+                // row that must give way, because it is the only child with a weight: the
+                // sort chip takes its natural width first, so a long ordering name makes
+                // the box narrower. A clipped label ends in half a letter and reads as a
+                // complete word, which is worse than a label that shows it was cut.
+                label = { Text(searchPlaceholder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
@@ -96,7 +114,13 @@ fun ListControlsBar(
                         }
                     }
                 },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(
+                        searchDescription?.let { spoken ->
+                            Modifier.semantics { contentDescription = spoken }
+                        } ?: Modifier,
+                    ),
             )
             SortMenu(
                 options = sortOptions,
@@ -113,7 +137,14 @@ fun ListControlsBar(
                 FilterChip(
                     selected = filter == selectedFilter,
                     onClick = { onFilterSelected(filter) },
-                    label = { Text(labelFor(filter), maxLines = 1, softWrap = false) },
+                    label = {
+                        Text(
+                            labelFor(filter),
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                 )
             }
         }
@@ -130,7 +161,14 @@ private fun SortMenu(options: List<SortOption>, selectedId: String, onSelected: 
         AssistChip(
             onClick = { expanded = true },
             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
-            label = { Text(current?.label.orEmpty(), maxLines = 1, softWrap = false) },
+            label = {
+                Text(
+                    current?.label.orEmpty(),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { option ->
