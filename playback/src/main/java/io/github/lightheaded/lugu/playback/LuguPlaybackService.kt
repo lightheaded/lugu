@@ -25,6 +25,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
@@ -315,6 +316,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
         player.addListener(PersistenceListener())
         player.addListener(DiagnosticsListener())
+        player.addListener(SpeedListener())
 
         loudnessBoost = LoudnessBoost(diary)
         shakeDetector = ShakeDetector(this) { extendSleepTimerOnShake() }
@@ -683,6 +685,9 @@ class LuguPlaybackService : MediaLibraryService() {
      *
      * A car cannot show a slider, and cycling is the one gesture that works with a
      * glance: press until it sounds right. The presets are the listener's own.
+     *
+     * The button's own label follows from [SpeedListener] rather than from here, so a rate
+     * changed on the phone moves the car's button too.
      */
     private fun cycleSpeed() {
         val presets = currentSettings.speed.presets.sorted().ifEmpty { return }
@@ -1766,6 +1771,23 @@ class LuguPlaybackService : MediaLibraryService() {
         stateHolder.setRewindNotice(notice)
     }
 
+    /**
+     * Keeps the car's speed button in step with the rate.
+     *
+     * Four things move the rate. They are the player screen's sheet, the presets, a
+     * remembered rate at the start of a book, and the car's own button. All four reach the
+     * player, and only the player reports every one of them. The push therefore happens
+     * here rather than in [cycleSpeed].
+     *
+     * A push while no car is connected costs nothing: [notificationLayout] leaves the car
+     * buttons out, and Media3 tells controllers only about a real change.
+     */
+    private inner class SpeedListener : Player.Listener {
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+            pushNotificationLayout()
+        }
+    }
+
     private inner class PersistenceListener : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             val now = System.currentTimeMillis()
@@ -2050,13 +2072,14 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     /**
-     * Chapter navigation and speed, as buttons a car can show.
+     * Chapter navigation, as buttons a car can show.
      *
-     * A car's own transport has no concept of a chapter and no speed control, and both
-     * are what an audiobook listener actually reaches for. They are session commands
-     * rather than player commands because neither maps onto anything Media3 defines.
+     * A car's own transport has no concept of a chapter, and a chapter is what an audiobook
+     * listener actually reaches for. They are session commands rather than player commands,
+     * because a chapter maps onto nothing that Media3 defines. Speed is the same case, and
+     * it lives in [CarSpeedButton] because its label moves.
      */
-    private val carCommands = listOf(
+    private val carChapterCommands = listOf(
         CommandButton.Builder(CommandButton.ICON_PREVIOUS)
             .setSessionCommand(
                 SessionCommand(NotificationLayout.COMMAND_CHAPTER_PREVIOUS, android.os.Bundle.EMPTY),
@@ -2071,12 +2094,27 @@ class LuguPlaybackService : MediaLibraryService() {
             .setDisplayName("Next chapter")
             .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
-        CommandButton.Builder(CommandButton.ICON_PLAYBACK_SPEED)
-            .setSessionCommand(SessionCommand(COMMAND_SPEED_CYCLE, android.os.Bundle.EMPTY))
-            .setDisplayName("Speed")
-            .setSlots(CommandButton.SLOT_OVERFLOW)
-            .build(),
     )
+
+    /**
+     * The rate the speed button names: the one in force.
+     *
+     * Read from the player rather than from the settings. A remembered rate, a change on the
+     * player screen and a change in the car all end up there. The fallback covers the moment
+     * before the player exists, when no rate is in force at all.
+     */
+    private fun currentSpeed(): Float =
+        if (this::player.isInitialized) player.playbackParameters.speed else 1.0f
+
+    /**
+     * Chapter navigation and speed, as buttons a car can show.
+     *
+     * A function rather than a field because the speed button prints the rate, so the list
+     * is different at 1.2x than at 2.0x. See [CarSpeedButton] for why the rate has to reach
+     * the car inside the icon.
+     */
+    private fun carCommands(): List<CommandButton> =
+        carChapterCommands + CarSpeedButton.buttonFor(currentSpeed())
 
     /**
      * The buttons offered to the notification, the lock screen and the platform session.
@@ -2090,7 +2128,7 @@ class LuguPlaybackService : MediaLibraryService() {
      */
     private fun notificationLayout(): List<CommandButton> {
         val chosen = NotificationLayout.buttonsFor(currentSettings)
-        return if (carControllers.isEmpty()) chosen else chosen + carCommands
+        return if (carControllers.isEmpty()) chosen else chosen + carCommands()
     }
 
     /**
@@ -2130,7 +2168,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 MediaSession.ConnectionResult.DEFAULT_UNTRUSTED_SESSION_AND_LIBRARY_COMMANDS
             }.buildUpon()
 
-            carCommands.forEach { button -> button.sessionCommand?.let { commands.add(it) } }
+            carCommands().forEach { button -> button.sessionCommand?.let { commands.add(it) } }
             NotificationLayout.allCommands().forEach { commands.add(it) }
             // Not a button anywhere. It is how the app tells the service it has come to the
             // foreground, which is the one thing the service cannot see for itself.
@@ -2149,7 +2187,7 @@ class LuguPlaybackService : MediaLibraryService() {
             if (session.isMediaNotificationController(controller)) {
                 result.setMediaButtonPreferences(notificationLayout())
             } else {
-                result.setCustomLayout(carCommands)
+                result.setCustomLayout(carCommands())
             }
             return result.build()
         }
@@ -2189,7 +2227,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
                 NotificationLayout.COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
                 NotificationLayout.COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
-                COMMAND_SPEED_CYCLE -> cycleSpeed()
+                CarSpeedButton.COMMAND_SPEED_CYCLE -> cycleSpeed()
                 PersistencePolicy.COMMAND_ARM_LAST_PLAYED -> armLastPlayed()
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
@@ -2515,12 +2553,6 @@ class LuguPlaybackService : MediaLibraryService() {
 
         /** Float comparison slack, so cycling never sticks on the preset it is already at. */
         const val SPEED_EPSILON = 0.001f
-
-        /**
-         * The chapter commands live in [NotificationLayout], which the notification and
-         * the car both draw their buttons from. Speed is the car's alone.
-         */
-        const val COMMAND_SPEED_CYCLE = "io.github.lightheaded.lugu.SPEED_CYCLE"
 
         /**
          * A press of a headset's side button that did something out of the ordinary.
