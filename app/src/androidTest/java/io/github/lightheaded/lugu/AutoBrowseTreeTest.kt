@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu
 import android.content.ComponentName
 import android.content.Context
 import androidx.media3.common.MediaItem
+import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaBrowser
 import androidx.media3.session.MediaLibraryService.LibraryParams
@@ -474,6 +475,9 @@ class AutoBrowseTreeTest {
      * A projection host draws these from the session: the commands have to be granted at
      * connection time and the buttons have to be in the layout it is handed. Both are
      * asserted, because either one missing is a car with no chapter buttons.
+     *
+     * The speed button is held to more than its presence. A car showed it as a plain icon
+     * with no number, so the label and the icon are both checked here.
      */
     @Test
     fun the_session_advertises_the_chapter_and_speed_commands() {
@@ -491,8 +495,25 @@ class AutoBrowseTreeTest {
                 .isTrue()
         }
 
-        assertThat(onMain { connected.customLayout }.map { it.displayName.toString() })
-            .containsAtLeast("Previous chapter", "Next chapter", "Speed")
+        val layout = onMain { connected.customLayout }
+        assertThat(layout.map { it.displayName.toString() })
+            .containsAtLeast("Previous chapter", "Next chapter")
+
+        // The speed button, which was reported from a car as an icon with no number on it.
+        // Android Auto draws a custom action as its icon alone and never as text, so the
+        // rate has to travel inside the icon — see `CarSpeedButton`.
+        val speed = layout.single { it.sessionCommand?.customAction == COMMAND_SPEED_CYCLE }
+        assertWithMessage("the speed button must name the rate, not the bare word Speed")
+            .that(speed.displayName.toString())
+            .matches("Speed \\d(\\.\\d+)?x")
+        // Every default preset has a Media3 icon that prints it, and nothing here leaves the
+        // presets, so the plain icon at this point is the reported bug.
+        assertWithMessage("the icon must print the rate")
+            .that(speed.icon)
+            .isNotEqualTo(CommandButton.ICON_PLAYBACK_SPEED)
+        // A projection host resolves an icon as a resource id in this package. A zero id
+        // draws nothing at all in the car, which is the failure being fixed.
+        assertThat(speed.iconResId).isNotEqualTo(0)
     }
 
     /**
@@ -873,9 +894,10 @@ class AutoBrowseTreeTest {
         const val PODCAST_TITLE = "The Breakwater"
 
         /**
-         * The speed button's action, copied rather than imported: it is a private constant
-         * of `LuguPlaybackService`, and it is a string a head unit reads off the session, so
-         * writing it out here is the assertion rather than a shortcut around one.
+         * The speed button's action, copied rather than imported from `CarSpeedButton`: it
+         * is a string a head unit reads off the session, so writing it out here is the
+         * assertion rather than a shortcut around one. A rename that forgets a car is the
+         * fault this catches.
          */
         const val COMMAND_SPEED_CYCLE = "io.github.lightheaded.lugu.SPEED_CYCLE"
 
