@@ -3,10 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      An application with no code in it. It exists so that the instrumented tests beside it
-      have a package of their own to run in — one that survives `am force-stop` on lugu.
-      There is no activity, no service and no receiver here on purpose: anything this app
-      did would be a second thing to explain when a test failed.
+      An application with almost no code in it. It exists so that the instrumented tests
+      beside it have a package of their own to run in — one that survives `am force-stop` on
+      lugu. There is no activity and no receiver here on purpose: anything this app did would
+      be a second thing to explain when a test failed.
     -->
 
     <!--
@@ -27,5 +27,23 @@
     -->
     <application
         android:label="lugu harness"
-        tools:ignore="MissingApplicationIcon" />
+        tools:ignore="MissingApplicationIcon">
+
+        <!--
+          The one component the harness has, and the platform is the reason it exists here.
+          Before it opens a tunnel, the platform resolves the class that asked for it and
+          refuses any class that is not declared with BIND_VPN_SERVICE. So this declaration
+          is part of the mechanism: without it, `establish()` throws instead of taking lugu
+          offline. The permission means only the system can bind it. See OfflineVpnService
+          for why the offline check cuts one package rather than turning airplane mode on.
+        -->
+        <service
+            android:name=".OfflineVpnService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
 </manifest>
