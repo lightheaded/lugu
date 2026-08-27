@@ -154,6 +154,15 @@ a garage with no signal. This is the case that matters.
       nothing
 - [ ] The speed button cycles through the presets and wraps at the end
 - [ ] A speed set in the car is still set on the phone afterwards
+- [ ] **The speed button prints the rate in force, and the number changes on a press.**
+      Press the button once while the car plays. The button must read the new rate at once,
+      for example `1.5x`, with no disconnect and no reconnect. If it keeps the old number
+      until the phone reconnects, the head unit caches the icon of a custom action, and a
+      pushed layout alone cannot fix it. This is the one question a car alone can answer.
+      Media3 ships a digit icon for 0.5x, 0.8x, 1.0x, 1.2x, 1.5x, 1.8x and 2.0x only, so a
+      rate off that set draws the plain speed icon on purpose
+- [ ] Change the rate on the phone's player screen while the car is connected. The car's
+      button must follow, with no press in the car
 
 ## The queue, from the car
 

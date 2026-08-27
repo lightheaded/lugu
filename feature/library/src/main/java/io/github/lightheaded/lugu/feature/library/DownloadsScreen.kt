@@ -279,8 +279,15 @@ fun DownloadsScreen(
  * message channel, which a tap on the row opens. `failureOf` holds the reasons for both.
  */
 @OptIn(ExperimentalFoundationApi::class)
+/**
+ * One row of the downloads list.
+ *
+ * `internal` rather than private so that [DownloadRowHeightTest] can measure it. The row
+ * promises that a failure changes no height, and only a measurement of the real row proves
+ * that promise.
+ */
 @Composable
-private fun DownloadRowView(
+internal fun DownloadRowView(
     download: DownloadStatus,
     selectionActive: Boolean,
     isSelected: Boolean,

@@ -87,7 +87,7 @@ the sign-in flow.
 
 **Approach.** Move the mini player into the app-level `Scaffold` around the `NavHost`,
 above the bottom navigation bar. Drive visibility from the current back-stack entry
-route. Keep the existing show and hide animation. Keep the existing rule that hides it
+route. Keep the existing rule that hides it
 when nothing is playable. Check how bottom padding reaches the screens today and reuse
 that mechanism, so no feature screen needs an edit.
 
