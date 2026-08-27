@@ -48,6 +48,35 @@ class CredentialLossReport @Inject constructor() {
     fun acknowledge() = _lost.update { emptySet() }
 }
 
+/**
+ * Says what was lost, and what to do about it, in the listener's terms.
+ *
+ * The cause is named because it is not the app's fault and not the listener's: a device
+ * restore or a lock-screen change replaces the key that the store was built on. A
+ * certificate gets its own sentence, because nobody can recall one from memory.
+ *
+ * The words live here rather than on a screen, because two screens ask for them. The
+ * sign-in screen says why it appeared, and the settings screen says why a connection
+ * detail is missing. One wording keeps them from drifting apart.
+ */
+fun credentialLossMessage(lost: Set<CredentialKind>): String? {
+    val tokens = CredentialKind.Tokens in lost
+    val connection = CredentialKind.ConnectionSettings in lost
+    return when {
+        tokens && connection ->
+            "This device replaced the key that protects stored credentials, which happens " +
+                "after a restore. The sign-in and the connection settings are gone. Sign in " +
+                "again, and add any custom headers or client certificate again."
+        tokens ->
+            "This device replaced the key that protects the stored sign-in, which happens " +
+                "after a restore. Please sign in again."
+        connection ->
+            "This device replaced the key that protects the connection settings, which " +
+                "happens after a restore. Add any custom headers or client certificate again."
+        else -> null
+    }
+}
+
 /** The next step after an attempt to open or read encrypted storage failed. */
 enum class CredentialRepair {
     /**

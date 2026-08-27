@@ -29,7 +29,14 @@ class StartupViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            _state.value = if (authRepository.isSignedIn()) StartupState.SignedIn else StartupState.SignedOut
+            // Guarded, and the guard is the second one on this path rather than the first.
+            // `SecurePrefs` already answers a broken store with nothing instead of a throw.
+            // This coroutine is still the last place a failure can reach: a throw here ends
+            // the app on the splash screen, on every launch, and no launch can clear it.
+            // The sign-in screen is the correct answer to every question this call cannot
+            // answer, so it is the answer to a failure as well.
+            val signedIn = runCatching { authRepository.isSignedIn() }.getOrDefault(false)
+            _state.value = if (signedIn) StartupState.SignedIn else StartupState.SignedOut
         }
     }
 }

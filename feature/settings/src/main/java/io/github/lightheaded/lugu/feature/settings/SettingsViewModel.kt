@@ -11,6 +11,7 @@ import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.CredentialKind
+import io.github.lightheaded.lugu.core.sync.credentialLossMessage
 import io.github.lightheaded.lugu.core.sync.CredentialLossReport
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
@@ -150,7 +151,7 @@ class SettingsViewModel @Inject constructor(
         .flowOn(Dispatchers.IO)
 
     private val notices = combine(autoPlayMessage, credentialLosses.lost) { message, lost ->
-        Notices(autoPlayMessage = message, credentialLossMessage = lostMessage(lost))
+        Notices(autoPlayMessage = message, credentialLossMessage = credentialLossMessage(lost))
     }
 
     private val storedSettings = combine(
@@ -251,31 +252,6 @@ class SettingsViewModel @Inject constructor(
     fun dismissAutoPlayMessage() = autoPlayMessage.update { null }
 
     fun dismissCredentialLossMessage() = credentialLosses.acknowledge()
-
-    /**
-     * Says what was lost, and what to do about it, in the listener's terms.
-     *
-     * The cause is named because it is not the app's fault and not theirs: a device restore
-     * or a lock-screen change replaces the key that the store was built on. A certificate
-     * gets its own sentence, because nobody can recall one from memory.
-     */
-    private fun lostMessage(lost: Set<CredentialKind>): String? {
-        val tokens = CredentialKind.Tokens in lost
-        val connection = CredentialKind.ConnectionSettings in lost
-        return when {
-            tokens && connection ->
-                "This device replaced the key that protects stored credentials, which happens " +
-                    "after a restore. The sign-in and the connection settings are gone. Sign in " +
-                    "again, and add any custom headers or client certificate again."
-            tokens ->
-                "This device replaced the key that protects the stored sign-in, which happens " +
-                    "after a restore. Please sign in again."
-            connection ->
-                "This device replaced the key that protects the connection settings, which " +
-                    "happens after a restore. Add any custom headers or client certificate again."
-            else -> null
-        }
-    }
 
     /** Opens the system's device picker. The result comes back through [onDevicePicked]. */
     fun chooseAutoPlayDevice() {

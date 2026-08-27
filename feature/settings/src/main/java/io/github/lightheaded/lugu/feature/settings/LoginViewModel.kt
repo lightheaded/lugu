@@ -12,6 +12,8 @@ import io.github.lightheaded.lugu.core.api.ConnectionHeaders
 import io.github.lightheaded.lugu.core.api.ServerUrl
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
+import io.github.lightheaded.lugu.core.sync.CredentialLossReport
+import io.github.lightheaded.lugu.core.sync.credentialLossMessage
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +44,16 @@ data class LoginUiState(
     val pendingCertificate: Uri? = null,
     val certificatePassword: String = "",
     val certificateProblem: String? = null,
+    /**
+     * Why this screen appeared, when the reason is not an ordinary sign-out.
+     *
+     * Read once, when the screen is built, and never changed while it is on view. A
+     * message that arrives later would move the fields under a thumb that already
+     * reaches for them, and the law of this project is that a message can appear and
+     * nothing else moves. The reason is already known before the screen draws: the
+     * storage read fails at startup, long before anybody sees a field.
+     */
+    val lossNotice: String? = null,
 ) {
     val canSubmit: Boolean
         get() = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank() && !isBusy
@@ -70,13 +82,20 @@ class LoginViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
     private val connectionPrefs: ConnectionPrefs,
+    private val credentialLosses: CredentialLossReport,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = _state.asStateFlow()
 
     init {
-        _state.update { it.copy(certificate = connectionPrefs.certificate()) }
+        _state.update {
+            it.copy(
+                certificate = connectionPrefs.certificate(),
+                // A snapshot, not a subscription. See [LoginUiState.lossNotice].
+                lossNotice = credentialLossMessage(credentialLosses.lost.value),
+            )
+        }
     }
 
     /**
@@ -143,6 +162,8 @@ class LoginViewModel @Inject constructor(
                     // going to do it: the only on-demand sync belongs to the Library tab,
                     // and this screen hands over to Home.
                     SyncScheduler.syncNow(context)
+                    // The reason for asking is history once the listener has answered it.
+                    credentialLosses.acknowledge()
                     // Drop the password from memory the moment it is no longer needed.
                     _state.update { LoginUiState(signedIn = true) }
                 }
