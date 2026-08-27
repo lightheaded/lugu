@@ -994,14 +994,17 @@ internal fun SeekIcon(seconds: Int, forward: Boolean, description: String) {
 
 /**
  * Draws a three-quarter arc open at the top with an arrowhead at its start, in the canvas's
- * own local coordinates. [forward] mirrors the whole glyph horizontally about its center, so
- * the back and forward buttons share one drawing and can never drift apart.
+ * own local coordinates. The drawing sweeps clockwise, which reads as forward, so the back
+ * button is the mirrored one. Both directions share this single drawing and can never drift
+ * apart.
  */
 private fun DrawScope.drawSkipGlyph(forward: Boolean, tint: Color) {
-    scale(scaleX = if (forward) -1f else 1f, scaleY = 1f, pivot = Offset(size.width / 2f, size.height / 2f)) {
-        val strokeWidth = size.minDimension * 0.11f
-        val radius = size.minDimension * 0.34f
-        val arcCenter = Offset(size.width / 2f, size.height / 2f + size.minDimension * 0.05f)
+    scale(scaleX = if (forward) 1f else -1f, scaleY = 1f, pivot = Offset(size.width / 2f, size.height / 2f)) {
+        val strokeWidth = size.minDimension * 0.09f
+        val radius = size.minDimension * 0.42f
+        // Concentric with the Box, so the seconds drawn on top land in the middle of the
+        // arc rather than above it.
+        val arcCenter = Offset(size.width / 2f, size.height / 2f)
         val startAngleDeg = 35f
         val sweepAngleDeg = 265f
 
@@ -1024,8 +1027,8 @@ private fun DrawScope.drawSkipGlyph(forward: Boolean, tint: Color) {
         )
         val tangent = Offset((-sin(startRad)).toFloat(), (cos(startRad)).toFloat())
         val perpendicular = Offset(-tangent.y, tangent.x)
-        val arrowLength = strokeWidth * 2.6f
-        val arrowHalfWidth = strokeWidth * 1.6f
+        val arrowLength = strokeWidth * 2.2f
+        val arrowHalfWidth = strokeWidth * 1.25f
         val tip = arcStart + tangent * (arrowLength * 0.55f)
         val baseCenter = arcStart - tangent * (arrowLength * 0.45f)
         val baseLeft = baseCenter + perpendicular * arrowHalfWidth
