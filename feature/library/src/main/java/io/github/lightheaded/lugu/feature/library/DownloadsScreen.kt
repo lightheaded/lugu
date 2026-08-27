@@ -38,6 +38,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -46,15 +49,36 @@ import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.download.formatBytes
 import io.github.lightheaded.lugu.core.model.ItemSort
 import io.github.lightheaded.lugu.core.model.ListFilter
+import io.github.lightheaded.lugu.core.ui.reservedSpace
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Long enough to read a refusal that quotes two byte figures, and no longer.
  *
  * Deliberately longer than the grid's batch note: that one confirms something that
- * happened, this one explains why nothing did.
+ * happened, this one explains why nothing did. It is now the floor rather than the whole
+ * rule, because this channel also carries a whole download failure, and the storage-cap
+ * message is four sentences long.
  */
-private const val REFUSAL_MS = 8_000L
+private const val SHORTEST_READ_MS = 8_000L
+
+/** Nobody reads for half a minute, and the note has a dismiss button of its own. */
+private const val LONGEST_READ_MS = 24_000L
+
+/** Slower than a reader of the language, because a reader of a second language reads it. */
+private const val PER_WORD_MS = 500L
+
+/**
+ * How long one message stays on screen.
+ *
+ * A fixed time fits one length of message. This channel now carries two: a refusal of two
+ * lines, and the whole reason a download failed, which the server writes and which can run
+ * to four sentences. A note cut off in the middle is the fault this replaces.
+ */
+internal fun readingTimeMs(message: String): Long {
+    val words = message.split(' ', '\n', '\t').count { it.isNotBlank() }
+    return (words * PER_WORD_MS).coerceIn(SHORTEST_READ_MS, LONGEST_READ_MS)
+}
 
 /**
  * What is on the phone, and how much room it is taking.
@@ -82,9 +106,13 @@ fun DownloadsScreen(
     // rows is off-screen, which is indistinguishable from the button doing nothing, which
     // is the complaint being fixed. `Indefinite` plus an explicit timeout because Material
     // offers four and ten seconds and this one quotes two byte figures.
+    //
+    // It carries a second thing now: the whole reason a download failed, which a tap on a
+    // failed row asks for. One channel for the long words of this screen, and it takes no
+    // layout space, so no row moves when it appears.
     LaunchedEffect(state.message) {
         state.message?.let { note ->
-            withTimeoutOrNull(REFUSAL_MS) {
+            withTimeoutOrNull(readingTimeMs(note)) {
                 snackbarHostState.showSnackbar(
                     message = note,
                     withDismissAction = true,
@@ -214,6 +242,7 @@ fun DownloadsScreen(
                     onToggle = { viewModel.toggleSelection(download.rowKey) },
                     onRemove = { viewModel.remove(download) },
                     onRetry = { viewModel.retry(download) },
+                    onExplain = { viewModel.explain(download) },
                 )
             }
         }
@@ -225,6 +254,29 @@ fun DownloadsScreen(
  *
  * Long-press opens selection, matching the episode list: the two lists are deleted from
  * in the same way and should not be learned twice.
+ *
+ * ## Why the row keeps one line of space it does not always fill
+ *
+ * The `StatusStrip` rule holds here — a message may appear, and nothing else may move —
+ * but neither of its two mechanisms fits a list row.
+ *
+ * An overlay under the top bar cannot say which of forty rows failed, and the row that
+ * failed can be off screen while the overlay is not. Reserved space beside an input is the
+ * other mechanism, and a row is not an input: it has no field to sit under, and forty rows
+ * would reserve forty empty lines.
+ *
+ * The third form keeps the principle of both. The row already draws one line about the
+ * download in every state, so that line becomes a slot of exactly one line, held in every
+ * state. A complete download reports its bytes there. A download in flight draws its bar
+ * there. A failure writes one line of words there. Nothing is added and nothing is
+ * removed, so no row below moves, and the row a finger reaches for stays where the eye
+ * found it.
+ *
+ * The line is one line of `labelSmall` and not a count of dp, so it grows with the font
+ * scale and stays equal across the three states at every scale.
+ *
+ * The words are cut to fit by `shortenFailure`, and the whole message goes to the screen's
+ * message channel, which a tap on the row opens. `failureOf` holds the reasons for both.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -236,7 +288,16 @@ private fun DownloadRowView(
     onToggle: () -> Unit,
     onRemove: () -> Unit,
     onRetry: () -> Unit,
+    onExplain: () -> Unit,
 ) {
+    val status = rowStatusOf(download)
+    val failure = status as? RowStatus.Failure
+    // A tap on a failed row asks for the words the line could not hold, and only if the
+    // line dropped any. If it dropped none, the tap keeps its usual job and opens the item.
+    // The cost is the item page, which this one row no longer opens. It is paid because the
+    // next step after a failure is the retry button beside the words, and because every
+    // other list in the app still opens the item.
+    val explains = !selectionActive && failure?.hasMore == true
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,8 +305,27 @@ private fun DownloadRowView(
                 if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
             )
             .combinedClickable(
-                onClick = { if (selectionActive) onToggle() else onOpen() },
+                onClick = {
+                    when {
+                        selectionActive -> onToggle()
+                        explains -> onExplain()
+                        else -> onOpen()
+                    }
+                },
+                onClickLabel = if (explains) "Read why the download failed" else null,
                 onLongClick = onToggle,
+            )
+            // A failure must name the item, because "Failed" alone names nothing in a list
+            // of forty. The row is one node to a screen reader — the title, the author and
+            // the line about the download read as one — so the row is the live region and
+            // the line inside it is not. It is polite, so a reader in the middle of a
+            // title finishes the title first.
+            .then(
+                if (failure != null) {
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                } else {
+                    Modifier
+                },
             )
             .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -270,23 +350,42 @@ private fun DownloadRowView(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            when {
-                download.isComplete -> Text(
-                    formatBytes(download.bytesDownloaded),
+            // One line about the download, and one line of space for it in every state.
+            // The reasons are in this function's doc comment.
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                // The space itself: one line of the style that fills it, drawn as nothing
+                // and hidden from a screen reader, so that kept space is never read out as
+                // an empty line.
+                Text(
+                    " ",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    minLines = 1,
+                    maxLines = 1,
+                    modifier = Modifier.reservedSpace(visible = false),
                 )
+                when (status) {
+                    is RowStatus.Size -> Text(
+                        formatBytes(status.bytes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
 
-                download.isFailed -> Text(
-                    download.error ?: "Download failed — tap the arrow to try again",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                    is RowStatus.Failure -> Text(
+                        status.line,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        // The words were already cut to a character count. This is the net
+                        // for a font scale that no character count can predict.
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
 
-                else -> {
-                    Spacer(Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = { download.percent.coerceIn(0f, 1f) },
+                    is RowStatus.Progress -> LinearProgressIndicator(
+                        progress = { status.fraction },
                         modifier = Modifier.fillMaxWidth().height(3.dp),
                     )
                 }
