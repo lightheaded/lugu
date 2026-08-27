@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -178,35 +179,47 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Adaptive(minSize = 140.dp),
-                    // The rail is given its own strip rather than floating over the covers:
-                    // an index you have to read through a book jacket is not an index.
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        top = 16.dp,
-                        end = if (showRail) 16.dp + FAST_SCROLL_RAIL_WIDTH else 16.dp,
-                        bottom = 16.dp,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(state.items, key = { it.item.id }) { row ->
-                        ItemCard(
-                            row = row,
-                            coverUrl = viewModel.coverUrl(row.item.id),
-                            onClick = {
-                                if (state.selectionActive) {
-                                    viewModel.toggleSelection(row.item.id)
-                                } else {
-                                    onOpenItem(row.item.id)
-                                }
-                            },
-                            isSelected = row.item.id in state.selectedIds,
-                            onLongClick = { viewModel.toggleSelection(row.item.id) },
-                        )
+                if (state.items.isEmpty()) {
+                    LibraryEmptyState(
+                        content = libraryEmptyContent(
+                            state = state,
+                            onClearSearch = { viewModel.onQueryChange("") },
+                            onClearFilter = { viewModel.setFilter(ListFilter.ALL) },
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Adaptive(minSize = 140.dp),
+                        // The rail is given its own strip rather than floating over the
+                        // covers: an index you have to read through a book jacket is not an
+                        // index.
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            top = 16.dp,
+                            end = if (showRail) 16.dp + FAST_SCROLL_RAIL_WIDTH else 16.dp,
+                            bottom = 16.dp,
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        items(state.items, key = { it.item.id }) { row ->
+                            ItemCard(
+                                row = row,
+                                coverUrl = viewModel.coverUrl(row.item.id),
+                                onClick = {
+                                    if (state.selectionActive) {
+                                        viewModel.toggleSelection(row.item.id)
+                                    } else {
+                                        onOpenItem(row.item.id)
+                                    }
+                                },
+                                isSelected = row.item.id in state.selectedIds,
+                                onLongClick = { viewModel.toggleSelection(row.item.id) },
+                            )
+                        }
                     }
                 }
 
@@ -227,6 +240,71 @@ fun LibraryScreen(
                     onDismiss = viewModel::dismissStatus,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
+            }
+        }
+    }
+}
+
+/** What the empty state says, and what pressing its one button does about it. */
+private data class LibraryEmptyContent(
+    val line: String,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null,
+)
+
+/**
+ * Why the grid has nothing in it, told apart.
+ *
+ * A first sync, a search that matched nothing and a filter that excludes everything used
+ * to draw the same blank space. Search and filter are checked first because they are what
+ * the reader just did — a query or a filter chip is the more specific answer to "why is
+ * this empty" than a sync that happens to be running at the same moment. Only once neither
+ * explains it does a sync in progress get the word, with a truly empty library last: the
+ * one cause that offers nothing to undo.
+ */
+private fun libraryEmptyContent(
+    state: LibraryUiState,
+    onClearSearch: () -> Unit,
+    onClearFilter: () -> Unit,
+): LibraryEmptyContent = when {
+    state.query.isNotBlank() -> LibraryEmptyContent(
+        line = "No matches for “${state.query}”.",
+        actionLabel = "Clear search",
+        onAction = onClearSearch,
+    )
+    state.filter != ListFilter.ALL -> LibraryEmptyContent(
+        line = "No items match “${state.filter.label}”.",
+        actionLabel = "Clear filter",
+        onAction = onClearFilter,
+    )
+    state.isSyncing -> LibraryEmptyContent(line = "Syncing your library…")
+    else -> LibraryEmptyContent(line = "Nothing in this library yet.")
+}
+
+/**
+ * The quiet text that stands in for the grid while it has nothing to show.
+ *
+ * Lives where the grid lives, inside the same [Box] the grid and the [StatusStrip] share,
+ * so it moves nothing above it and covers no fixed control — see the Compose overlay rule
+ * in `CLAUDE.md`.
+ */
+@Composable
+private fun LibraryEmptyState(content: LibraryEmptyContent, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.padding(32.dp), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                content.line,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            val label = content.actionLabel
+            val onAction = content.onAction
+            if (label != null && onAction != null) {
+                TextButton(onClick = onAction) { Text(label) }
             }
         }
     }
