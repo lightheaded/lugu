@@ -277,6 +277,25 @@ fun ItemDetailScreen(
                 }
             }
 
+            // A podcast's own primary action, the counterpart of the book's play row
+            // above: one tap, and the button says what it is about to play. Absent only
+            // when the podcast has no episode to offer at all. See podcastPlayTarget for
+            // the rule, including what happens once every episode is marked finished.
+            if (item.mediaType == MediaType.PODCAST) {
+                state.playTarget?.let { target ->
+                    item {
+                        Button(
+                            onClick = { onPlay(item.id, target.episodeId) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.size(8.dp))
+                            Text(target.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+
             item.description?.takeIf { it.isNotBlank() }?.let { description ->
                 item {
                     // A show's description is markup exactly as an episode's is, and it was
@@ -971,6 +990,45 @@ private fun BrowseGroupLink(
  */
 internal fun markFinishedTarget(rows: List<EpisodeRow>): Boolean =
     rows.isEmpty() || rows.any { !it.isFinished }
+
+/** The episode a podcast's hero button plays, and how the button names it. */
+data class PodcastPlayTarget(val episodeId: String, val label: String)
+
+/**
+ * Which episode a podcast's hero button plays, and what it says about it.
+ *
+ * Continues whatever is already in progress, so a return visit picks up where the last one
+ * stopped. More than one episode can carry a partial position at once, so ties are broken
+ * by whichever was touched most recently.
+ *
+ * With nothing in progress, it offers the newest unfinished episode — "newest" meaning what
+ * the episode list itself means by it, [PodcastEpisode.publishedAtMs] descending, the same
+ * field [EpisodeSort.NEWEST] sorts on, not when the episode was added to the phone.
+ *
+ * A podcast with every episode marked finished has no unfinished episode to offer. Rather
+ * than leave the button with nothing to do, it falls back to the newest episode and plays
+ * it again — said plainly in the label, so a listener is not surprised to hear the start of
+ * something they have already finished.
+ */
+internal fun podcastPlayTarget(episodes: List<EpisodeRow>): PodcastPlayTarget? {
+    val inProgress = episodes
+        .filter { it.progressFraction > 0f && !it.isFinished }
+        .maxWithOrNull(
+            compareBy<EpisodeRow> { it.progress?.lastUpdateMs ?: 0L }
+                .thenBy { it.episode.publishedAtMs },
+        )
+    if (inProgress != null) {
+        return PodcastPlayTarget(inProgress.episode.id, "Continue: ${inProgress.episode.title}")
+    }
+
+    val newestUnfinished = episodes.filter { !it.isFinished }.maxByOrNull { it.episode.publishedAtMs }
+    if (newestUnfinished != null) {
+        return PodcastPlayTarget(newestUnfinished.episode.id, "Play latest episode")
+    }
+
+    val newest = episodes.maxByOrNull { it.episode.publishedAtMs } ?: return null
+    return PodcastPlayTarget(newest.episode.id, "Play latest episode again")
+}
 
 /**
  * One control for the whole download lifecycle.

@@ -153,6 +153,15 @@ data class ItemDetailUiState(
      * the same numbers and behave differently the moment the default changes.
      */
     val trimIsOwn: Boolean = false,
+    /**
+     * What a podcast's hero button plays, and how it is labelled. Null for a book, which
+     * has its own play row, and for a podcast with no episodes to offer.
+     *
+     * Worked out from the whole feed, never from [episodes] — that list is what search and
+     * the filter chip leave on screen, and the button has to keep pointing at the same
+     * episode whether or not it is one of the rows currently visible.
+     */
+    val playTarget: PodcastPlayTarget? = null,
     val message: String? = null,
 )
 
@@ -344,6 +353,10 @@ class ItemDetailViewModel @Inject constructor(
             series = extra.series,
             trim = extra.trim,
             trimIsOwn = extra.trimIsOwn,
+            // From base.episodes — the whole feed, before the search box and the filter
+            // chip narrow it to `visible` — so the target does not change depending on
+            // what the listener happens to have typed or picked.
+            playTarget = podcastPlayTarget(base.episodes),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
 
