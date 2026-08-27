@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -99,6 +100,7 @@ import io.github.lightheaded.lugu.playback.PositionJump
 fun PlayerScreen(
     onBack: () -> Unit,
     onOpenItem: (String) -> Unit = {},
+    onOpenQueue: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
@@ -265,8 +267,10 @@ fun PlayerScreen(
     // Landscape gets its own arrangement so the transport is never clipped, but every
     // sheet, snackbar and the status strip stay wired at this level and so work the same
     // in both: only which composables draw the cover, the seek bar and the transport
-    // changes below, never how a chapter, the sleep timer, the speed sheet or a notice
-    // is reached.
+    // changes below, never how a chapter, the sleep timer, the speed sheet, the queue or
+    // a notice is reached. Both layouts compose `PlayerActionRow`, which is the one place
+    // that holds the queue button, so "Up next" is reachable in either orientation by
+    // construction rather than by a second button that has to be kept in step.
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -309,6 +313,7 @@ fun PlayerScreen(
                     onAddBookmark = addBookmark,
                     onBookmarks = { showBookmarkSheet = true },
                     onHistory = { showHistorySheet = true },
+                    onOpenQueue = onOpenQueue,
                 )
             } else {
                 PortraitPlayerContent(
@@ -332,6 +337,7 @@ fun PlayerScreen(
                     onAddBookmark = addBookmark,
                     onBookmarks = { showBookmarkSheet = true },
                     onHistory = { showHistorySheet = true },
+                    onOpenQueue = onOpenQueue,
                 )
             }
 
@@ -380,6 +386,7 @@ private fun PortraitPlayerContent(
     onAddBookmark: () -> Unit,
     onBookmarks: () -> Unit,
     onHistory: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -463,6 +470,7 @@ private fun PortraitPlayerContent(
             onAddBookmark = onAddBookmark,
             onBookmarks = onBookmarks,
             onHistory = onHistory,
+            onOpenQueue = onOpenQueue,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -506,6 +514,7 @@ private fun LandscapePlayerContent(
     onAddBookmark: () -> Unit,
     onBookmarks: () -> Unit,
     onHistory: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -591,6 +600,7 @@ private fun LandscapePlayerContent(
                 onAddBookmark = onAddBookmark,
                 onBookmarks = onBookmarks,
                 onHistory = onHistory,
+                onOpenQueue = onOpenQueue,
             )
         }
     }
@@ -813,27 +823,88 @@ private fun playerStatus(error: String?, transcoded: Boolean, noticeGone: Boolea
     else -> null
 }
 
-/** Compact bar shown above the library so playback is always one tap away. */
+/**
+ * The bottom of a screen: the compact bar that keeps playback one tap away, and whatever
+ * the screen puts under it.
+ *
+ * ## One bar, one call, every screen
+ *
+ * This is the only composable that draws the mini player, and it is the only one that
+ * decides where the bar sits and which side of it takes the gesture inset. It used to have
+ * two paths. The shell drew the bar in its own bottom bar for every route, and Home drew a
+ * second copy through a slot of its own, because Home has a tab bar and the tab bar must
+ * stay the floor of the screen. One component in two places is one component that drifts,
+ * so the difference is a parameter now instead of a second call site.
+ *
+ * [floor] is what sits under the bar. A screen with a bottom bar of its own hands it in —
+ * Home hands in its tab bar — and that floor keeps the bottom of the screen, so it takes
+ * the gesture inset the way it always did. A screen with no floor passes nothing, the bar
+ * itself is the lowest thing on the screen, and the bar takes the inset. Neither case is
+ * expressed at a call site, and no screen has to know the order the two are stacked in.
+ *
+ * The floor draws whether or not anything is playing, because Home's tab bar cannot
+ * disappear while nothing is loaded. With nothing playing and no floor there is nothing to
+ * draw at all, and this composable then emits no layout node — not a node of zero height.
+ * A `Scaffold` reads the bottom padding for its content from the bar it measured, and falls
+ * back to the system bar inset only where it measured no bar at all, so a zero-height bar
+ * would leave the content of every other screen under the gesture bar.
+ *
+ * ## Why the bar has no show and hide animation
+ *
+ * Decided 27 August 2026. `docs/UX-FIX-PLAN.md` item 1 said to keep the existing animation.
+ * There was none — in this composable, in [MiniPlayerBar] or in `HomeScreen` — and none was
+ * added, on purpose.
+ *
+ * The bar holds layout space. It is a bottom bar, so the content above it is measured
+ * against what is left. That makes an animated arrival the one thing the project's hardest
+ * law forbids: **a message may appear, and nothing else may move.** A bar that grows from
+ * nothing to its full height reflows every screen under it once per frame of the animation,
+ * where the plain appearance reflows it once. See [StatusStrip] for the whole rule and for
+ * the two mechanisms that keep it. The bar is neither of them: it is not a message, so an
+ * overlay would cover content it must not cover, and it is not attached to an input, so
+ * reserved space would mean a permanently empty band at the bottom of every screen to pay
+ * for a bar that is absent until somebody presses play.
+ *
+ * A fade in place — no height change, only opacity — is the one shape that would obey the
+ * law. It is not worth it: the bar appears because the listener pressed play, so it is the
+ * answer to something they just did and needs no easing to be understood, and a bar that
+ * fades in over content that has already moved reads as a slower version of the same jump.
+ */
 @Composable
 fun MiniPlayer(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    floor: @Composable (() -> Unit)? = null,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
-    val current = nowPlaying ?: return
 
-    MiniPlayerBar(
-        title = current.title,
-        subtitle = state.chapter?.title ?: current.author.orEmpty(),
-        coverUrl = current.coverUrl,
-        progress = if (state.durationSec > 0) (state.positionSec / state.durationSec).toFloat() else 0f,
-        isPlaying = state.isPlaying,
-        onOpen = onOpen,
-        onPlayPause = viewModel::togglePlayPause,
-        modifier = modifier,
-    )
+    // Nothing playing and no floor to draw: emit no node at all, so a Scaffold measures no
+    // bottom bar here and gives its content the system bar inset instead.
+    val current = nowPlaying
+    if (current == null && floor == null) return
+
+    Column(modifier) {
+        if (current != null) {
+            MiniPlayerBar(
+                title = current.title,
+                subtitle = state.chapter?.title ?: current.author.orEmpty(),
+                coverUrl = current.coverUrl,
+                progress = if (state.durationSec > 0) {
+                    (state.positionSec / state.durationSec).toFloat()
+                } else {
+                    0f
+                },
+                isPlaying = state.isPlaying,
+                onOpen = onOpen,
+                onPlayPause = viewModel::togglePlayPause,
+                // The inset belongs to whatever is lowest on the screen.
+                modifier = if (floor == null) Modifier.navigationBarsPadding() else Modifier,
+            )
+        }
+        floor?.invoke()
+    }
 }
 
 /**

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Bookmarks
@@ -27,6 +28,18 @@ import io.github.lightheaded.lugu.core.model.formatSpeedNumber
  * the play button, and they wrap: a phone at a large font size still has to reach all of
  * them. Speed keeps a chip because it is the only one whose current value is worth
  * reading at a glance.
+ *
+ * This row is not configurable, and the transport row above it is. That difference is
+ * deliberate: `PlayerSettings.playerButtons` decides which *transport* buttons appear,
+ * because a listener who never skips a chapter wants that pair off the busiest control on
+ * the screen. Every button here is always present instead, with one exception, and the
+ * exception is a capability and never a preference: Audiobookshelf has no bookmark for a
+ * podcast episode, so the bookmark pair is absent rather than present and refusing. A new
+ * button in this row follows the same rule — always on, unless the server cannot serve it.
+ *
+ * Up next is the newest of them, and it is here rather than in the transport row for the
+ * same reason: it opens a list, it is occasional, and both player layouts compose this row,
+ * so one button reaches the queue in portrait and in landscape.
  */
 @Composable
 internal fun PlayerActionRow(
@@ -38,6 +51,7 @@ internal fun PlayerActionRow(
     onAddBookmark: () -> Unit,
     onBookmarks: () -> Unit,
     onHistory: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     FlowRow(
@@ -88,6 +102,20 @@ internal fun PlayerActionRow(
             Icon(
                 Icons.Default.History,
                 contentDescription = "Where you were",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        /*
+         * Last in the row, because the other buttons act on the item that plays now and
+         * this one opens what plays after it. The icon and the words are the ones Home's
+         * top bar already uses for the same screen: two names for one destination make a
+         * listener check whether they are two screens.
+         */
+        IconButton(onClick = onOpenQueue) {
+            Icon(
+                Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = "Up next",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

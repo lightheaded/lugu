@@ -248,6 +248,7 @@ private fun PlayerPreview(playing: Boolean) {
                 onAddBookmark = {},
                 onBookmarks = {},
                 onHistory = {},
+                onOpenQueue = {},
             )
         }
     }
