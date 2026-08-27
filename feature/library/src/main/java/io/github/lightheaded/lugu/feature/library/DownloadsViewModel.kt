@@ -30,6 +30,110 @@ import kotlinx.coroutines.launch
 /** An item and an episode together name a download; the item alone does not. */
 internal val DownloadStatus.rowKey: String get() = "$libraryItemId#${episodeId.orEmpty()}"
 
+/**
+ * What one row says about its own download, decided here rather than in the drawing.
+ *
+ * The three states are exclusive and the row draws exactly one of them, in one line of
+ * space that the row keeps in every state. See `DownloadRowView` for the layout, and for
+ * why the two mechanisms of the `StatusStrip` rule do not fit a list row.
+ *
+ * Kept apart from the drawing because both decisions are testable this way: which state a
+ * row is in, and how much of a long failure a single line carries.
+ */
+internal sealed interface RowStatus {
+
+    /** The download is complete. The row reports what it costs on the phone. */
+    data class Size(val bytes: Long) : RowStatus
+
+    /** The download runs, or it waits its turn. The row reports how far it got. */
+    data class Progress(val fraction: Float) : RowStatus
+
+    /**
+     * The download failed.
+     *
+     * @param line what the row shows: one line, cut to fit beside the retry button.
+     * @param full the whole message, with all white space collapsed to single spaces.
+     * @param hasMore true if [line] holds less than [full]. The row is tappable only then,
+     *   because a tap that repeats a line already on screen reads as a broken tap.
+     */
+    data class Failure(val line: String, val full: String, val hasMore: Boolean) : RowStatus
+}
+
+/**
+ * The word for this state is "failed", because the rest of the app already uses it.
+ *
+ * `DownloadRefusalTest` in `:core:download` asserts that a refusal never says "failed", on
+ * the grounds that this screen owns the word for a download that broke part way through.
+ */
+private const val FAILED_WITH_NO_REASON = "Failed. Tap the arrow to try again."
+
+/**
+ * About as many characters of `labelSmall` as a phone row holds beside the retry button.
+ *
+ * The cut is made here, in text, and not left to `TextOverflow.Ellipsis` alone. A screen
+ * reader reads the whole string of a text, and not the part the eye can see, so a line that
+ * only looks short still reads out four sentences. The ellipsis stays as the safety net for
+ * a large font scale.
+ */
+private const val FAILURE_LINE_CHARS = 48
+
+/** A full stop, a question mark or an exclamation mark that ends a sentence. */
+private val SENTENCE_END = Regex("""[.!?](\s|$)""")
+
+private val WHITE_SPACE = Regex("""\s+""")
+
+/** Which of the three things a row draws, and with which words. */
+internal fun rowStatusOf(download: DownloadStatus): RowStatus = when {
+    // A complete download is complete even if the server reported an error on the way.
+    download.isComplete -> RowStatus.Size(download.bytesDownloaded)
+    download.isFailed -> failureOf(download.error)
+    else -> RowStatus.Progress(download.percent.coerceIn(0f, 1f))
+}
+
+/**
+ * How much of the server's words one row carries.
+ *
+ * The row takes the first sentence, because the first sentence names the failure and the
+ * later ones qualify it. The storage-cap message is the example to hold in mind: "Stopped:
+ * downloads have reached the 8 GB cap, with 7.6 GB used." is the part that identifies the
+ * problem, and three more sentences name the fix. The fix must not be lost, so the whole
+ * message goes to the screen's message channel, which a tap on the row opens.
+ *
+ * A message with no reason in it gets [FAILED_WITH_NO_REASON], which names the failure and
+ * the retry together. Media3 gives an exception message, and an exception message can be
+ * absent.
+ */
+internal fun failureOf(error: String?): RowStatus.Failure {
+    val full = error?.replace(WHITE_SPACE, " ")?.trim().orEmpty()
+    if (full.isEmpty()) {
+        return RowStatus.Failure(FAILED_WITH_NO_REASON, FAILED_WITH_NO_REASON, hasMore = false)
+    }
+    val line = shortenFailure(full)
+    return RowStatus.Failure(line = line, full = full, hasMore = line != full)
+}
+
+/**
+ * The first sentence, and no more of it than one line holds.
+ *
+ * The ellipsis at the end is the only mark that says more text exists, so it is added
+ * whenever anything was cut — a dropped second sentence counts as a cut. A cut lands on a
+ * word boundary if the line has one after its half-way point. A long address has no space
+ * in it, and a hard cut of one is better than three characters of it.
+ */
+internal fun shortenFailure(message: String): String {
+    val end = SENTENCE_END.find(message)
+    val sentence = if (end == null) message else message.take(end.range.first + 1)
+    if (sentence == message && sentence.length <= FAILURE_LINE_CHARS) return sentence
+    val head = sentence.take(FAILURE_LINE_CHARS)
+    val lastSpace = head.lastIndexOf(' ')
+    val cut = if (head.length < sentence.length && lastSpace > FAILURE_LINE_CHARS / 2) {
+        head.take(lastSpace)
+    } else {
+        head
+    }
+    return cut.trimEnd { !it.isLetterOrDigit() } + "…"
+}
+
 data class DownloadsUiState(
     val downloads: List<DownloadStatus> = emptyList(),
     /** After the search, the filter and the sort — what the list draws. */
@@ -199,6 +303,19 @@ class DownloadsViewModel @Inject constructor(
                     message.value = failure.message ?: "That download could not be started again"
                 }
         }
+    }
+
+    /**
+     * Puts the whole of a failure where a whole message fits.
+     *
+     * A row holds one line, so the rest of the words need a home. They go to the channel
+     * this screen already uses for the outcome of a tap, which is the same channel a
+     * refused retry uses. That keeps one place on this screen for long words, and it keeps
+     * the row the same height in every state.
+     */
+    fun explain(status: DownloadStatus) {
+        val failure = rowStatusOf(status) as? RowStatus.Failure ?: return
+        message.value = failure.full
     }
 
     fun dismissMessage() {
