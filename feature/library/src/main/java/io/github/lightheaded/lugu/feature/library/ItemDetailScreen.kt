@@ -51,8 +51,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -91,6 +93,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -124,6 +127,26 @@ fun ItemDetailScreen(
         val message = state.message ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(message)
         viewModel.dismissMessage()
+    }
+
+    val downloadUndo by viewModel.undo.collectAsStateWithLifecycle()
+    val noticeMillis by viewModel.noticeMillis.collectAsStateWithLifecycle()
+
+    // The delete or cancel has already happened; this is the way back, offered for as
+    // long as the notice setting says and no longer. Letting it time out keeps the
+    // change, which is what the tap asked for — the same shape as the player's own
+    // notices, because it is the same promise.
+    LaunchedEffect(downloadUndo, noticeMillis) {
+        val pending = downloadUndo ?: return@LaunchedEffect
+        val result = withTimeoutOrNull(noticeMillis) {
+            snackbarHostState.showSnackbar(
+                message = pending.text,
+                actionLabel = "Undo",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            )
+        }
+        if (result == SnackbarResult.ActionPerformed) viewModel.undoDownload() else viewModel.dismissDownloadUndo()
     }
 
     // Getting out of selection mode is the commonest thing to want, and back is where
@@ -984,7 +1007,10 @@ internal fun DownloadButton(
             IconButton(onClick = onRemove, modifier = modifier.size(size)) {
                 Icon(
                     Icons.Default.DownloadDone,
-                    contentDescription = "Downloaded — tap to remove",
+                    // Says what the tap does, the same way "Cancel download" already does
+                    // below — the glyph itself still just says "downloaded", since that is
+                    // what a screenshot baseline draws and this file cannot re-record one.
+                    contentDescription = "Delete download",
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }

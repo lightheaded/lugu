@@ -380,6 +380,18 @@ object DownloadState {
     const val COMPLETED = "completed"
     const val FAILED = "failed"
 
+    /**
+     * Marked for deletion, but the bytes are still on disk.
+     *
+     * A tap on a completed download's delete control lands here first rather than
+     * removing anything: it lets the delete undo exactly, because nothing was touched.
+     * `DownloadDao.unfinished` excludes this state on purpose -- the engine's own
+     * reconciler folds Media3's per-file state back onto a row, and every file behind a
+     * pending-delete row is still complete, so letting the reconciler see the row would
+     * fold it straight back to [COMPLETED] and silently undo the delete.
+     */
+    const val PENDING_DELETE = "pending_delete"
+
     /** Only a completed download can be played with no network. */
     fun isPlayableOffline(state: String) = state == COMPLETED
 }

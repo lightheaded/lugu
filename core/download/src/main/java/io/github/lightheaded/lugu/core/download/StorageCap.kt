@@ -78,4 +78,20 @@ internal object StorageCap {
         "Stopped: downloads have reached the ${formatBytes(capBytes)} cap, with " +
             "${formatBytes(bytesOnDisk)} used. What has already been fetched is kept. Raise " +
             "the cap in Settings, or remove a download, then start this again."
+
+    /**
+     * Bytes that count toward the cap, with a pending delete's bytes already taken out.
+     *
+     * A download marked pending-delete still has its bytes on disk, but deleting it is
+     * the outcome its tap already asked for — so those bytes must read as freed for
+     * every purpose the cap serves, both the readout and the check run before a new
+     * download starts, even before the undo window has closed and the files actually go.
+     *
+     * Clamped at zero rather than left to go negative: [pendingDeleteBytes] and
+     * [bytesOnDisk] are read a moment apart, from two different sources, and a delete
+     * landing between the two reads must not turn "nothing counts" into "less than
+     * nothing counts".
+     */
+    fun chargeableBytes(bytesOnDisk: Long, pendingDeleteBytes: Long): Long =
+        (bytesOnDisk - pendingDeleteBytes).coerceAtLeast(0)
 }

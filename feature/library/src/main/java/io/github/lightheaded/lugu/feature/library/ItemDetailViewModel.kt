@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.db.CollectionSummary
+import io.github.lightheaded.lugu.core.db.DownloadEntity
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -158,6 +160,23 @@ data class ItemDetailUiState(
 data class CollectionChoice(val id: String, val name: String, val contains: Boolean)
 
 /**
+ * A download delete or cancel that has happened and can still be taken back.
+ *
+ * Two shapes, because the two actions leave different things behind. Deleting a
+ * completed download only marks it pending-delete: nothing has left disk, so
+ * [Deferred] carries the exact stored row and undoing it is a plain restore. Cancelling
+ * a download still running frees its partial bytes at once — there is no safe
+ * pending state for a file the engine itself is still writing to — so [Cancelled]
+ * carries only what is needed to ask for the file again; undo re-enqueues it from
+ * nothing, which is what FEEDBACK.md calls out as the honest answer here, rather than
+ * pretending a resume is a restore.
+ */
+internal sealed class DownloadUndo(val text: String) {
+    class Deferred(val snapshot: DownloadEntity, text: String) : DownloadUndo(text)
+    class Cancelled(val episodeId: String?, text: String) : DownloadUndo(text)
+}
+
+/**
  * The page's facts that come from neither the mirror nor the list controls.
  *
  * Carried as one value so the state can be assembled from five flows rather than seven —
@@ -194,6 +213,20 @@ class ItemDetailViewModel @Inject constructor(
     private val query = MutableStateFlow("")
 
     private val selection = MutableStateFlow(Selection())
+
+    private val downloadUndo = MutableStateFlow<DownloadUndo?>(null)
+
+    /** The last download delete or cancel, while it can still be taken back. */
+    internal val undo: StateFlow<DownloadUndo?> = downloadUndo
+
+    /**
+     * How long a download undo stays offered, from the same setting the player's own
+     * notices use. One setting decides how long lugu leaves a way back, wherever the way
+     * back is.
+     */
+    internal val noticeMillis: StateFlow<Long> = playbackPrefs.settings
+        .map { it.noticeSeconds.coerceAtLeast(1) * 1_000L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10_000L)
 
     private val account: StateFlow<ActiveAccount?> =
         authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -360,10 +393,72 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Deletes a completed download, or cancels one still running — and either way,
+     * offers a tap back.
+     *
+     * A completed download is only marked pending-delete: nothing leaves disk, so the
+     * control reads as not downloaded at once, and an undo inside the notice window is
+     * an exact, instant restore, because nothing was touched. A download still running
+     * has no safe pending state to sit in — the engine's own reconciler folds a file
+     * that is still complete on disk straight back to `completed` the moment it looks
+     * again — so tapping it cancels for real at once, and its undo re-enqueues the
+     * download from nothing rather than pretending to resume it.
+     */
     fun removeDownload(episodeId: String? = null) {
+        val current = state.value
+        val row = if (episodeId == null) {
+            current.download
+        } else {
+            current.episodes.firstOrNull { it.episode.id == episodeId }?.download
+        }
+        val title = if (episodeId == null) {
+            current.item?.title
+        } else {
+            current.episodes.firstOrNull { it.episode.id == episodeId }?.episode?.title
+        }.orEmpty()
+
         viewModelScope.launch {
-            val current = authRepository.account() ?: return@launch
-            downloadRepository.remove(current, itemId, episodeId)
+            val account = authRepository.account() ?: return@launch
+            if (row?.isComplete == true) {
+                val snapshot = downloadRepository.deferDelete(account, itemId, episodeId)
+                if (snapshot != null) downloadUndo.value = DownloadUndo.Deferred(snapshot, "Deleted $title".trim())
+            } else {
+                downloadRepository.remove(account, itemId, episodeId)
+                downloadUndo.value = DownloadUndo.Cancelled(episodeId, "Cancelled $title".trim())
+            }
+        }
+    }
+
+    /** Puts back whatever the last delete or cancel took away. */
+    fun undoDownload() {
+        val pending = downloadUndo.value ?: return
+        downloadUndo.value = null
+        viewModelScope.launch {
+            val account = authRepository.account() ?: return@launch
+            when (pending) {
+                is DownloadUndo.Deferred -> downloadRepository.restoreDeferred(account, pending.snapshot)
+                is DownloadUndo.Cancelled ->
+                    downloadRepository.download(account, itemId, pending.episodeId)
+                        .onFailure { message.value = it.message ?: "Could not start the download" }
+            }
+        }
+    }
+
+    /**
+     * Lets a delete or cancel stand once the notice window closes with no undo.
+     *
+     * A cancelled download already left nothing behind, so there is nothing left to do
+     * for it. A deferred delete still has its files on disk, so this is where they
+     * finally go.
+     */
+    fun dismissDownloadUndo() {
+        val pending = downloadUndo.value ?: return
+        downloadUndo.value = null
+        if (pending !is DownloadUndo.Deferred) return
+        viewModelScope.launch {
+            val account = authRepository.account() ?: return@launch
+            downloadRepository.finalizeDeferred(account, pending.snapshot)
         }
     }
 
