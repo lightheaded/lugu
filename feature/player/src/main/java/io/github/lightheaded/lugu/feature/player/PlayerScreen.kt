@@ -104,7 +104,6 @@ fun PlayerScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
-    val jump by viewModel.pendingJump.collectAsStateWithLifecycle()
     val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
     val continuation by viewModel.continuation.collectAsStateWithLifecycle()
     val sleep by viewModel.sleepTimer.collectAsStateWithLifecycle()
@@ -127,7 +126,7 @@ fun PlayerScreen(
     var transcodingNoticeGone by remember(nowPlaying?.libraryItemId) { mutableStateOf(false) }
 
     /*
-     * Both notices are overlays and neither is inline content, so announcing a
+     * The rewind notice is an overlay and never inline content, so announcing a
      * correction never reflows the screen. An inline banner made the cover art and the
      * whole transport shift down as it appeared and back up as it went — which is a
      * worse interruption than the thing being announced. The playback error and the
@@ -139,6 +138,12 @@ fun PlayerScreen(
      * built-in durations are four and ten seconds and neither is configurable, and a
      * notice carrying an Undo has to stay up long enough to read a timestamp and decide.
      * Cancelling the coroutine is what dismisses the snackbar.
+     *
+     * The trim-skip and large-seek undo used to be shown here too, from
+     * `viewModel.pendingJump`. It is now shown once, by the shell's own snackbar host in
+     * `MainActivity.kt`, so it reaches the mini player and every other screen and not
+     * only this one. Showing it here as well would put two copies of the same notice on
+     * screen at once while the full player is open.
      */
     val noticeMillis = settings.noticeSeconds.coerceAtLeast(1) * 1000L
 
@@ -152,34 +157,6 @@ fun PlayerScreen(
                 )
             }
             viewModel.dismissRewindNotice()
-        }
-    }
-
-    /*
-     * A position adopted from another device is announced, never silent. An automatic
-     * correction the listener cannot see is indistinguishable from the app losing their
-     * place — which is the complaint lugu exists to answer. Letting it time out keeps
-     * the new position, which is the same as the old "Keep" button without the
-     * second button.
-     */
-    LaunchedEffect(jump, noticeMillis) {
-        jump?.let { pending ->
-            val result = withTimeoutOrNull(noticeMillis) {
-                snackbarHostState.showSnackbar(
-                    // Where the app knows why it moved the position, it says why, and the
-                    // numbers stay on as the supporting detail. "Jumped from 0:00 to
-                    // 0:15" is a true account of an intro being skipped that explains
-                    // none of it, and an unexplained correction is indistinguishable from
-                    // the app having lost the listener's place. A jump with no better
-                    // account than its own numbers keeps the original wording.
-                    message = "${pending.reason ?: "Jumped"} from " +
-                        "${formatClock(pending.fromSec)} to ${formatClock(pending.toSec)}",
-                    actionLabel = "Undo",
-                    withDismissAction = true,
-                    duration = SnackbarDuration.Indefinite,
-                )
-            }
-            if (result == SnackbarResult.ActionPerformed) viewModel.undoJump() else viewModel.dismissJump()
         }
     }
 
@@ -492,8 +469,10 @@ private fun PortraitPlayerContent(
         // The playback error and the transcoding notice used to end this column, and
         // both of them moved it: the column is centred, so a line added at the bottom
         // lifted the cover art, the title and the whole transport. They are drawn by
-        // the strip over the top of the screen instead, which is what the rewind and
-        // jump notices above already do.
+        // the strip over the top of the screen instead, which is what the rewind
+        // notice above already does. The trim-skip and large-seek undo used to be a
+        // third such notice here; it is now the shell's, in `MainActivity.kt`, so it
+        // reaches the mini player too.
     }
 }
 
@@ -502,10 +481,11 @@ private fun PortraitPlayerContent(
  * other, so the transport is never clipped off the bottom of a phone turned sideways.
  *
  * Every sheet (chapters, sleep timer, speed, bookmarks, position history) and every
- * notice (rewind, jump, continuation, the trim notice, the transcoding status) is wired
+ * notice this screen still owns (rewind, continuation, the transcoding status) is wired
  * at the [PlayerScreen] level and drawn as an overlay or a bottom sheet, so all of them
  * stay reachable here exactly as they do in portrait — this function only rearranges the
- * cover, the titles, the seek bar and the transport.
+ * cover, the titles, the seek bar and the transport. The trim-skip and large-seek undo
+ * is the shell's notice now (`MainActivity.kt`), so it is not one of these.
  */
 @Composable
 private fun LandscapePlayerContent(
