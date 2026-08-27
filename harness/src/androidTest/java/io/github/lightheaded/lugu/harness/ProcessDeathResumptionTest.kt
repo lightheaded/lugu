@@ -7,9 +7,6 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.By
-import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import io.github.lightheaded.lugu.harness.MediaSessionDump.PlaybackSnapshot
@@ -63,9 +60,6 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @LargeTest
 class ProcessDeathResumptionTest {
-
-    private val device: UiDevice
-        get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
 
     /** The speed the book was on before the harness changed it, so it can be put back. */
     private var speedToRestore: Float? = null
@@ -246,7 +240,7 @@ class ProcessDeathResumptionTest {
      */
     private fun startPlaying(): PlaybackSnapshot {
         Lugu.launch()
-        signInIfAsked()
+        LuguUi.signInIfAsked()
         awaitTheLibraryMirrored()
 
         Lugu.broadcast("PLAY_SEARCH") { putExtra("query", HarnessConfig.playQuery) }
@@ -351,12 +345,10 @@ class ProcessDeathResumptionTest {
      * was the only thing that started the first sync at all.
      */
     private fun awaitTheLibraryMirrored() {
-        device.wait(Until.findObject(By.text(LIBRARY_TAB)), UI_TIMEOUT_MS)?.click()
+        LuguUi.openLibraryTab()
 
         val title = HarnessConfig.playQuery
-        val arrived = Await.until(LIBRARY_TIMEOUT_MS) {
-            device.hasObject(By.text(title)) || device.hasObject(By.desc(title))
-        }
+        val arrived = Await.until(LIBRARY_TIMEOUT_MS) { LuguUi.shows(title) }
         assertWithMessage(
             "the title in lugu.test.playQuery was not on screen ${LIBRARY_TIMEOUT_MS}ms after " +
                 "signing in. Either it is not in this server's library, or the first sync " +
@@ -409,19 +401,6 @@ class ProcessDeathResumptionTest {
             .of(before.speed)
     }
 
-    /**
-     * Taps the sign-in button if lugu is asking, and does nothing if it is not.
-     *
-     * The fields are already filled in on a debug build, from the same local.properties the
-     * app module reads — which is the whole reason the harness needs no credentials of its
-     * own. It taps a button; it never learns what is in the fields.
-     */
-    private fun signInIfAsked() {
-        device.wait(Until.hasObject(By.pkg(Lugu.PACKAGE).depth(0)), LAUNCH_TIMEOUT_MS)
-        device.wait(Until.findObject(By.text("Sign in")), SIGN_IN_TIMEOUT_MS)?.click()
-        device.wait(Until.gone(By.text("Sign in")), SIGN_IN_TIMEOUT_MS)
-    }
-
     /** A speed that is not the one already in force, so that remembering it proves something. */
     private fun speedTarget(current: Float): Float =
         if (abs(current - PRIMARY_SPEED) < SPEED_EPSILON) ALTERNATE_SPEED else PRIMARY_SPEED
@@ -430,11 +409,8 @@ class ProcessDeathResumptionTest {
 
     private companion object {
         const val TAG = "LuguHarness"
-        const val LIBRARY_TAB = "Library"
 
-        const val UI_TIMEOUT_MS = 15_000L
         const val LAUNCH_TIMEOUT_MS = 30_000L
-        const val SIGN_IN_TIMEOUT_MS = 15_000L
         const val KILL_TIMEOUT_MS = 15_000L
         const val SESSION_TIMEOUT_MS = 20_000L
         const val SEEK_TIMEOUT_MS = 8_000L
