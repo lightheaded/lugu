@@ -33,12 +33,38 @@ artifact, because a red run nobody can see is a red run nobody fixes.
 
 ## Re-recording after an intentional change
 
+The images must be recorded on Linux — see below. Two ways to get a Linux host: let CI
+do it (recommended), or use a local container (fallback).
+
+### Recommended: record on CI
+
+`.github/workflows/record-baselines.yml` runs the record task on `ubuntu-latest`, the
+same host `build` verifies against, and uploads the results as a workflow artifact. It
+never runs on push or pull request — dispatch it by hand:
+
+```
+gh workflow run record-baselines.yml
+```
+
+Wait for the run to finish, then find it and download the artifact:
+
+```
+gh run list --workflow=record-baselines.yml --limit=1
+gh run download <run-id> --name roborazzi-baselines
+```
+
+`gh run download` writes the images into the matching `screenshots/` directories under
+the current folder. Move them over the committed copies if the paths differ, then look
+at `git diff` before committing. Every changed image is a change to what the app looks
+like — if one you did not expect has moved, that is the suite doing its job.
+
+### Fallback: record locally
+
 ```
 ./gradlew testDebugUnitTest -Proborazzi.record
 ```
 
-Then look at `git diff` before committing. Every changed image is a change to what the app
-looks like — if one you did not expect has moved, that is the suite doing its job.
+Then look at `git diff` before committing, as above.
 
 Record everything in one run rather than module by module, so the whole set stays taken
 with the same Compose and Robolectric versions.
