@@ -1,0 +1,67 @@
+name: Record screenshot baselines
+
+# Manual only. This job RECORDS baselines; it never verifies them, and it must never
+# run on push or pull_request — a run that records and uploads on every commit is
+# noise, and it would make a green screenshot check meaningless.
+#
+# Why this exists: Roborazzi renders Compose through Robolectric's native graphics
+# mode, which uses the host's own font and icon rasterizer. A baseline recorded on
+# Tom's Mac (arm64, and an emulated amd64 container is no better — the mismatch is
+# rasterization, not architecture) will not pixel-match the same screen rendered on
+# `ubuntu-latest`, which is the host CI's `build` job actually verifies against. That
+# host already exists in CI. This workflow runs the same recording task on it and
+# hands the resulting images back as a downloadable artifact, so a developer can
+# commit them from their own machine after a `git diff` review. See
+# docs/qa/screenshots.md for the full re-recording procedure.
+#
+# This is a separate workflow from ci.yml on purpose. ci.yml already has its own
+# workflow_dispatch trigger for the full verification pipeline; folding a recording
+# job in there risks a developer dispatching the wrong one, or a future edit adding
+# push/pull_request to the whole file and picking this job up with it. A dedicated
+# workflow can only ever be launched on purpose, by name.
+on:
+  workflow_dispatch:
+
+# Read-only: this job publishes an artifact, not a commit. It must not gain
+# `contents: write` — see AGENTS.md's "CI — keep it hardened".
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The wrapper jar is committed, so prove it is the one Gradle published.
+      - uses: gradle/actions/wrapper-validation@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v4
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # Same task the `build` job verifies with, plus the flag that makes Roborazzi
+      # overwrite the committed images instead of comparing against them.
+      # --continue matters here. Gradle stops scheduling test tasks once one fails, so
+      # without it a single failing unit test in an early module leaves every later
+      # module unrecorded — the exact way the whole baseline suite went stale before.
+      - name: Record Roborazzi baselines
+        run: ./gradlew testDebugUnitTest -Proborazzi.record --continue --stacktrace
+
+      # Handed back as an artifact rather than committed here, because this job holds
+      # no write permission on purpose (see AGENTS.md). A developer downloads it,
+      # reviews `git diff` on the images, and commits from their own machine.
+      # always(): a failing unrelated test must not throw away images that were already
+      # recorded. The developer reviews `git diff` anyway, so a partial set is useful.
+      - name: Upload recorded baselines
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roborazzi-baselines
+          path: '**/screenshots/*.png'
+          if-no-files-found: error

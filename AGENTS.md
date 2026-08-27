@@ -97,6 +97,12 @@ Two things to keep true:
 
 ## Screenshot baselines — record them on Linux, not on your Mac
 
+- The recommended way to get a matching Linux host is `.github/workflows/record-baselines.yml`,
+  a manual (`workflow_dispatch`-only) CI job that records on `ubuntu-latest` and uploads
+  the images as an artifact for a developer to download and commit. It never runs on
+  push or pull request, and it holds no write permission — see
+  docs/qa/screenshots.md#re-recording-after-an-intentional-change for the exact commands.
+  The rules below still apply in full to the local-container fallback.
 - Roborazzi renders Compose through Robolectric's **native** graphics mode, which
   means it uses the host's own font and icon rasterizer. A baseline PNG recorded on
   macOS (arm64) does not pixel-match the same render on the `ubuntu-latest` runner CI

@@ -15,9 +15,13 @@ were listed: nothing about them changed.
 **What blocks the visible ones.** Items 5, 7 and 12 change what a screen looks like, so
 they invalidate committed Roborazzi baselines. A baseline must be recorded on a Linux
 host that matches the CI runner, and the machine this work ran on is an arm64 Mac, where
-even an emulated amd64 container is the wrong host. So a visible change cannot be
-finished here: the code is easy and the baseline is not. Do those items where a matching
-Linux host is available, and record the baselines in the same pass.
+even an emulated amd64 container is the wrong host. `.github/workflows/record-baselines.yml`
+now covers this: a manual, `workflow_dispatch`-only job that records on `ubuntu-latest`
+and hands the images back as a downloadable artifact — see
+docs/qa/screenshots.md#re-recording-after-an-intentional-change for the exact commands.
+So the code for a visible change can be finished here; only the recording step needs
+that dispatched run. Do those items, and record the baselines through the workflow (or
+a matching local Linux host) in the same pass.
 
 Read [docs/FEEDBACK.md](FEEDBACK.md) before you start any item. It holds the design
 laws these fixes must obey, and it records ideas the project rejected with reasons.
