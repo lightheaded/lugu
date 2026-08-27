@@ -102,6 +102,45 @@ class DownloadDaoTest {
         assertThat(dao.pendingDeleteBytes()).isEqualTo(0L)
     }
 
+    /**
+     * The query the startup sweep reads: every pending-delete row, across every account,
+     * so a row stranded by a killed process or a cleared view model is still found.
+     */
+    @Test
+    fun `pendingDelete returns only pending-delete rows, across every account`() = runTest {
+        dao.upsert(download("a", DownloadState.PENDING_DELETE))
+        dao.upsert(download("b", DownloadState.COMPLETED))
+        dao.upsert(
+            DownloadEntity(
+                serverId = "other-server",
+                userId = "other-user",
+                libraryItemId = "c",
+                episodeKey = "",
+                title = "Title c",
+                author = null,
+                mediaType = "BOOK",
+                state = DownloadState.PENDING_DELETE,
+                tracksJson = """{"tracks":[]}""",
+                durationSec = 0.0,
+                bytesTotal = 0,
+                bytesDownloaded = 0,
+                percent = 1f,
+                requestedAtMs = 0,
+                completedAtMs = 0,
+                error = null,
+            ),
+        )
+
+        assertThat(dao.pendingDelete().map { it.libraryItemId }).containsExactly("a", "c")
+    }
+
+    @Test
+    fun `pendingDelete is empty with nothing pending`() = runTest {
+        dao.upsert(download("a", DownloadState.COMPLETED))
+
+        assertThat(dao.pendingDelete()).isEmpty()
+    }
+
     private fun download(
         itemId: String,
         state: String,

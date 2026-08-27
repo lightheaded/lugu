@@ -95,6 +95,11 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
 
         scope.launch {
             runCatching { downloadEngine.reconcile() }
+            // A pending-delete row still here at startup has already lost its undo: the
+            // snackbar that offered it cannot have survived the process dying, or the
+            // screen that held it being left. Finalising it now is what stops a stranded
+            // row holding its bytes and its space forever, unseen by every screen.
+            runCatching { downloadRepository.sweepPendingDeletes() }
             // Reclaiming space for finished books is opt-in and off by default, so this
             // does nothing at all unless someone asked for it.
             runCatching {

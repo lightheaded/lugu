@@ -931,6 +931,18 @@ interface DownloadDao {
     suspend fun pendingDeleteBytes(): Long
 
     /**
+     * Every pending-delete row, across every account on the device.
+     *
+     * Read at startup to finish what an interrupted undo window left behind. A row still
+     * pending-delete when the process comes back has, by definition, already lost its undo:
+     * the snackbar that offered it died with the process, or with the screen that held it.
+     * Unscoped for the same reason [pendingDeleteBytes] is -- a stranded row can belong to
+     * any account on the device, not only the one signed in now.
+     */
+    @Query("SELECT * FROM download WHERE state = 'pending_delete'")
+    suspend fun pendingDelete(): List<DownloadEntity>
+
+    /**
      * How many downloads exist for one item, across every account on the device.
      *
      * Deliberately not scoped: this answers whether the item's *cover file* is still needed,
