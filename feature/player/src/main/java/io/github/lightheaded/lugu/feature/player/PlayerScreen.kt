@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.feature.player
 
 import android.content.res.Configuration
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,13 +22,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -56,6 +56,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
@@ -69,6 +77,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import io.github.lightheaded.lugu.core.model.SleepTimerState
@@ -768,7 +778,7 @@ private fun TransportRow(
         ) {
             SeekIcon(
                 seconds = skipBackSec,
-                icon = Icons.Default.Replay10,
+                forward = false,
                 description = "Back $skipBackSec seconds",
             )
         }
@@ -790,7 +800,7 @@ private fun TransportRow(
         ) {
             SeekIcon(
                 seconds = skipForwardSec,
-                icon = Icons.Default.Forward30,
+                forward = true,
                 description = "Forward $skipForwardSec seconds",
             )
         }
@@ -979,12 +989,19 @@ private fun PositionHistorySheet(
  * A seek button labelled with its own duration.
  *
  * Media3's stock icons are baked with "10" and "30" on them, which would lie as soon as
- * the durations became configurable. The number is drawn over a neutral icon instead.
+ * the durations became configurable. [drawSkipGlyph] draws a digit-free arc-and-arrowhead
+ * glyph instead, and the configured seconds are the only number drawn on top of it.
  */
 @Composable
-private fun SeekIcon(seconds: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, description: String) {
-    Box(contentAlignment = Alignment.Center) {
-        Icon(icon, contentDescription = description, modifier = Modifier.size(30.dp))
+private fun SeekIcon(seconds: Int, forward: Boolean, description: String) {
+    val tint = LocalContentColor.current
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Canvas(modifier = Modifier.size(30.dp)) {
+            drawSkipGlyph(forward = forward, tint = tint)
+        }
         Text(
             seconds.toString(),
             style = MaterialTheme.typography.labelSmall,
@@ -992,6 +1009,55 @@ private fun SeekIcon(seconds: Int, icon: androidx.compose.ui.graphics.vector.Ima
             maxLines = 1,
             softWrap = false,
         )
+    }
+}
+
+/**
+ * Draws a three-quarter arc open at the top with an arrowhead at its start, in the canvas's
+ * own local coordinates. [forward] mirrors the whole glyph horizontally about its center, so
+ * the back and forward buttons share one drawing and can never drift apart.
+ */
+private fun DrawScope.drawSkipGlyph(forward: Boolean, tint: Color) {
+    scale(scaleX = if (forward) -1f else 1f, scaleY = 1f, pivot = Offset(size.width / 2f, size.height / 2f)) {
+        val strokeWidth = size.minDimension * 0.11f
+        val radius = size.minDimension * 0.34f
+        val arcCenter = Offset(size.width / 2f, size.height / 2f + size.minDimension * 0.05f)
+        val startAngleDeg = 35f
+        val sweepAngleDeg = 265f
+
+        drawArc(
+            color = tint,
+            startAngle = startAngleDeg,
+            sweepAngle = sweepAngleDeg,
+            useCenter = false,
+            topLeft = Offset(arcCenter.x - radius, arcCenter.y - radius),
+            size = Size(radius * 2f, radius * 2f),
+            style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+        )
+
+        // The arrowhead sits at the arc's start point and points along the arc's own
+        // direction of travel there, so it reads as "the arc keeps going this way."
+        val startRad = Math.toRadians(startAngleDeg.toDouble())
+        val arcStart = Offset(
+            arcCenter.x + (radius * cos(startRad)).toFloat(),
+            arcCenter.y + (radius * sin(startRad)).toFloat(),
+        )
+        val tangent = Offset((-sin(startRad)).toFloat(), (cos(startRad)).toFloat())
+        val perpendicular = Offset(-tangent.y, tangent.x)
+        val arrowLength = strokeWidth * 2.6f
+        val arrowHalfWidth = strokeWidth * 1.6f
+        val tip = arcStart + tangent * (arrowLength * 0.55f)
+        val baseCenter = arcStart - tangent * (arrowLength * 0.45f)
+        val baseLeft = baseCenter + perpendicular * arrowHalfWidth
+        val baseRight = baseCenter - perpendicular * arrowHalfWidth
+
+        val arrowPath = Path().apply {
+            moveTo(tip.x, tip.y)
+            lineTo(baseLeft.x, baseLeft.y)
+            lineTo(baseRight.x, baseRight.y)
+            close()
+        }
+        drawPath(arrowPath, color = tint)
     }
 }
 
