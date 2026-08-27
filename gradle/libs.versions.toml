@@ -77,6 +77,10 @@ androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+# Deprecated as a whole library, and 1.1.0 is its last stable release — there is no
+# successor in AndroidX, and no version bump ends this. The decision to keep it, the options
+# rejected, and the two events that will force the move are recorded on `EncryptedTokenStore`
+# in `:core:sync`. Do not remove this line without reading that KDoc first.
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 

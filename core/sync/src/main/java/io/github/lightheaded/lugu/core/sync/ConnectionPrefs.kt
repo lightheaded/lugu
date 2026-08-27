@@ -5,8 +5,6 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.lightheaded.lugu.core.api.ClientCertificateException
 import io.github.lightheaded.lugu.core.api.ConnectionCertificate
@@ -30,10 +28,11 @@ import kotlinx.serialization.json.Json
  * The custom headers and the client certificate, at rest.
  *
  * Both are credentials, so they live where the tokens live — [EncryptedTokenStore] sets
- * the pattern and states the reason. A Cloudflare Access client secret is exactly as
- * valuable as a refresh token, and rather longer-lived: putting it in Room, where it
- * would be readable by anything that can read the database file and would be copied into
- * every backup of it, would undo the reason the token store exists.
+ * the pattern and states the reason, including why the deprecated library stays. A
+ * Cloudflare Access client secret is exactly as valuable as a refresh token, and rather
+ * longer-lived: putting it in Room, where it would be readable by anything that can read
+ * the database file and would be copied into every backup of it, would undo the reason the
+ * token store exists.
  *
  * Nothing here is ever logged, attached to feedback or written to the playback record.
  * The types it hands out mask themselves when printed, which is the backstop for the
@@ -47,10 +46,16 @@ import kotlinx.serialization.json.Json
  * The certificate is not keyed at all. lugu holds one account, an `SSLSocketFactory` is
  * chosen when a connection is opened rather than when a request is routed, and one
  * certificate at a time is what that machinery can honestly support.
+ *
+ * Every read goes through [SecurePrefs], so a store that cannot be decrypted reads as "no
+ * headers and no certificate" rather than as a throw. That answer is the safe one of the
+ * two: it makes a request that a proxy refuses, and a refusal is recoverable. A throw here
+ * would instead reach the settings screen and the request path together.
  */
 @Singleton
 class ConnectionPrefs @Inject constructor(
     @ApplicationContext private val context: Context,
+    losses: CredentialLossReport = CredentialLossReport(),
 ) {
 
     @Serializable
@@ -62,18 +67,15 @@ class ConnectionPrefs @Inject constructor(
      */
     private val revision = MutableStateFlow(0)
 
-    private val prefs: SharedPreferences by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        ).also { restoreCertificate(it) }
-    }
+    private val prefs = SecurePrefs(
+        context = context,
+        fileName = FILE_NAME,
+        kind = CredentialKind.ConnectionSettings,
+        losses = losses,
+        // Runs on the file that opened, which is what restores a stored certificate on a
+        // cold start.
+        onOpen = ::restoreCertificate,
+    )
 
     // region headers
 
@@ -86,13 +88,13 @@ class ConnectionPrefs @Inject constructor(
     fun setHeaders(baseUrl: String, headers: List<ConnectionHeader>) {
         val cleaned = ConnectionHeaders.deduplicate(headers.filter { it.name.isNotBlank() })
         val key = headerKey(baseUrl)
-        prefs.edit().apply {
+        prefs.write {
             if (cleaned.isEmpty()) {
                 remove(key)
             } else {
                 putString(key, json.encodeToString(SERIALIZER, cleaned.map { StoredHeader(it.name, it.value) }))
             }
-        }.commit()
+        }
         revision.value++
     }
 
@@ -102,9 +104,7 @@ class ConnectionPrefs @Inject constructor(
      * headers of whatever else is on the same host.
      */
     fun profileFor(url: String): ConnectionProfile? {
-        val match = prefs.all.keys
-            .filter { it.startsWith(HEADERS) }
-            .map { it.removePrefix(HEADERS) }
+        val match = storedAddresses()
             .filter { it.isNotEmpty() && url.startsWith(it) }
             .maxByOrNull { it.length }
             ?: return null
@@ -112,13 +112,20 @@ class ConnectionPrefs @Inject constructor(
     }
 
     /** Every address that has headers stored, so the connection screen can offer to forget them. */
-    fun configuredAddresses(): List<String> = prefs.all.keys
-        .filter { it.startsWith(HEADERS) }
-        .map { it.removePrefix(HEADERS) }
-        .sorted()
+    fun configuredAddresses(): List<String> = storedAddresses().sorted()
+
+    /**
+     * Reading `all` decrypts every key in the file, so it is the read most likely to meet a
+     * keyset that no longer matches. An empty list is the answer when it does.
+     */
+    private fun storedAddresses(): List<String> = prefs.read(emptyList<String>()) { store ->
+        store.all.keys
+            .filter { it.startsWith(HEADERS) }
+            .map { it.removePrefix(HEADERS) }
+    }
 
     private fun read(key: String): List<ConnectionHeader> {
-        val raw = prefs.getString(key, null) ?: return emptyList()
+        val raw = prefs.read<String?>(null) { it.getString(key, null) } ?: return emptyList()
         return runCatching {
             json.decodeFromString(SERIALIZER, raw).map { ConnectionHeader(it.name, it.value) }
         }.getOrDefault(emptyList())
@@ -130,9 +137,8 @@ class ConnectionPrefs @Inject constructor(
 
     // region client certificate
 
-    /** Touching [prefs] first is what restores a stored certificate on a cold start. */
     fun certificate(): ConnectionCertificate? =
-        if (prefs.contains(KEY_CERT)) ConnectionKeyMaterial.certificate() else null
+        if (prefs.read(false) { it.contains(KEY_CERT) }) ConnectionKeyMaterial.certificate() else null
 
     fun observeCertificate(): Flow<ConnectionCertificate?> = revision.map { certificate() }
 
@@ -140,6 +146,9 @@ class ConnectionPrefs @Inject constructor(
      * Reads the file the system picker returned, checks the password by actually opening
      * the keystore, and only then stores it. Storing first and failing later would leave a
      * certificate installed that cannot be used and cannot be explained.
+     *
+     * A store that refuses the write fails the whole call for the same reason. A
+     * certificate that works now and is gone after a restart is the harder fault to report.
      */
     suspend fun installCertificate(uri: Uri, password: String): Result<ConnectionCertificate> =
         withContext(Dispatchers.IO) {
@@ -149,11 +158,14 @@ class ConnectionPrefs @Inject constructor(
                 val name = displayName(uri)
                 val pair = ConnectionTls.load(name, bytes, password)
 
-                prefs.edit()
-                    .putString(KEY_CERT, Base64.encodeToString(bytes, Base64.NO_WRAP))
-                    .putString(KEY_CERT_PASSWORD, password)
-                    .putString(KEY_CERT_NAME, name)
-                    .commit()
+                val stored = prefs.write {
+                    putString(KEY_CERT, Base64.encodeToString(bytes, Base64.NO_WRAP))
+                    putString(KEY_CERT_PASSWORD, password)
+                    putString(KEY_CERT_NAME, name)
+                }
+                if (!stored) {
+                    throw ClientCertificateException("That certificate could not be stored on this device.")
+                }
                 ConnectionKeyMaterial.install(pair)
                 revision.value++
                 pair.certificate
@@ -161,11 +173,11 @@ class ConnectionPrefs @Inject constructor(
         }
 
     fun removeCertificate() {
-        prefs.edit()
-            .remove(KEY_CERT)
-            .remove(KEY_CERT_PASSWORD)
-            .remove(KEY_CERT_NAME)
-            .commit()
+        prefs.write {
+            remove(KEY_CERT)
+            remove(KEY_CERT_PASSWORD)
+            remove(KEY_CERT_NAME)
+        }
         ConnectionKeyMaterial.install(null)
         revision.value++
     }
@@ -176,10 +188,10 @@ class ConnectionPrefs @Inject constructor(
      * profile through here first, and a socket is opened after that.
      */
     private fun restoreCertificate(source: SharedPreferences) {
-        val encoded = source.getString(KEY_CERT, null) ?: return
-        val password = source.getString(KEY_CERT_PASSWORD, null) ?: return
-        val name = source.getString(KEY_CERT_NAME, null).orEmpty()
         runCatching {
+            val encoded = source.getString(KEY_CERT, null) ?: return
+            val password = source.getString(KEY_CERT_PASSWORD, null) ?: return
+            val name = source.getString(KEY_CERT_NAME, null).orEmpty()
             ConnectionKeyMaterial.install(
                 ConnectionTls.load(name, Base64.decode(encoded, Base64.NO_WRAP), password),
             )
@@ -190,7 +202,7 @@ class ConnectionPrefs @Inject constructor(
 
     /** Forgets everything stored for one address. Offered on sign-out and on the screen itself. */
     fun forget(baseUrl: String) {
-        prefs.edit().remove(headerKey(baseUrl)).commit()
+        prefs.write { remove(headerKey(baseUrl)) }
         revision.value++
     }
 
