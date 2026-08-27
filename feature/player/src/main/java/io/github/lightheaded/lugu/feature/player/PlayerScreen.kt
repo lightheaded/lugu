@@ -973,7 +973,7 @@ private fun PositionHistorySheet(
  * glyph instead, and the configured seconds are the only number drawn on top of it.
  */
 @Composable
-private fun SeekIcon(seconds: Int, forward: Boolean, description: String) {
+internal fun SeekIcon(seconds: Int, forward: Boolean, description: String) {
     val tint = LocalContentColor.current
     Box(
         contentAlignment = Alignment.Center,

@@ -613,8 +613,12 @@ private fun ItemGridPreview(selected: Set<String>) {
  * A book's page: resume, download and the queue menu on one row, then the group links.
  *
  * A book and a podcast are photographed separately because the page is genuinely two
- * pages — a book gets a play row and no list, a podcast gets a list and no play row — and
- * the two have regressed independently before.
+ * pages — a book leads with a resume row, a podcast leads with its episode list — and the
+ * two have regressed independently before.
+ *
+ * A podcast page now also carries its own primary play action, and this preview does not
+ * yet draw it. The button is composed inline in ItemDetailScreen, so photographing it
+ * needs the row extracted into a composable of its own first. See docs/BACKLOG.md.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

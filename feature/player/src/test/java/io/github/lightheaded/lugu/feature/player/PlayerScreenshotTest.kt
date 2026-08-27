@@ -15,10 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -217,7 +215,7 @@ private fun PlayerPreview(playing: Boolean) {
                     }
                 }
                 FilledTonalIconButton(onClick = {}, modifier = Modifier.size(60.dp)) {
-                    SeekIconPreview(SETTINGS.skipBackSec, Icons.Default.Replay10, "Back")
+                    SeekIcon(SETTINGS.skipBackSec, forward = false, description = "Back")
                 }
                 FilledIconButton(onClick = {}, modifier = Modifier.size(76.dp)) {
                     Icon(
@@ -227,7 +225,7 @@ private fun PlayerPreview(playing: Boolean) {
                     )
                 }
                 FilledTonalIconButton(onClick = {}, modifier = Modifier.size(60.dp)) {
-                    SeekIconPreview(SETTINGS.skipForwardSec, Icons.Default.Forward30, "Forward")
+                    SeekIcon(SETTINGS.skipForwardSec, forward = true, description = "Forward")
                 }
                 if (TransportButton.NEXT_CHAPTER in SETTINGS.playerButtons) {
                     IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
@@ -255,15 +253,3 @@ private fun PlayerPreview(playing: Boolean) {
     }
 }
 
-/** The seek amount is written on the icon, so a changed default is visible in the picture. */
-@Composable
-private fun SeekIconPreview(
-    seconds: Int,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    description: String,
-) {
-    Box(contentAlignment = Alignment.Center) {
-        Icon(icon, contentDescription = "$description $seconds seconds", modifier = Modifier.size(32.dp))
-        Text("$seconds", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
-    }
-}
