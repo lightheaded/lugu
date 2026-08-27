@@ -26,6 +26,7 @@ import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueueRepository
+import io.github.lightheaded.lugu.core.sync.ServerEpisodeFetchRepository
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -162,6 +163,14 @@ data class ItemDetailUiState(
      * episode whether or not it is one of the rows currently visible.
      */
     val playTarget: PodcastPlayTarget? = null,
+    /**
+     * Whether a request to the server for new feed episodes is in flight.
+     *
+     * The button holds this state itself, because the answer belongs to the button. A
+     * message would have to say "wait" and then say the outcome, and the first of the two
+     * tells the listener nothing that a busy button does not.
+     */
+    val fetchingNewEpisodes: Boolean = false,
     val message: String? = null,
 )
 
@@ -197,6 +206,7 @@ private data class ItemDetailExtras(
     val series: List<SeriesRef> = emptyList(),
     val trim: PodcastTrim = PodcastTrim.NONE,
     val trimIsOwn: Boolean = false,
+    val fetchingNewEpisodes: Boolean = false,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -209,6 +219,7 @@ class ItemDetailViewModel @Inject constructor(
     private val downloadRepository: DownloadRepository,
     private val queueRepository: QueueRepository,
     private val collectionRepository: CollectionRepository,
+    private val serverEpisodeFetchRepository: ServerEpisodeFetchRepository,
     private val libraryPrefs: LibraryPrefs,
     private val playbackPrefs: PlaybackPrefs,
 ) : ViewModel() {
@@ -307,6 +318,15 @@ class ItemDetailViewModel @Inject constructor(
      */
     private val trimIsOwn = MutableStateFlow(false)
 
+    /**
+     * True while the server answers a request for new feed episodes.
+     *
+     * Kept here and not in the screen because the request outlives the composition: a
+     * rotation in the middle of it must not give the button back its idle look while the
+     * server still works.
+     */
+    private val fetchingNewEpisodes = MutableStateFlow(false)
+
     private val seriesMemberships: Flow<List<SeriesRef>> = account
         .flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else libraryRepository.observeSeriesFor(current, itemId)
@@ -317,7 +337,10 @@ class ItemDetailViewModel @Inject constructor(
         seriesMemberships,
         playbackPrefs.observeTrimFor(itemId),
         trimIsOwn,
-    ) { choices, series, trim, isOwn -> ItemDetailExtras(choices, series, trim, isOwn) }
+        fetchingNewEpisodes,
+    ) { choices, series, trim, isOwn, fetching ->
+        ItemDetailExtras(choices, series, trim, isOwn, fetching)
+    }
 
     /**
      * The list is narrowed here rather than in the screen.
@@ -353,6 +376,7 @@ class ItemDetailViewModel @Inject constructor(
             series = extra.series,
             trim = extra.trim,
             trimIsOwn = extra.trimIsOwn,
+            fetchingNewEpisodes = extra.fetchingNewEpisodes,
             // From base.episodes — the whole feed, before the search box and the filter
             // chip narrow it to `visible` — so the target does not change depending on
             // what the listener happens to have typed or picked.
@@ -673,6 +697,39 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Asks the server to read this podcast's feed and fetch the episodes it does not hold.
+     *
+     * This is the server-side fetch and not the phone-side download: the file lands in the
+     * server's own library folder. A new episode therefore reaches this page only when the
+     * next library sync mirrors it, which is why the message names what the server does
+     * and never promises a row in the list.
+     *
+     * "The feed has no new episodes" is an answer and not a failure, so it goes through the
+     * same message channel as a success. Nothing is confirmed first, and nothing can be
+     * taken back: a request to fetch destroys nothing.
+     *
+     * A second press while the first request runs is dropped. The button is disabled for
+     * the same reason, but the guard is here as well, because the server's own queue only
+     * refuses a duplicate URL while it already downloads one.
+     */
+    fun getNewEpisodes() {
+        if (fetchingNewEpisodes.value) return
+        fetchingNewEpisodes.value = true
+        viewModelScope.launch {
+            try {
+                serverEpisodeFetchRepository.checkAndFetchNewEpisodes(itemId).fold(
+                    onSuccess = { message.value = serverFetchLine(it.size) },
+                    onFailure = {
+                        message.value = it.message ?: "The server could not fetch new episodes."
+                    },
+                )
+            } finally {
+                fetchingNewEpisodes.value = false
+            }
+        }
+    }
+
     fun dismissMessage() {
         message.value = null
     }
@@ -719,4 +776,18 @@ internal fun collectionChoices(
 internal fun collectionChangeLine(name: String?, added: Boolean): String {
     val target = name?.takeIf { it.isNotBlank() } ?: "the collection"
     return if (added) "Added to $target" else "Removed from $target"
+}
+
+/**
+ * What the server answered, in words.
+ *
+ * An empty answer is stated as a fact about the feed and never as a refusal, because it is
+ * the commonest answer: a listener who is up to date presses this and must not read a
+ * failure. A count is given rather than "some", because the number is the whole receipt for
+ * a request whose result appears later and somewhere else.
+ */
+internal fun serverFetchLine(found: Int): String = when {
+    found <= 0 -> "The feed has no new episodes."
+    found == 1 -> "The server now fetches 1 new episode."
+    else -> "The server now fetches $found new episodes."
 }

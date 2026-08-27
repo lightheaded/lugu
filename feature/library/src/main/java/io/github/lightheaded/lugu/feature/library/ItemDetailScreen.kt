@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.RemoveDone
+import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -50,6 +51,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -277,22 +279,18 @@ fun ItemDetailScreen(
                 }
             }
 
-            // A podcast's own primary action, the counterpart of the book's play row
-            // above: one tap, and the button says what it is about to play. Absent only
-            // when the podcast has no episode to offer at all. See podcastPlayTarget for
-            // the rule, including what happens once every episode is marked finished.
             if (item.mediaType == MediaType.PODCAST) {
                 state.playTarget?.let { target ->
-                    item {
-                        Button(
-                            onClick = { onPlay(item.id, target.episodeId) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.size(8.dp))
-                            Text(target.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
+                    item { PodcastPlayRow(target = target, onPlay = { onPlay(item.id, it) }) }
+                }
+                // Below the play row and not beside it, and present even when the play row
+                // is not: a feed the server holds no episodes of is exactly the feed that
+                // needs this button, and it is the one case with nothing to play.
+                item {
+                    GetNewEpisodesRow(
+                        fetching = state.fetchingNewEpisodes,
+                        onGetNewEpisodes = viewModel::getNewEpisodes,
+                    )
                 }
             }
 
@@ -990,6 +988,66 @@ private fun BrowseGroupLink(
  */
 internal fun markFinishedTarget(rows: List<EpisodeRow>): Boolean =
     rows.isEmpty() || rows.any { !it.isFinished }
+
+/**
+ * A podcast's own primary action, the counterpart of the book's play row.
+ *
+ * One tap, and the button says what it is about to play. The caller decides whether there
+ * is anything to play at all: [PodcastPlayTarget] is null for a feed with no episodes, and
+ * the row is left out. See [podcastPlayTarget] for the rule that picks the episode,
+ * including what happens after every episode is marked finished.
+ *
+ * A composable of its own so that the screenshot test can photograph it. It was composed
+ * in place until then, which put the one control the page leads with outside every picture.
+ */
+@Composable
+internal fun PodcastPlayRow(
+    target: PodcastPlayTarget,
+    onPlay: (episodeId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(onClick = { onPlay(target.episodeId) }, modifier = modifier.fillMaxWidth()) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null)
+        Spacer(Modifier.size(8.dp))
+        Text(target.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * Asks the server to read this show's feed and fetch the episodes it does not hold.
+ *
+ * This is the server-side fetch and never the phone-side download, which every episode row
+ * carries its own control for. The words say "get" rather than "download" to keep the two
+ * apart, and the icon is the feed rather than a cloud for the same reason.
+ *
+ * Secondary emphasis, because the page leads with playing something. No confirmation and no
+ * undo: a request to fetch destroys nothing. The outcome arrives as a message on the
+ * screen's snackbar, so the page does not move to report it.
+ *
+ * While the request runs, the icon becomes a spinner and the button refuses a second press.
+ * The label does not change and the button keeps its height, so nothing moves under the
+ * finger that has just pressed it.
+ */
+@Composable
+internal fun GetNewEpisodesRow(
+    fetching: Boolean,
+    onGetNewEpisodes: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onGetNewEpisodes,
+        enabled = !fetching,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        if (fetching) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(Icons.Default.RssFeed, contentDescription = null)
+        }
+        Spacer(Modifier.size(8.dp))
+        Text("Get new episodes")
+    }
+}
 
 /** The episode a podcast's hero button plays, and how the button names it. */
 data class PodcastPlayTarget(val episodeId: String, val label: String)

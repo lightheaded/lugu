@@ -616,9 +616,9 @@ private fun ItemGridPreview(selected: Set<String>) {
  * pages — a book leads with a resume row, a podcast leads with its episode list — and the
  * two have regressed independently before.
  *
- * A podcast page now also carries its own primary play action, and this preview does not
- * yet draw it. The button is composed inline in ItemDetailScreen, so photographing it
- * needs the row extracted into a composable of its own first. See docs/BACKLOG.md.
+ * A podcast page also carries its own primary play action and a "get new episodes" button.
+ * Both are drawn here from the real composables, [PodcastPlayRow] and [GetNewEpisodesRow],
+ * so the picture covers the two controls the podcast page leads with.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -665,6 +665,15 @@ private fun PodcastPagePreview() {
     ItemPageScaffold(PODCAST.title) {
         item { ItemHeaderPreview(PODCAST) }
         item { GroupLinkPreview(null, PODCAST.authorName.orEmpty()) }
+        // The label comes from the real rule and not from a literal string, so the picture
+        // shows what a listener sees. The fixture holds one episode in progress, which is
+        // the first branch of podcastPlayTarget: "Continue" plus that episode's title.
+        item {
+            PodcastPlayRow(target = checkNotNull(podcastPlayTarget(EPISODES)), onPlay = {})
+        }
+        // Photographed in its idle state. The busy state swaps the icon for a spinner,
+        // which no picture can hold still, and the button keeps its size in both.
+        item { GetNewEpisodesRow(fetching = false, onGetNewEpisodes = {}) }
         // Above the episode list, where the screen puts it: it is a fact about the show,
         // and everything below this point is a fact about one episode.
         item {
