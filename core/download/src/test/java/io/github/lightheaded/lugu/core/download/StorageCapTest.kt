@@ -85,4 +85,32 @@ class StorageCapTest {
         assertThat(text.lowercase()).doesNotContain("error")
         assertThat(text.lowercase()).doesNotContain("deleted")
     }
+
+    /** Nothing pending-delete: the reading is exactly what is on disk. */
+    @Test
+    fun `chargeableBytes with nothing pending is the disk figure`() {
+        assertThat(StorageCap.chargeableBytes(bytesOnDisk = 3 * gigabyte, pendingDeleteBytes = 0))
+            .isEqualTo(3 * gigabyte)
+    }
+
+    /**
+     * A completed download marked pending-delete still occupies its bytes, but the tap
+     * that marked it already asked for them back — so a fresh download waiting on that
+     * same space must see it as free.
+     */
+    @Test
+    fun `a pending delete's bytes are subtracted`() {
+        assertThat(StorageCap.chargeableBytes(bytesOnDisk = 3 * gigabyte, pendingDeleteBytes = gigabyte))
+            .isEqualTo(2 * gigabyte)
+    }
+
+    /**
+     * `bytesOnDisk` and `pendingDeleteBytes` come from two different reads a moment
+     * apart, so a delete landing between them must not turn the answer negative.
+     */
+    @Test
+    fun `chargeableBytes never goes negative`() {
+        assertThat(StorageCap.chargeableBytes(bytesOnDisk = gigabyte, pendingDeleteBytes = 2 * gigabyte))
+            .isEqualTo(0)
+    }
 }

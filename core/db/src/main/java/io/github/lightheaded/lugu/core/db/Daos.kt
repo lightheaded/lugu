@@ -852,13 +852,23 @@ interface LibraryItemFtsDao {
 
 @Dao
 interface DownloadDao {
-    @Query("SELECT * FROM download WHERE serverId = :serverId AND userId = :userId ORDER BY requestedAtMs DESC")
+    // Pending-delete rows are excluded here on purpose: a deleted-but-undoable download
+    // must read as not downloaded on every screen that draws from this table, not only
+    // on the one the delete was tapped from.
+    @Query(
+        """
+        SELECT * FROM download
+        WHERE serverId = :serverId AND userId = :userId AND state != 'pending_delete'
+        ORDER BY requestedAtMs DESC
+        """,
+    )
     fun observeAll(serverId: String, userId: String): Flow<List<DownloadEntity>>
 
     @Query(
         """
         SELECT * FROM download
         WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+          AND state != 'pending_delete'
         """,
     )
     fun observeForItem(serverId: String, userId: String, itemId: String): Flow<List<DownloadEntity>>
@@ -889,7 +899,10 @@ interface DownloadDao {
     )
     suspend fun findAny(itemId: String, episodeKey: String): DownloadEntity?
 
-    @Query("SELECT * FROM download WHERE state != 'completed'")
+    // Also excludes pending-delete: those files are already complete and the engine
+    // must never touch them again before the delete is finalised. See
+    // [io.github.lightheaded.lugu.core.db.DownloadState.PENDING_DELETE].
+    @Query("SELECT * FROM download WHERE state != 'completed' AND state != 'pending_delete'")
     suspend fun unfinished(): List<DownloadEntity>
 
     @Query(
@@ -905,6 +918,17 @@ interface DownloadDao {
 
     @Query("SELECT COALESCE(SUM(bytesDownloaded), 0) FROM download")
     suspend fun bytesUsed(): Long
+
+    /**
+     * Bytes still on disk behind a pending-delete row, across every account on the device.
+     *
+     * A pending-delete download must not count against free space or the storage cap --
+     * deleting it is the outcome the tap asked for, so the reservation should already
+     * read as freed even though the bytes have not left disk yet. Unscoped, to match
+     * [bytesUsed], which the cap check reads from.
+     */
+    @Query("SELECT COALESCE(SUM(bytesDownloaded), 0) FROM download WHERE state = 'pending_delete'")
+    suspend fun pendingDeleteBytes(): Long
 
     /**
      * How many downloads exist for one item, across every account on the device.

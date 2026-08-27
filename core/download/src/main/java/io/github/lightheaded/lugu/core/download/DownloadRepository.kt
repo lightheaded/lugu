@@ -173,10 +173,15 @@ class DownloadRepository @Inject constructor(
      * cap are per device. A readout that says 600 MB while the check says the phone is
      * full is how a correct refusal ends up reported as a bug. Room's own sum is kept as
      * the change signal, since it is what moves when a download does.
+     *
+     * Bytes behind a pending-delete row are subtracted, for the same reason the cap
+     * check in [download] subtracts them: the delete is the outcome a tap already
+     * asked for, so the readout should say so at once rather than waiting for the
+     * undo window to close.
      */
     fun observeBytesUsed(account: ActiveAccount): Flow<Long> =
         downloadDao.observeBytesUsed(account.serverId, account.userId)
-            .map { downloadCache.bytesUsed() }
+            .map { StorageCap.chargeableBytes(downloadCache.bytesUsed(), downloadDao.pendingDeleteBytes()) }
             // Off the main thread: reading the cache blocks until it has finished
             // indexing, which on a phone full of books is not instant.
             .flowOn(Dispatchers.IO)
@@ -195,7 +200,9 @@ class DownloadRepository @Inject constructor(
         withContext(Dispatchers.IO) { downloadCache.retainedStreamBytes() }
 
     suspend fun status(account: ActiveAccount, itemId: String, episodeId: String?): DownloadStatus? =
-        downloadDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))?.toStatus()
+        downloadDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+            ?.takeIf { it.state != DownloadState.PENDING_DELETE }
+            ?.toStatus()
 
     /**
      * The manifest for an item whose bytes are all on disk, or null.
@@ -250,7 +257,10 @@ class DownloadRepository @Inject constructor(
         }
 
         val estimatedBytes = estimateBytes(manifest, domain.durationSec)
-        val usedBytes = downloadCache.bytesUsed()
+        // Pending-delete bytes are not charged: those files are on their way out, and a
+        // download waiting on the same space a delete just freed must not be refused for
+        // bytes that are, in effect, already gone.
+        val usedBytes = StorageCap.chargeableBytes(downloadCache.bytesUsed(), downloadDao.pendingDeleteBytes())
         if (usedBytes + estimatedBytes > settings.storageCapBytes) {
             throw DownloadRefusedException(
                 DownloadRefusal.OverStorageCap(usedBytes, settings.storageCapBytes, estimatedBytes),
@@ -308,19 +318,87 @@ class DownloadRepository @Inject constructor(
     }
 
     /**
-     * Removes the bytes and the row. Progress is untouched — deleting a file is not forgetting
-     * a book.
+     * Removes the bytes and the row at once, with no way back. Progress is untouched —
+     * deleting a file is not forgetting a book.
      *
-     * The cover goes only when the last download for the item does. One podcast has one cover
-     * and many episodes, so deleting an episode must leave the picture for the eleven still
-     * on the phone.
+     * Screens that offer no undo of their own call this directly, which is correct: a
+     * download still running has no finished file to defer in the first place, so
+     * cancelling one goes through here too, immediately. A completed download's own
+     * delete control instead goes through [deferDelete], and this is only reached for it
+     * once [finalizeDeferred] decides the undo window has closed with no undo taken.
      */
     suspend fun remove(account: ActiveAccount, itemId: String, episodeId: String?) {
         val episodeKey = episodeKeyOf(episodeId)
-        val row = downloadDao.get(account.serverId, account.userId, itemId, episodeKey)
-        val manifest = row?.tracksJson?.let {
-            runCatching { AbsJson.decodeFromString(DownloadManifest.serializer(), it) }.getOrNull()
-        }
+        val row = downloadDao.get(account.serverId, account.userId, itemId, episodeKey) ?: return
+        removeRow(account, row)
+    }
+
+    /**
+     * Marks a completed download pending-delete, in place of removing it.
+     *
+     * Nothing leaves disk here — the row keeps its bytes and its manifest, only its
+     * `state` changes. That is what lets [restoreDeferred] put it back exactly and at
+     * once if the undo window is used, and it is why the item stops appearing as
+     * downloaded on every screen the instant this returns: [observeAll] and
+     * [observeForItem] both exclude a pending-delete row.
+     *
+     * Returns the row as it stood before the mark, which is the caller's only copy of it
+     * — the one thing [restoreDeferred] needs. Returns null when there was nothing
+     * complete to defer, which the caller should not see: an active download has no
+     * pending-delete state to enter and cancels through [remove] instead.
+     */
+    suspend fun deferDelete(account: ActiveAccount, itemId: String, episodeId: String?): DownloadEntity? {
+        val episodeKey = episodeKeyOf(episodeId)
+        val row = downloadDao.get(account.serverId, account.userId, itemId, episodeKey) ?: return null
+        if (row.state != DownloadState.COMPLETED) return null
+        downloadDao.updateState(
+            serverId = account.serverId,
+            userId = account.userId,
+            itemId = itemId,
+            episodeKey = episodeKey,
+            state = DownloadState.PENDING_DELETE,
+            bytesDownloaded = row.bytesDownloaded,
+            bytesTotal = row.bytesTotal,
+            percent = row.percent,
+            completedAtMs = row.completedAtMs,
+            error = null,
+        )
+        return row
+    }
+
+    /**
+     * Undoes [deferDelete]: puts [snapshot] back exactly, because nothing about it was
+     * ever touched but its `state`.
+     *
+     * Guarded against the row having moved on: if it is no longer pending-delete — a
+     * fresh download landed on the same item and episode while the undo was on offer,
+     * or the window already closed and [finalizeDeferred] beat this call to it — this
+     * does nothing, rather than resurrecting a row a newer one has replaced.
+     */
+    suspend fun restoreDeferred(account: ActiveAccount, snapshot: DownloadEntity) {
+        val current = downloadDao.get(account.serverId, account.userId, snapshot.libraryItemId, snapshot.episodeKey)
+        if (current?.state != DownloadState.PENDING_DELETE) return
+        downloadDao.upsert(snapshot)
+    }
+
+    /**
+     * Finishes what [deferDelete] deferred, once the undo window has closed with no undo.
+     *
+     * Guarded the same way [restoreDeferred] is, and for the same reason: only a row
+     * still pending-delete is this call's to remove. A row a fresh download has since
+     * reused belongs to that download, not to the one this window was offering to undo.
+     */
+    suspend fun finalizeDeferred(account: ActiveAccount, snapshot: DownloadEntity) {
+        val current = downloadDao.get(account.serverId, account.userId, snapshot.libraryItemId, snapshot.episodeKey)
+        if (current?.state != DownloadState.PENDING_DELETE) return
+        removeRow(account, current)
+    }
+
+    /** The actual deletion: the engine's bytes for every track, then the row, then the cover. */
+    private suspend fun removeRow(account: ActiveAccount, row: DownloadEntity) {
+        val manifest = runCatching {
+            AbsJson.decodeFromString(DownloadManifest.serializer(), row.tracksJson)
+        }.getOrNull()
         manifest?.tracks?.forEach { track ->
             runCatching {
                 DownloadService.sendRemoveDownload(
@@ -331,8 +409,8 @@ class DownloadRepository @Inject constructor(
                 )
             }
         }
-        downloadDao.delete(account.serverId, account.userId, itemId, episodeKey)
-        if (downloadDao.countForItem(itemId) == 0) coverStore.remove(itemId)
+        downloadDao.delete(account.serverId, account.userId, row.libraryItemId, row.episodeKey)
+        if (downloadDao.countForItem(row.libraryItemId) == 0) coverStore.remove(row.libraryItemId)
     }
 
     /**
