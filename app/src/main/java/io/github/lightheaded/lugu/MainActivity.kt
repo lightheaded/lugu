@@ -13,9 +13,14 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -28,6 +33,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.download.NewEpisodeIntent
+import io.github.lightheaded.lugu.core.model.formatClock
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import io.github.lightheaded.lugu.feature.library.BrowseGroupScreen
 import io.github.lightheaded.lugu.feature.library.BrowseScreen
 import io.github.lightheaded.lugu.feature.library.CollectionScreen
@@ -53,6 +60,7 @@ import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -91,6 +99,7 @@ class MainActivity : ComponentActivity() {
             LuguTheme {
                 RequestNotificationPermission()
                 LuguApp(
+                    playback = playback,
                     pendingEpisode = pendingEpisode,
                     onEpisodeHandled = { pendingEpisode.value = null },
                 )
@@ -211,6 +220,7 @@ private object Routes {
 
 @Composable
 private fun LuguApp(
+    playback: PlaybackConnection,
     pendingEpisode: StateFlow<EpisodeTarget?>,
     onEpisodeHandled: () -> Unit,
     startViewModel: StartupViewModel = hiltViewModel(),
@@ -231,6 +241,39 @@ private fun LuguApp(
     // what they were doing is the moment right after it broke.
     CrashPrompt(onOpenFeedback = { navController.navigate(Routes.FEEDBACK) })
 
+    /*
+     * The trim-skip undo, raised to the shell so it reaches the mini player and every
+     * other screen, not only the full player. `pendingJump` is `PlaybackConnection`'s one
+     * automatic-correction notice — a trim skip, a large deliberate seek, or a position
+     * adopted from another device — so hoisting its host here covers all three at once
+     * rather than requiring a second channel just for trims. See `SkipRegionEnforcer`'s
+     * KDoc on `undoFor` for why there is only the one.
+     *
+     * This `Scaffold` is composed for every route, so the same host now shows the notice
+     * and its Undo wherever the listener is. `PlayerScreen` no longer shows this notice
+     * itself, which is what stops it appearing twice while the full player is open — the
+     * shell's copy is the only one left.
+     */
+    val shellSnackbarHostState = remember { SnackbarHostState() }
+    val pendingJump by playback.pendingJump.collectAsStateWithLifecycle()
+    val playerSettings by playback.settings.collectAsStateWithLifecycle(initialValue = PlayerSettings())
+    val noticeMillis = playerSettings.noticeSeconds.coerceAtLeast(1) * 1000L
+
+    LaunchedEffect(pendingJump, noticeMillis) {
+        pendingJump?.let { pending ->
+            val result = withTimeoutOrNull(noticeMillis) {
+                shellSnackbarHostState.showSnackbar(
+                    message = "${pending.reason ?: "Jumped"} from " +
+                        "${formatClock(pending.fromSec)} to ${formatClock(pending.toSec)}",
+                    actionLabel = "Undo",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
+            if (result == SnackbarResult.ActionPerformed) playback.undoJump() else playback.dismissJump()
+        }
+    }
+
     // Whatever is playing outlives the screen it was started from, so the mini player
     // belongs to the shell and not to any one destination. Home is the one exception: it
     // draws its own copy right above its own tab bar (see HomeScreen's bottomBar), so the
@@ -246,6 +289,11 @@ private fun LuguApp(
         currentRoute != Routes.LOGIN
 
     Scaffold(
+        // Bottom-anchored, like every other `SnackbarHost` in this codebase — Material3
+        // places it above `bottomBar` automatically, so it never sits over the mini
+        // player, and it is nowhere near the fixed top controls (chips, browse links)
+        // the Compose overlay rule in CLAUDE.md is about.
+        snackbarHost = { SnackbarHost(shellSnackbarHostState) },
         bottomBar = {
             // MiniPlayer itself renders nothing when there is nothing to play, so no
             // separate playable check is needed here — an empty composable measures to
