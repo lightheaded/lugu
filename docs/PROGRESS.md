@@ -1623,3 +1623,102 @@ Three decisions come with it, and they are in the backlog.
 
 The car items and the M0 device pass wait for a drive and a signed release build. Nothing
 else can answer the speed label or "For you".
+
+## 2026-08-27 (the second parallel run) — a car button that had to be drawn, and a crash on the splash screen
+
+Eight agents, four at a time, each in its own worktree with its own files. Six delivered a
+commit. Two lost their budget, and both had saved edits, so the work survived in the
+worktree and the orchestrator recovered it. That is the rule from the first run, proved a
+second time: an agent that reads for a long time and commits nothing leaves nothing.
+
+### The car speed button, and why the last fix changed nothing
+
+Tom reported it from a real car. The button still showed an icon where the official app
+shows "1.2x". The previous attempt had put the rate in the button's display name, so the
+backlog recorded the open question as a choice between two labels. Both were wrong, because
+the label was never the mechanism.
+
+Android Auto draws a custom action as its **icon**. The display name reaches the host as a
+name for a screen reader and for a tooltip. No display name can ever put text on that
+button, so an app that shows a rate in a car draws the characters inside the icon.
+
+Media3 1.11.0 already ships those icons. `CommandButton.ICON_PLAYBACK_SPEED_0_5` through
+`_2_0` are vector drawables whose paths are the digits themselves, and
+`media3_icon_playback_speed_1_2.xml` draws `1`, `.`, `2` and `x`. `CommandButton.Builder`
+resolves the constant to a drawable id in this app's own resource table. So the fix is a map
+from a rate to a constant, and no image is built at run time.
+
+The negative result is worth more than the fix, because it stops the obvious re-attempt. A
+run-time bitmap can never reach a car button. A projection host is a legacy controller, and
+a `PlaybackStateCompat.CustomAction` carries an integer resource id in the app's own package
+and nothing else. No `content://` grant changes that.
+
+Seven rates carry digits and the player's fine adjustment moves in steps of 0.05, so a rate
+such as 1.35x falls back to the plain icon. A wrong number on a car button is worse than no
+number. A new `Player.Listener` pushes the layout on every rate change, so the player
+screen, the notification and the car cannot disagree about the rate in force.
+
+One question is still open and only a car answers it: whether a head unit re-reads a custom
+action's icon on a pushed layout, or caches it from the first connection. If it caches, the
+fix needs a different shape. That check is in `qa/auto.md`.
+
+### A crash that no launch could clear
+
+The deprecated `EncryptedSharedPreferences` was recorded as a decision waiting to be taken.
+The decision turned out to be the smaller half of the item. The larger half was a live crash.
+
+`EncryptedSharedPreferences.create` declares two checked exceptions, and Kotlin does not
+force a catch. The token store called it from a `by lazy`, `AuthRepository.isSignedIn` called
+the store, and `StartupViewModel` called that in an unguarded coroutine. A device restore or
+a lock-screen change replaces the master key, which arrives as
+`KeyPermanentlyInvalidatedException`. So the app died on the splash screen, on every launch,
+and no launch could clear it, because the unreadable file stayed where it was.
+
+The storage now answers a broken file with nothing rather than a throw. It repairs in two
+steps — a new file, then a new master key — and it keeps the stored bytes on a storage error,
+because a full disk must not cost a thirty-day session. A real loss is reported, and the
+sign-in screen says why it asks instead of looking like the app forgot you.
+
+The decision on the library itself: keep it. It is deprecated as a whole rather than in
+parts, 1.1.0 is its last stable release, and AndroidX has no successor, so no version bump
+ends this. A plain keystore key is the eventual answer, and it moves key generation, the
+initialization vector, rotation and the invalidated-key case into the app. That path had to
+work before a migration rather than after one. It works now, under the library that is here.
+
+### Offline, without touching the radio
+
+The last M0 sign-in line a machine could take was the offline one, and the radio was the
+blocker: `cmd connectivity airplane-mode` starts at API 30, and the older route needs a
+protected broadcast that the shell cannot send on either level. A test that skips one leg is
+worse than the manual line, because CI fails any skip.
+
+The harness cuts the network itself instead. A VPN that names lugu alone and never reads the
+tunnel takes every route from that one app, by the same route on API 26 and API 36. Only lugu
+enters the tunnel, so adb and every other job keep their network, and the platform closes the
+tunnel with the harness process. The claim is narrower than airplane mode in three ways, and
+all three are written down.
+
+### What the pictures caught, and what a measurement caught instead
+
+The podcast page and the player both gained a control, so five baselines moved. Both were
+looked at as rendered images before anything was recorded, which is the lesson from the
+inverted skip arrow: a picture caught what a code review missed.
+
+The Downloads row went the other way. Its promise is that a failed download changes no
+height, and that is arithmetic rather than appearance. So it is measured: four states in one
+composition, all equal in height, including a failure of three sentences. A measurement
+states the claim directly and needs no baseline on any host.
+
+### Next
+
+The download control still reads "Downloaded" rather than what a press does. It is the last
+of the visible fixes, and it waits on a baseline record like the rest.
+
+The sleep timer's restore is still unreached. The volume at the stopping tick is now proved
+to be silence, so the restore is provably necessary, and it is four lines inside private
+methods of a service that needs a device. The seam is named in the backlog.
+
+`LibraryContent` is the pattern for the other screens. One screen is now photographed as the
+screen rather than as its parts, and the same extraction closes the same gap everywhere else.
+
+The car, a signed release build and a real tunnel still owe answers that no test can give.

@@ -44,6 +44,7 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | `harness` `the_harness_outlives_a_force_stop_of_lugu` | No |
 | `harness` `..._after_the_process_is_killed` | Yes |
 | `harness` `a_force_stop_never_resumes_the_wrong_thing` | Yes |
+| `harness` `the_library_still_renders_after_a_force_stop_with_no_network` | Yes |
 
 The ones that need nothing are not filler. `LaunchSmokeTest` catches the three ways lugu can
 fail to start that no unit test sees — Hilt's graph failing to build, WorkManager's
@@ -304,6 +305,52 @@ uninstall between them.
   install. Neither outcome is lugu's to control, so neither can be the assertion. What
   would be lugu's fault is coming back **wrong**, and that is checked on whatever does come
   back; nothing coming back is logged and passed.
+
+### Offline, without a touch on the radio
+
+`OfflineLibraryTest` takes the last M0 sign-in line a machine can take: force-stop lugu,
+take the network away, open it again, and the library must still render with no sign-in
+screen.
+
+The radio is what stopped this check before. The two legs cannot toggle airplane mode the
+same way:
+
+- `cmd connectivity airplane-mode enable` starts at API 30. The API 26 leg does not have it.
+- `settings put global airplane_mode_on 1` only moves a flag. The radios follow the
+  `AIRPLANE_MODE` broadcast, which is protected: the platform takes it from root and from
+  the system, and the shell is neither, on API 26 as well. So the write alone leaves a
+  different state on each leg.
+- `svc wifi disable` leaves mobile data up, and an emulator has mobile data.
+- Doze, battery saver and Data Saver exempt the foreground app, which is the app under test.
+
+A check that runs on one leg and skips on the other is worse than the manual line, because
+CI fails every skip. So the harness cuts the network itself. `OfflineVpnService` opens a VPN
+that names lugu alone and never reads the tunnel, so lugu loses every route to every
+network, by the same route on both legs. The shell grants the `ACTIVATE_VPN` app op, and the
+helper asks `VpnService.prepare` after each spelling of the command. The consent is
+measured, not guessed from the API level.
+
+It is also the safer route. Only lugu enters the tunnel, so adb, the emulator and every
+other test keep their network, and the platform closes the tunnel when the harness process
+dies. A test that turned a radio off can leave the whole device offline for the next job.
+
+Three things it does not prove, and the manual line keeps all three:
+
+- **Airplane mode itself.** The radios stay on and `Settings.Global.AIRPLANE_MODE_ON` stays
+  at 0, so no code that reads that flag runs.
+- **No network at all.** lugu still sees a default network, and every request on it fails.
+  That is the harder case for a screen that must come out of the database, and it is not the
+  state of a network that went away.
+- **The full library.** The check asserts one known title from `lugu.test.playQuery`, and it
+  only reads that title, so it moves nobody's place in a book. A count of a real shelf cannot
+  go in this repository, so "full" stays a manual claim.
+
+The account is real, which the trap above makes necessary: a seeded `server` row without a
+token is not a signed-in account, and lugu's encrypted preferences belong to lugu. So this
+check needs a server and skips without one. CI seeds one.
+
+The network cut is asserted **after** the render, not before it. That closes the one hole
+that would make a pass meaningless: a tunnel that went away, and a server that answered.
 
 ### Why `dumpsys media_session` and not a `MediaController`
 
