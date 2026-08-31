@@ -255,9 +255,15 @@ jobs:
     steps:
       # Full history and tags, not just HEAD: the release notes below walk
       # commits back to the previous release tag, which a shallow clone can't see.
+      #
+      # `fetch-tags` is stated as well as the depth. The two are not the same
+      # question, and the notes step fails in a confusing way without the tags: with
+      # no tag to walk back to, it describes the last fifty commits instead of the
+      # release, and says so in the log.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - uses: gradle/actions/wrapper-validation@v6
 
@@ -366,29 +372,61 @@ jobs:
           # feature description lives — see AGENTS.md's Releases section). Notes
           # were previously just the install boilerplate below with no feature
           # content at all.
+          #
+          # The range must be bounded. A run that finds no previous tag used to fall
+          # back to the whole history, and on 28 August that produced 198 KB of notes
+          # and killed the publish step: `gh: Argument list too long`, exit 126, no
+          # release. A tag can go missing for an ordinary reason — a force push can
+          # leave the last release tag unreachable from HEAD — so this must degrade
+          # rather than break.
           PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-          RANGE="HEAD"
-          [ -n "$PREV_TAG" ] && RANGE="$PREV_TAG..HEAD"
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..HEAD"
+            LIMIT=""
+          else
+            RANGE="HEAD"
+            LIMIT="--max-count=50"
+            echo "No v* tag is reachable from HEAD. Describing the last 50 commits." >&2
+          fi
+          echo "Release notes cover $RANGE ${LIMIT:-(no limit)}"
 
-          TLDR=$(git log "$RANGE" --format='- %s' --no-merges)
-          DETAILS=$(git log "$RANGE" --format='### %s%n%n%b' --no-merges \
+          TLDR=$(git log $LIMIT "$RANGE" --format='- %s' --no-merges)
+          DETAILS=$(git log $LIMIT "$RANGE" --format='### %s%n%n%b' --no-merges \
             | grep -v '^Co-Authored-By:' | grep -v '^Claude-Session:')
 
-          NOTES="lugu $VERSION — alpha build from \`${GITHUB_SHA::7}\`.
+          # A release body is capped at 125000 characters by the API, so a long run of
+          # work has to be cut somewhere. The TL;DR is kept whole, because it names
+          # every change. The detail is what gets cut, and the note says so.
+          DETAIL_CAP=90000
+          if [ "$(printf '%s' "$DETAILS" | wc -c)" -gt "$DETAIL_CAP" ]; then
+            DESCRIBED=$(printf '%s' "$DETAILS" | head -c "$DETAIL_CAP")
+            DETAILS="$DESCRIBED
 
-          ## TL;DR
-          $TLDR
+          The detail is cut here, because it passed the size a release page holds. Every
+          change is named in the TL;DR above, and \`git log $RANGE\` holds the rest."
+          fi
 
-          ## What changed
-          $DETAILS
-
-          Install over any previous lugu build; the signing key is stable.
-          Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk
-          Pre-alpha: see the README for what works and what does not.
-
-          \`lugu-mapping-$VERSION.txt\` is the R8 mapping for this exact build. A stack
-          trace from it is obfuscated and means nothing without it:
-          \`retrace lugu-mapping-$VERSION.txt trace.txt\`."
+          # Written to a file rather than passed as an argument. A note longer than
+          # 128 KB cannot be an argument at all: the kernel refuses the exec, and the
+          # failure reads as a missing `gh` rather than as an oversized note.
+          {
+            echo "lugu $VERSION — alpha build from \`${GITHUB_SHA::7}\`."
+            echo
+            echo "## TL;DR"
+            echo "$TLDR"
+            echo
+            echo "## What changed"
+            echo "$DETAILS"
+            echo
+            echo "Install over any previous lugu build; the signing key is stable."
+            echo "Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk"
+            echo "Pre-alpha: see the README for what works and what does not."
+            echo
+            echo "\`lugu-mapping-$VERSION.txt\` is the R8 mapping for this exact build. A stack"
+            echo "trace from it is obfuscated and means nothing without it:"
+            echo "\`retrace lugu-mapping-$VERSION.txt trace.txt\`."
+          } > release-notes.md
+          echo "Release notes: $(wc -c < release-notes.md) bytes"
 
           # Named with the version so that a mapping downloaded next to a crash report
           # cannot be mistaken for the one from a different build. Uploaded in the same
@@ -400,4 +438,4 @@ jobs:
           fi
 
           gh release create "v$VERSION" $ASSETS \
-            --title "lugu $VERSION" --notes "$NOTES" --latest
+            --title "lugu $VERSION" --notes-file release-notes.md --latest
