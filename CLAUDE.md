@@ -31,6 +31,12 @@ test fails across multiple API levels, the cause is in the app, not in the emula
 See `docs/qa/instrumented.md §Reading a failure in CI` for the one exception: a red
 job with no failing test means the emulator hung on shutdown, not a test failure.
 
+Several of these tests are racy, so a re-run of the **same commit** can come back
+green. That tells you the failure is not your change. It does not tell you the app is
+sound — a defect that appears on some runs reaches a listener the same way. Read the
+report, then re-run the same commit to learn which of the two you are looking at, and
+record what you found in `docs/BACKLOG.md`. Never re-run to make a red job go away.
+
 See `docs/qa/instrumented.md` for the full picture.
 
 ## Compose overlay rule

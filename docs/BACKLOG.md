@@ -387,6 +387,24 @@ Depends on item 1. Roughly half a day on top of it, most of it the Compose scree
 | ~~`DownloadEngine` aggregation untested~~ | Done 16 Aug, and the premise here was wrong: no fake `DownloadIndex` was needed. Extracting the pure fold into `DownloadAggregation` reached the part that can actually be wrong, and a fake would have been the harder path — a Media3 `Download` is only obtainable through a real `DownloadManager`, which wants a cache directory, a database and a thread pool |
 | ~~The offline resolution path is untested end to end~~ | **Closed 27 August with seventeen tests, and the blocker recorded here was smaller than it looked.** Room has an in-memory builder and the rest are ordinary classes, so `OfflineResolutionTest` builds the repository, the ledger and Room together. It holds the claim the app rests on: a downloaded book resolves with no server to reach, in book order, with the addresses from the download and never from a play session, and it starts where Room says. Cached chapters reach the session, and an item with none still gets a timeline. The seven fall-through cases are each separate, because each one is a different way to be wrong: no download, a part download, a queued download, a download marked for deletion, an unreadable manifest, an empty manifest, and another account's download. All seven go to the server rather than fail |
 
+## Process-death races, found 31 August 2026
+
+Three runs of the instrumented suite failed three different assertions. The suite is not
+deterministic, and the proof is a control: run 33364948344 was red on `dc4d316`, a commit
+that changes only markdown, PNG files and a test-task input declaration. Nothing in it
+reaches the APK. The identical app had passed on the run before, and passed again on a
+re-run of the same commit.
+
+So a red leg needs reading rather than dismissing, and a re-run of the **same commit** is
+what separates a race in the app from a regression. See
+[qa/instrumented.md](qa/instrumented.md#a-red-job-with-a-real-failing-test).
+
+| Item | Detail |
+| --- | --- |
+| ~~**A speed is announced before it is remembered**~~ | **Fixed 31 August.** `ProcessDeathResumptionTest.a_force_stop_never_resumes_the_wrong_thing` failed three times with "the remembered speed was lost, expected 1.5". `PlaybackConnection.setSpeed` told the controller first and wrote the store afterwards, behind a `withContext(Dispatchers.IO)` hop. The media session reports a new speed the moment the player accepts it, so that is the only signal anything outside lugu has, and the harness waits for exactly that announcement before it kills the process. Between the two, lugu announced a setting as in force while it existed only in memory. The order is reversed in both places a speed changes, and `LuguPlaybackService.cycleSpeed` had the same fault on the car path. The hop is gone as well: DataStore runs its own IO and does not block the caller, so the audible change waits for the write to be handed over rather than for a thread to be scheduled twice. **A cache held in memory cannot fix this**, and that route was considered and rejected: the process dies in the force stop, and memory dies with it |
+| **A resumed book can land ten seconds behind** | `ProcessDeathResumptionTest.a_media_button_resumes_the_same_book_after_the_process_is_killed` failed on API 36 with "the book resumed 30056ms behind, expected to be at least: 29885, but was 19829". The book came back about ten seconds before where it was left. A listener feels that, because it repeats a passage they already heard. **Untraced.** The likely shape is the same one the speed fault had: a position that is published, or acted on, before it is written. `LuguPlaybackService` writes progress on a timer and on transitions, so the question is which of those the force stop lands between. It needs the same treatment the speed race got — read what the harness waits for, then find what lugu announces before it persists |
+| **A cued next volume can fail to load at all** | `NextInSeriesTest.with_ask_first_on_the_next_volume_is_cued_and_not_started` failed on API 26 with "the expected item was not loaded after 60000ms", at `NextInSeriesTest.kt:431`. Sixty seconds is a long wait for a load that normally takes moments, so this is a load that never happened rather than a slow one. **Untraced**, and it is the only one of the three that is not a process-death test, so it may be a different fault wearing the same clothes. The seeded server, the scan and the series join are all in the path and none of them is ruled out |
+
 ## Left behind by the 27 August parallel run
 
 | Item | Detail |

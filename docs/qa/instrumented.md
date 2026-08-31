@@ -435,6 +435,44 @@ The emulator job uploads `**/build/reports/androidTests/connected/**` as an arti
 there rather than in the log: the HTML report has the stack trace and the device's own
 logcat excerpt for each failure.
 
+### A red job with a real failing test
+
+A named test with a real assertion is the app's problem until a control says otherwise.
+Read the report first. Then re-run **the same commit**, changing nothing.
+
+That re-run is the whole test. A regression fails again. A race does not.
+
+Measured on 31 August 2026, across four runs:
+
+| Run | Commit | App code | Result |
+| --- | --- | --- | --- |
+| 33362397704 | `44f95df` | baseline | green |
+| 33364948344 | `dc4d316` | identical to the row above | red, speed lost |
+| 33366874023 | `99a8fb6` | speed fix | red, two other tests |
+| 33366874023, re-run | `99a8fb6` | identical to the row above | green |
+
+The second row is the proof. `dc4d316` changes markdown, PNG files and a test-task input
+declaration, so nothing in it reaches the APK. The emulator ran the same binary that had
+just passed, and it failed.
+
+Three different assertions failed across those runs:
+
+```
+the remembered speed was lost, expected 1.5
+expected to be at least: 29885, but was 19829
+the expected item was not loaded after 60000ms
+```
+
+None of them is emulator noise. Each one is real state, read at a moment the test was
+allowed to read it. The first was traced to its cause and fixed. The other two are open,
+and [../BACKLOG.md](../BACKLOG.md) holds what is known about each.
+
+**Do not read this section as permission to dismiss a red leg.** It says the opposite of
+that. A race is a defect that appears on some runs, which is worse than one that appears
+on every run, because it reaches a listener the same way and hides from the suite. What
+the re-run buys is the difference between "my change broke this" and "this was already
+broken", and both of those need fixing.
+
 ### A red job with no failing test
 
 The job is capped at **20 minutes**, and one of the ways it reaches that cap is not a test
