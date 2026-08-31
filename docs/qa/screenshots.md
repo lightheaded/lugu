@@ -27,7 +27,12 @@ graphics, so no emulator and no device is involved.
 ```
 
 This **verifies** against the committed images and fails on any difference, which is why
-`./gradlew build` catches a visual regression on its own. A failure writes a side-by-side
+`./gradlew build` catches a visual regression on its own.
+
+That only holds because the root `build.gradle.kts` declares `<module>/screenshots` as an
+input of the test task. The images sit outside `src/`, so without that declaration Gradle
+holds the task up to date whatever they contain, and CI replays the cached pass. Do not
+remove it. A green run with `FROM-CACHE` beside every test task verified no picture. A failure writes a side-by-side
 comparison into `<module>/build/outputs/roborazzi/`; CI uploads that directory as an
 artifact, because a red run nobody can see is a red run nobody fixes.
 
@@ -58,25 +63,59 @@ the current folder. Move them over the committed copies if the paths differ, the
 at `git diff` before committing. Every changed image is a change to what the app looks
 like — if one you did not expect has moved, that is the suite doing its job.
 
-### Fallback: record locally
-
-```
-./gradlew testDebugUnitTest -Proborazzi.record
-```
-
-Then look at `git diff` before committing, as above.
-
-Record everything in one run rather than module by module, so the whole set stays taken
-with the same Compose and Robolectric versions.
+### Fallback: record in a local container
 
 **Record on Linux, not on your Mac.** Roborazzi renders through Robolectric's native
-graphics mode, which uses the host's own font and icon rasterizer — a baseline recorded
-on macOS will not pixel-match the same screen rendered on CI's `ubuntu-latest` runner, and
-`./gradlew build` will fail there even though nothing about the screen actually changed.
-Record in an environment matching CI: `eclipse-temurin:21-jdk-jammy` on `linux/amd64`, with
-Android SDK `platforms;android-37.0` and `build-tools;37.0.0`. If using a local Docker
-container for this, copy the working tree into it first — never mount the live checkout
-read-write for a throwaway build.
+graphics mode, which uses the host's own rasterizer. A baseline recorded on macOS does
+not pixel-match the same screen on CI's `ubuntu-latest` runner, so `./gradlew build`
+fails there even though the screen did not change. Measured on 31 August 2026, a plain
+`./gradlew build` on an Apple Silicon Mac fails 16 screenshot assertions for this reason
+alone.
+
+A `linux/amd64` container on that same Mac is faithful. The whole suite passed inside one
+against images recorded on the runner. Two constraints hold:
+
+- The base must match the runner, which reports **Ubuntu 24.04.4 LTS**. Use
+  `eclipse-temurin:21-jdk-noble`, not a jammy image.
+- The platform must be `linux/amd64`. Robolectric ships `native/linux/x86_64` and no
+  arm64 build, so an arm64 container cannot run these tests at all. Docker on Apple
+  Silicon runs amd64 through Rosetta.
+
+```dockerfile
+FROM --platform=linux/amd64 eclipse-temurin:21-jdk-noble
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends unzip curl ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${PATH}"
+RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
+ && curl -sSLo /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip \
+ && unzip -q /tmp/clt.zip -d "${ANDROID_HOME}/cmdline-tools" \
+ && mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" \
+ && rm /tmp/clt.zip
+RUN yes | sdkmanager --licenses > /dev/null 2>&1 || true
+RUN sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+WORKDIR /work
+```
+
+Copy the tree in before you run it. **Never mount the live checkout read-write for a
+throwaway build.**
+
+```
+git archive HEAD | tar -x -C "$SCRATCH/tree"
+echo "sdk.dir=/opt/android-sdk" > "$SCRATCH/tree/local.properties"
+docker volume create lugu-gradle-cache
+docker run --rm --platform linux/amd64 \
+  -v "$SCRATCH/tree":/work -v lugu-gradle-cache:/root/.gradle \
+  lugu-ci-replica ./gradlew testDebugUnitTest -Proborazzi.record --no-daemon
+```
+
+The named volume keeps the Gradle cache between runs. A cold run takes about six
+minutes, and a warm one about one minute.
+
+Copy the images back, then look at `git diff` before committing, as above. Record
+everything in one run rather than module by module, so the whole set stays taken with
+the same Compose and Robolectric versions.
 
 ## Why the pictures are not what is on your phone
 

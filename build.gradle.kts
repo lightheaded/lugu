@@ -23,12 +23,27 @@ plugins {
  * `./gradlew build` would silently rewrite every baseline, which turns a regression into
  * a diff nobody reads. Re-record after an intentional change with
  * `./gradlew testDebugUnitTest -Proborazzi.record` — see docs/qa/screenshots.md.
+ *
+ * The baselines are declared as an input of the test task, and that declaration is what
+ * makes the verification real. They live in `<module>/screenshots/`, outside `src/`, so
+ * without this Gradle never sees them: the task is up to date whatever the images hold,
+ * and `setup-gradle` replays that pass on the next CI run. Measured on 31 August 2026 —
+ * `feature/settings/screenshots/settings_light.png` was overwritten with 400 bytes of
+ * random data and `:feature:settings:testDebugUnitTest` still reported UP-TO-DATE and
+ * BUILD SUCCESSFUL. Run 33362397704 was green with every screenshot task FROM-CACHE while
+ * the committed player baseline was one icon out of date. A green build proved nothing
+ * about the pictures.
  */
 subprojects {
     tasks.withType<Test>().configureEach {
         val recording = providers.gradleProperty("roborazzi.record").isPresent
         systemProperty("roborazzi.test.record", recording)
         systemProperty("roborazzi.test.verify", !recording)
+
+        inputs.files(layout.projectDirectory.dir("screenshots").asFileTree)
+            .withPropertyName("roborazziBaselines")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .optional()
     }
 
     /*

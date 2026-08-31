@@ -115,12 +115,29 @@ Two things to keep true:
   mismatch was silently waiting in `feature/library`, `feature/player` and
   `feature/settings` too, masked because Gradle stops scheduling once one test task
   fails without `--continue`.
+- **The baselines are a declared input of the test task** in the root
+  `build.gradle.kts`. Never remove that declaration. The images sit outside `src/`, so
+  without it Gradle holds the task up to date whatever they contain, and
+  `setup-gradle` replays that pass on the next run. Measured on 31 August 2026: a
+  baseline overwritten with 400 bytes of random data still reported UP-TO-DATE and
+  BUILD SUCCESSFUL, and a green CI run verified no picture at all.
+- **A commit that only records baselines is the easiest thing in the tree to lose to a
+  rebase**, because no other file refers to it. Ten correct images left `main` that way
+  on 31 August 2026 and survived only as the target of tag `v0.2.0-alpha01.79`. After a
+  rebase, run `git diff --stat <before> HEAD -- '*/screenshots/*.png'`.
 - Before trusting a screenshot baseline, record it in an environment that matches
-  the CI runner: `eclipse-temurin:21-jdk-jammy` on `linux/amd64`, Android SDK
+  the CI runner: `eclipse-temurin:21-jdk-noble` on `linux/amd64`, Android SDK
   `platforms;android-37.0` + `build-tools;37.0.0`, run as `./gradlew testDebugUnitTest
-  -Proborazzi.record`. A Mac (including under Rosetta/amd64 emulation) is the wrong
-  host for this regardless of JDK version — the mismatch is in font/icon rendering,
-  not architecture or Java version.
+  -Proborazzi.record`. `ubuntu-latest` reports Ubuntu 24.04.4 LTS, so a jammy base is
+  the wrong one. The platform must be `linux/amd64`: Robolectric ships
+  `native/linux/x86_64` and no arm64 build, so an arm64 container cannot run these
+  tests at all.
+- **A Linux container on an Apple Silicon Mac is a faithful host. macOS itself is not.**
+  Measured on 31 August 2026: the whole suite passed inside a `linux/amd64` noble
+  container under Rosetta, against images recorded on the runner. The same suite fails
+  16 assertions when it runs on macOS directly. What differs is the native rasterizer
+  that Robolectric loads for the host, so the container is the fix rather than the
+  machine.
 - If you must do this via a local Docker container: **never mount the live working
   directory read-write for a throwaway build.** Copy the tree first (`git archive
   HEAD | tar -x -C $SCRATCH`, or `rsync` excluding `build/`, `.gradle/`, `.git/`) and
