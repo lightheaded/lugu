@@ -373,12 +373,18 @@ jobs:
           # were previously just the install boilerplate below with no feature
           # content at all.
           #
-          # The range must be bounded. A run that finds no previous tag used to fall
-          # back to the whole history, and on 28 August that produced 198 KB of notes
-          # and killed the publish step: `gh: Argument list too long`, exit 126, no
-          # release. A tag can go missing for an ordinary reason — a force push can
-          # leave the last release tag unreachable from HEAD — so this must degrade
-          # rather than break.
+          # On 28 August this step died with `gh: Argument list too long`, exit 126,
+          # and no release. What is proved: the notes were passed as one argument, and
+          # Linux refuses an argument over 128 KB. What is NOT proved: which range that
+          # run used. Both the failing run and the one after it fetched tags, so the
+          # obvious explanation — no tag, therefore the whole history at 198 KB — is not
+          # supported by the logs, and the failing run printed neither its range nor its
+          # size. That is why the two `echo` lines below exist.
+          #
+          # The range is bounded anyway, because the unbounded fallback is wrong on its
+          # own terms: the whole history is not a release note. A tag can go missing for
+          # an ordinary reason, because a force push can leave the last release tag
+          # unreachable from HEAD, so this must degrade rather than break.
           PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
           if [ -n "$PREV_TAG" ]; then
             RANGE="$PREV_TAG..HEAD"
