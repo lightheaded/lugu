@@ -182,6 +182,22 @@ budget leaves nothing behind: an unchanged worktree is discarded automatically. 
 that saved edits leaves work that survives. Instruct it to read only what it needs, and
 to start with the smallest of its findings.
 
+The rule paid twice in the run of 27 August. Two agents hit the same spend limit within a
+minute of each other, and both had saved their edits without committing: one held the
+Library search fix and the stateless screen extraction, the other held twenty-three tests.
+The orchestrator recovered both from their worktrees with `git diff` and a three-way apply,
+then compiled and ran them, which the agents themselves were forbidden to do. Nothing was
+lost. **So a dead agent is a recoverable agent. The first step after one dies is
+`git -C <its worktree> status`**, before deciding to run the work again.
+
+**One working tree, one writer.** Two sessions shared this repository on 27 and 28 August,
+and every collision came from that. One recorded screenshot baselines from a commit eight
+behind the other and had to record them again. A history rewrite in the same tree deleted an
+uncommitted edit belonging to the other session, expired the reflog, and removed the `origin`
+remote, so the pushed copy became the only intact one. None of it cost work, and only because
+each session said what it held before it wrote. Say what you hold, and use a separate
+worktree for anything that rewrites history or moves a branch.
+
 **Start agents in batches.** All twelve agents of the audit run died together on one
 spend limit, and every worktree vanished. Four at a time keeps an interruption from
 wiping every branch.
