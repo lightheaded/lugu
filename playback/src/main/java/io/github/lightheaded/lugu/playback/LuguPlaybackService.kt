@@ -693,19 +693,23 @@ class LuguPlaybackService : MediaLibraryService() {
         val presets = currentSettings.speed.presets.sorted().ifEmpty { return }
         val current = player.playbackParameters.speed
         val next = presets.firstOrNull { it > current + SPEED_EPSILON } ?: presets.first()
-        player.setPlaybackSpeed(next)
 
         // Remembered like any other speed change, so a change made in the car is still
-        // in force on the phone.
-        val context = stateHolder.nowPlaying.value ?: return
+        // in force on the phone — and remembered *before* the player takes it, for the
+        // reason set out on `PlaybackConnection.setSpeed`. A speed the session has already
+        // reported but nothing has written is a speed a force stop loses.
+        val context = stateHolder.nowPlaying.value
+        if (context == null) {
+            player.setPlaybackSpeed(next)
+            return
+        }
         scope.launch {
-            withContext(Dispatchers.IO) {
-                playbackPrefs.setSpeedFor(
-                    context.libraryItemId,
-                    if (context.episodeId != null) MediaType.PODCAST else MediaType.BOOK,
-                    next,
-                )
-            }
+            playbackPrefs.setSpeedFor(
+                context.libraryItemId,
+                if (context.episodeId != null) MediaType.PODCAST else MediaType.BOOK,
+                next,
+            )
+            player.setPlaybackSpeed(next)
         }
     }
 

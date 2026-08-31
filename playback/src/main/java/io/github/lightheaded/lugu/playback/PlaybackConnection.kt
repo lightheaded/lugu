@@ -501,13 +501,26 @@ class PlaybackConnection @Inject constructor(
     fun setSpeed(speed: Float) {
         scope.launch {
             val clamped = speed.coerceIn(SpeedSettings.MIN, SpeedSettings.MAX)
-            controller().setPlaybackSpeed(clamped)
+
+            // Remember the speed before the player takes it, not after.
+            //
+            // The only signal anything outside lugu has is the media session, and the
+            // session reports the new speed the moment the player accepts it. With the
+            // store written afterwards, lugu announced a setting as in force while it was
+            // still only in memory, and a force stop inside that window lost it. The
+            // window was wide rather than narrow, because the write sat behind a
+            // dispatcher hop as well. `ProcessDeathResumptionTest` caught this three
+            // times: "the remembered speed was lost, expected 1.5".
+            //
+            // There is no hop now. DataStore runs its own IO and does not block the
+            // caller, so the audible change waits for the write to be handed over rather
+            // than for a thread to be scheduled twice.
             stateHolder.nowPlaying.value?.let { now ->
                 val mediaType = if (now.episodeId != null) MediaType.PODCAST else MediaType.BOOK
-                withContext(Dispatchers.IO) {
-                    playbackPrefs.setSpeedFor(now.libraryItemId, mediaType, clamped)
-                }
+                playbackPrefs.setSpeedFor(now.libraryItemId, mediaType, clamped)
             }
+
+            controller().setPlaybackSpeed(clamped)
             pushState()
         }
     }
