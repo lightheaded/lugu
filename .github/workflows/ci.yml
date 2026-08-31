@@ -181,8 +181,17 @@ jobs:
       #
       # This deliberately fails the job rather than degrading to a skip. A silent skip is
       # exactly the state being fixed here: it looks green and tests nothing.
+      #
+      # Its own timeout, because without one it spends the *job's* budget and the job
+      # then reads as a mystery cancellation. On 31 August 2026 this step took 12m 49s on
+      # the API 36 debug leg while the two legs beside it — same commit, same script, same
+      # run — took 33s and 41s. It left 7 minutes for the tests, which finished 43 of them
+      # and were cut off mid-suite at the 20 minute cap with nothing failed. Four minutes
+      # is about six times the normal cost, so a step that reaches it has stalled on
+      # something it fetches rather than merely run slowly. Failing here names the step.
       - name: Seed a test server
         id: abs
+        timeout-minutes: 4
         run: |
           command -v ffmpeg >/dev/null 2>&1 || {
             sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg

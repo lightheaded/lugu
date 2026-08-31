@@ -435,6 +435,38 @@ The emulator job uploads `**/build/reports/androidTests/connected/**` as an arti
 there rather than in the log: the HTML report has the stack trace and the device's own
 logcat excerpt for each failure.
 
+### A cancelled job that ran out of budget
+
+The job is capped at 20 minutes. A third way to reach that cap is a setup step that ran
+long, and it looks like neither of the two cases below: no test failed, and the log does
+not end at `BUILD SUCCESSFUL`. It stops in the middle of a suite.
+
+Read the **step timings**, not the log, and compare the legs against each other. They run
+the same commit and the same script at the same time, so a step that costs one leg far
+more than the others has stalled rather than run slowly.
+
+```
+gh api /repos/<owner>/<repo>/actions/runs/<id>/jobs \
+  -q '.jobs[]|select(.name|startswith("instrumented"))|. as $j
+      |.steps[]|"\($j.name)  \(.name)  \(.started_at) → \(.completed_at)"'
+```
+
+Measured on 31 August 2026, run 33387184521, all three legs on `4c63060`:
+
+| Leg | `Seed a test server` |
+| --- | --- |
+| API 26, default | 33 s |
+| API 36, minified | 41 s |
+| API 36, debug | **12 m 49 s** |
+
+That one step took 64% of the budget. The tests then started, finished 43 of them, and the
+cap cut the run mid-suite with nothing failed. `release` had already published, because it
+needs only `build`.
+
+The seed step now carries `timeout-minutes: 4` of its own, so a stall fails there and
+names itself instead of spending the tests' time. If that timeout starts firing, the fix
+is in what the script fetches, not in the cap.
+
 ### A red job with a real failing test
 
 A named test with a real assertion is the app's problem until a control says otherwise.
