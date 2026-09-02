@@ -459,10 +459,21 @@ class ProcessDeathResumptionTest {
         /**
          * How far behind the resumed position may be.
          *
-         * Only two things put it behind, and neither is large: the position is written to Room
-         * on a five-second tick, and the last write before a kill is the seek that put it
-         * there. Nothing on this path applies a rewind — `SmartRewind` is sized from how long
+         * Two things put it behind by design, and neither is large: the position is written
+         * to Room on a five-second tick, and the last write before a kill is the seek that
+         * put it there. No rewind applies on this path — `SmartRewind` is sized from how long
          * playback was *paused*, which a process that has died no longer knows.
+         *
+         * A third thing put it behind by mistake, and this list said there were only two
+         * while it did. Resuming re-reads the server before it plays, and the conflict rule
+         * compared the server's `lastUpdate` with a timestamp this device had written, so a
+         * server whose clock ran ahead won every conflict and handed back its own stale
+         * echo. That is what "the book resumed 30056ms behind" was. Fixed on 2 September in
+         * `ProgressConflictResolver`; the tolerance is unchanged, because a comparison
+         * across two clocks can be wrong by any amount and no tolerance is the answer to it.
+         *
+         * An enumeration in a comment is a claim, and this one was false for a fortnight.
+         * Count again before trusting it.
          */
         const val BEHIND_TOLERANCE_MS = 20_000L
 

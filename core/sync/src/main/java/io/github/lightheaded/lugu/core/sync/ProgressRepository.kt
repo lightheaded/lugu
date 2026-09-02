@@ -11,12 +11,14 @@ import io.github.lightheaded.lugu.core.db.OutboxKind
 import io.github.lightheaded.lugu.core.db.PositionHistoryDao
 import io.github.lightheaded.lugu.core.db.PositionHistoryEntity
 import io.github.lightheaded.lugu.core.db.ProgressDao
+import io.github.lightheaded.lugu.core.db.NOTHING_PUSHED_SEC
 import io.github.lightheaded.lugu.core.db.ProgressEntity
 import io.github.lightheaded.lugu.core.db.episodeKeyOf
 import io.github.lightheaded.lugu.core.db.toEpisodeIdOrNull
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.ProgressConflictResolver
 import io.github.lightheaded.lugu.core.model.ProgressResolution
+import io.github.lightheaded.lugu.core.model.ServerCopySeen
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -132,9 +134,21 @@ class ProgressRepository @Inject constructor(
             val key = dto.libraryItemId to episodeKeyOf(dto.episodeId)
             val local = existing[key]
             // A dirty local row is a change the server has not accepted yet. Leave it
-            // alone unless the server's copy is genuinely newer.
-            if (local != null && local.lastUpdateMs >= dto.lastUpdate) return@mapNotNull null
-            dto.toEntity(account, isDirty = false)
+            // alone unless the server's copy came from somewhere other than here —
+            // decided by the same rule playback uses, on the server's clock alone. The
+            // old test compared the server's stamp with this device's and so handed a
+            // week of offline listening to whichever machine had the faster clock.
+            val server = dto.toDomain()
+            if (local != null && !ProgressConflictResolver.serverCopyCameFromElsewhere(server, local.seenCopy())) {
+                return@mapNotNull null
+            }
+            server.toEntity(
+                account = account,
+                isDirty = false,
+                serverLastUpdateMs = server.lastUpdateMs,
+                pushedTimeSec = local?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
+                pushedFinished = local?.pushedFinished ?: false,
+            )
         }
         progressDao.upsertAll(rows)
     }
@@ -147,12 +161,24 @@ class ProgressRepository @Inject constructor(
      * see is indistinguishable from a bug.
      */
     suspend fun startSession(account: ActiveAccount, itemId: String, episodeId: String?): ProgressJump? {
-        val local = get(account, itemId, episodeId)
+        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+        val local = existing?.toDomain()
         val server = runCatching { client.progress(itemId, episodeId)?.toDomain() }.getOrNull()
+        val seen = existing.seenCopy()
 
-        return when (val resolution = ProgressConflictResolver.resolve(local, server)) {
+        return when (val resolution = ProgressConflictResolver.resolve(local, server, seen)) {
             is ProgressResolution.AdoptServer -> {
-                progressDao.upsert(resolution.server.toEntity(account, isDirty = false))
+                // The server's revision goes in the column that holds server revisions,
+                // so the *next* conflict is decided against a number from the same clock.
+                progressDao.upsert(
+                    resolution.server.toEntity(
+                        account = account,
+                        isDirty = false,
+                        serverLastUpdateMs = resolution.server.lastUpdateMs,
+                        pushedTimeSec = existing?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
+                        pushedFinished = existing?.pushedFinished ?: false,
+                    ),
+                )
                 resolution.replacedLocal?.let { replaced ->
                     ProgressJump(
                         libraryItemId = itemId,
@@ -164,13 +190,41 @@ class ProgressRepository @Inject constructor(
             }
 
             is ProgressResolution.KeepLocal -> {
-                // Local is ahead: push it, but only through the guarded path.
-                enqueuePush(account, resolution.local, server)
+                // The resolver has already decided that nothing else wrote the server's
+                // copy, which is the same question the push guard asks. Asking it a
+                // second time here is what left a position stranded on the phone: the
+                // guard compared this device's clock with the server's, so on a device
+                // running behind the server it refused every push it had just decided to
+                // make. Keeping one rule in one place is the fix.
+                enqueue(account, resolution.local)
                 null
             }
 
-            ProgressResolution.InSync -> null
+            ProgressResolution.InSync -> {
+                // Worth a write even with nothing to resolve: the stamp just read is what
+                // makes the *next* conflict answerable without another round trip.
+                if (existing != null && server != null) {
+                    progressDao.noteServerStamp(
+                        serverId = account.serverId,
+                        userId = account.userId,
+                        itemId = itemId,
+                        episodeKey = episodeKeyOf(episodeId),
+                        serverLastUpdateMs = server.lastUpdateMs,
+                    )
+                }
+                null
+            }
         }
+    }
+
+    /** What this device knows about the server's copy, read off the stored row. */
+    private fun ProgressEntity?.seenCopy(): ServerCopySeen {
+        if (this == null) return ServerCopySeen()
+        return ServerCopySeen(
+            lastUpdateMs = serverLastUpdateMs,
+            pushedTimeSec = pushedTimeSec.takeIf { it >= 0.0 },
+            pushedFinished = pushedFinished,
+        )
     }
 
     /** Undo for an adopted jump. An explicit user action, so it bypasses the forward-only guard. */
@@ -216,22 +270,20 @@ class ProgressRepository @Inject constructor(
             lastUpdateMs = now,
             startedAtMs = existing?.startedAtMs?.takeIf { it > 0 } ?: now,
             serverLastUpdateMs = existing?.serverLastUpdateMs ?: 0L,
+            pushedTimeSec = existing?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
+            pushedFinished = existing?.pushedFinished ?: false,
             isDirty = true,
         )
         progressDao.upsert(entity)
 
-        val knownServer = existing?.let {
-            MediaProgress(
-                libraryItemId = itemId,
-                episodeId = episodeId,
-                currentTimeSec = it.currentTimeSec,
-                durationSec = it.durationSec,
-                lastUpdateMs = it.serverLastUpdateMs,
-            )
-        }
-        if (force || ProgressConflictResolver.mayPushAutomatically(entity.toDomain(), knownServer)) {
-            enqueue(account, entity.toDomain())
-        }
+        // Enqueued unconditionally, and the removed guard is worth naming. It asked
+        // whether the server holds a copy nobody here accounted for — a question that
+        // needs the server's current copy, which this path deliberately never fetches.
+        // What it actually compared was this device's clock against a column that
+        // sometimes held the server's, so its answer was clock skew rather than
+        // provenance. [startSession] asks the real question, with the server's copy in
+        // hand, before a single second of this item is played.
+        enqueue(account, entity.toDomain())
     }
 
     /**
@@ -268,10 +320,6 @@ class ProgressRepository @Inject constructor(
             isFinished = isFinished,
             force = true,
         )
-    }
-
-    private suspend fun enqueuePush(account: ActiveAccount, local: MediaProgress, knownServer: MediaProgress?) {
-        if (ProgressConflictResolver.mayPushAutomatically(local, knownServer)) enqueue(account, local)
     }
 
     private suspend fun enqueue(account: ActiveAccount, progress: MediaProgress) {
@@ -323,7 +371,8 @@ class ProgressRepository @Inject constructor(
             userId = entry.userId,
             itemId = payload.libraryItemId,
             episodeKey = episodeKeyOf(payload.episodeId),
-            serverLastUpdateMs = payload.lastUpdateMs,
+            pushedTimeSec = payload.currentTime,
+            pushedFinished = payload.isFinished,
         )
         return true
     }
@@ -351,7 +400,22 @@ internal fun ProgressEntity.toDomain(): MediaProgress = MediaProgress(
     startedAtMs = startedAtMs,
 )
 
-internal fun MediaProgress.toEntity(account: ActiveAccount, isDirty: Boolean) = ProgressEntity(
+/**
+ * A server copy, written down as a row.
+ *
+ * [serverLastUpdateMs] is passed in rather than taken from [lastUpdateMs], even though on
+ * a server copy the two are the same number. They are the same *value* and they are not
+ * the same *fact*: one is when the listening happened and orders the Continue shelf, the
+ * other is the server's own revision of this row and settles conflicts. Letting one field
+ * fill both columns is how a push's local timestamp came to be read as a server revision.
+ */
+internal fun MediaProgress.toEntity(
+    account: ActiveAccount,
+    isDirty: Boolean,
+    serverLastUpdateMs: Long,
+    pushedTimeSec: Double = NOTHING_PUSHED_SEC,
+    pushedFinished: Boolean = false,
+) = ProgressEntity(
     serverId = account.serverId,
     userId = account.userId,
     libraryItemId = libraryItemId,
@@ -362,9 +426,9 @@ internal fun MediaProgress.toEntity(account: ActiveAccount, isDirty: Boolean) = 
     isFinished = isFinished,
     lastUpdateMs = lastUpdateMs,
     startedAtMs = startedAtMs,
-    serverLastUpdateMs = lastUpdateMs,
+    serverLastUpdateMs = serverLastUpdateMs,
+    pushedTimeSec = pushedTimeSec,
+    pushedFinished = pushedFinished,
     isDirty = isDirty,
 )
 
-internal fun MediaProgressDto.toEntity(account: ActiveAccount, isDirty: Boolean) =
-    toDomain().toEntity(account, isDirty)

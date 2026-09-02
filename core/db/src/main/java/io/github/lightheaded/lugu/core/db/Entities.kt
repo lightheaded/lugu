@@ -222,6 +222,9 @@ data class ChapterEntity(
     val title: String,
 )
 
+/** No push from this device has ever been accepted for a row. */
+const val NOTHING_PUSHED_SEC: Double = -1.0
+
 @Entity(
     tableName = "progress",
     primaryKeys = ["serverId", "userId", "libraryItemId", "episodeKey"],
@@ -237,11 +240,43 @@ data class ProgressEntity(
     val durationSec: Double,
     val progress: Double,
     val isFinished: Boolean,
-    /** Server `lastUpdate`, the ordering key for conflict resolution. */
+    /**
+     * **When the listening happened**, on the clock of whichever device did it: this one
+     * for local listening, the server's `lastUpdate` for a copy adopted from elsewhere.
+     *
+     * An ordering key and nothing else — the Continue shelf, "most recently played", the
+     * stale-listen sweep, the finished-download cutoff. Two clocks meeting here is
+     * tolerable because ordering by roughly-wall-clock values is roughly right, and
+     * because the alternative is worse: stamping an adopted row with this device's clock
+     * would flatten the whole shelf every time a login sweep re-read the server.
+     *
+     * **Never use it to decide a conflict.** That is what [serverLastUpdateMs] is for, and
+     * doing it here is what put a resumed book thirty seconds behind where it was left.
+     */
     val lastUpdateMs: Long,
     val startedAtMs: Long,
-    /** What the server had when we last heard from it; used to detect regressions. */
+    /**
+     * **The server's own revision** of this row: its `lastUpdate` for the copy this
+     * device last read, or 0 when it has never read one.
+     *
+     * Only ever compared with another value from the server, which is the whole point of
+     * it being separate. It used to be written from whichever side last touched the row —
+     * the server's clock after an adoption, `System.currentTimeMillis()` after a push —
+     * and conflict resolution then compared it with the server's stamp. On a device whose
+     * clock ran behind the server's, a stale server position therefore won every conflict.
+     */
     val serverLastUpdateMs: Long,
+    /**
+     * The position the server last accepted from this device, or -1 when it has accepted
+     * none.
+     *
+     * `PATCH /api/me/progress/:id` answers with an empty body, so a push tells us the
+     * position the server now holds but never the stamp it gave it. This is what lets
+     * lugu recognise its own copy coming back and keep on listening past it.
+     */
+    val pushedTimeSec: Double = NOTHING_PUSHED_SEC,
+    /** The finished flag that went out with [pushedTimeSec]. */
+    val pushedFinished: Boolean = false,
     /** True while a local change has not been confirmed by the server. */
     val isDirty: Boolean,
 )

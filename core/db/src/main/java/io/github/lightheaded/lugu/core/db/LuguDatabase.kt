@@ -26,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CollectionEntity::class,
         CollectionItemEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class LuguDatabase : RoomDatabase() {
@@ -320,9 +320,59 @@ abstract class LuguDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Splits one progress column that held two clocks.
+         *
+         * `serverLastUpdateMs` was written from whichever side last touched the row: the
+         * server's own `lastUpdate` when a copy was adopted, and this device's
+         * `System.currentTimeMillis()` when a push was accepted. Conflict resolution then
+         * compared it against the server's stamp, so on a device whose clock ran behind
+         * the server's a stale server position won every conflict — which is how a
+         * resumed book came back thirty seconds behind where it was left.
+         *
+         * The two new columns carry what a push told us: the position the server
+         * accepted, and the finished flag that went with it. `-1` means "the server has
+         * accepted nothing from this device", which is the honest state for every row
+         * that already exists, because what the old column holds cannot be attributed to
+         * either clock after the fact.
+         *
+         * Nothing is lost by that. A row with no recorded push is resolved on the server
+         * stamp alone, which is the rule the next pull re-establishes: the first
+         * `startSession` for an item reads the server's copy and stores its real stamp.
+         * The cost is bounded and it is stated here — until that first read, a row that
+         * disagrees with the server by more than fifteen seconds adopts the server's
+         * position, with the undo the UI already offers for an adopted jump.
+         *
+         * `serverLastUpdateMs` is kept and its meaning narrowed to the server's clock.
+         * Existing values may be either clock, so they are cleared: 0 reads as "no copy
+         * of this row has been seen", which is true of a value nobody can attribute.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("progress", "pushedTimeSec")) {
+                    db.execSQL(
+                        "ALTER TABLE `progress` ADD COLUMN `pushedTimeSec` REAL NOT NULL DEFAULT -1.0",
+                    )
+                }
+                if (!db.hasColumn("progress", "pushedFinished")) {
+                    db.execSQL(
+                        "ALTER TABLE `progress` ADD COLUMN `pushedFinished` INTEGER NOT NULL DEFAULT 0",
+                    )
+                }
+                db.execSQL("UPDATE `progress` SET `serverLastUpdateMs` = 0")
+            }
+        }
+
         fun build(context: Context): LuguDatabase =
             Room.databaseBuilder(context.applicationContext, LuguDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                )
                 .build()
     }
 }

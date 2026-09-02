@@ -1130,9 +1130,40 @@ interface ProgressDao {
     @Upsert
     suspend fun upsertAll(progress: List<ProgressEntity>)
 
+    /**
+     * Records the server's own stamp for the copy just read, leaving the position alone.
+     *
+     * Called when a pull found nothing to resolve. Storing the stamp anyway is what makes
+     * the *next* disagreement answerable from Room: without it, every conflict on a row
+     * this device has pushed to but never re-read has to be settled with no idea what the
+     * server's clock said the last time anyone looked.
+     */
     @Query(
         """
-        UPDATE progress SET isDirty = 0, serverLastUpdateMs = :serverLastUpdateMs
+        UPDATE progress SET serverLastUpdateMs = :serverLastUpdateMs
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :itemId AND episodeKey = :episodeKey
+        """,
+    )
+    suspend fun noteServerStamp(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        episodeKey: String,
+        serverLastUpdateMs: Long,
+    )
+
+    /**
+     * The server accepted a push. Records *what* it accepted, not when.
+     *
+     * `serverLastUpdateMs` is deliberately left alone: the PATCH answers with an empty
+     * body, so the stamp the server just gave the row is unknown here, and writing this
+     * device's clock into a column that holds the server's is the mistake that put a
+     * resumed book behind where it was left.
+     */
+    @Query(
+        """
+        UPDATE progress SET isDirty = 0, pushedTimeSec = :pushedTimeSec, pushedFinished = :pushedFinished
         WHERE serverId = :serverId AND userId = :userId
           AND libraryItemId = :itemId AND episodeKey = :episodeKey
         """,
@@ -1142,7 +1173,8 @@ interface ProgressDao {
         userId: String,
         itemId: String,
         episodeKey: String,
-        serverLastUpdateMs: Long,
+        pushedTimeSec: Double,
+        pushedFinished: Boolean,
     )
 }
 

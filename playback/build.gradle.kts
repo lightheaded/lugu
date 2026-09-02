@@ -60,4 +60,10 @@ dependencies {
     // SimpleBasePlayer needs a Looper to construct, so the player tests run on Robolectric.
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.junit)
+    // A server that answers, for the progress-conflict tests. The offline tests need a
+    // server that cannot be reached and get that from a null URL provider instead.
+    testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.ktor.client.content.negotiation)
+    testImplementation(libs.ktor.serialization.json)
+    testImplementation(libs.kotlinx.serialization.json)
 }

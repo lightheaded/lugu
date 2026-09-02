@@ -369,6 +369,93 @@ class MigrationTest {
         room.close()
     }
 
+    @Test
+    fun `migration 6 to 7 matches the schema Room generates`() {
+        val migrated = databaseAtVersion(6)
+        LuguDatabase.MIGRATION_6_7.migrate(migrated)
+
+        val migratedColumns = columnsOf(migrated, "progress")
+        val migratedIndexes = indexesOf(migrated, "progress").sorted()
+        migrated.close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        room.openHelper.writableDatabase.let { db ->
+            assertThat(migratedColumns).isEqualTo(columnsOf(db, "progress"))
+            assertThat(migratedIndexes).isEqualTo(indexesOf(db, "progress").sorted())
+        }
+        room.close()
+    }
+
+    /**
+     * The upgrade keeps every position and forgets only what it cannot attribute.
+     *
+     * `serverLastUpdateMs` held whichever clock last wrote the row — the server's own
+     * `lastUpdate` after an adoption, and `System.currentTimeMillis()` after a push. No
+     * SQL can tell those apart after the fact, and a wrong answer here is worse than
+     * none: a device timestamp read as a server one is what made a stale server position
+     * win a conflict, which is what put a resumed book thirty seconds behind. So it is
+     * cleared, and 0 reads as "no copy of this row has been seen".
+     *
+     * The position, the duration, the finished flag and the dirty flag are all untouched,
+     * which is the part that matters to a listener: an upgrade must not move anybody's
+     * place in a book.
+     */
+    @Test
+    fun `migration 6 to 7 keeps every position and clears the clock it cannot attribute`() {
+        val db = databaseAtVersion(6)
+        db.execSQL(
+            """
+            INSERT INTO progress (serverId, userId, libraryItemId, episodeKey, currentTimeSec,
+                durationSec, progress, isFinished, lastUpdateMs, startedAtMs,
+                serverLastUpdateMs, isDirty)
+            VALUES ('s', 'u', 'li_1', '', 1234.5, 41400.0, 0.03, 0, 1700000000000, 1699000000000,
+                1700003600000, 1),
+            ('s', 'u', 'li_2', 'ep_1', 60.0, 1800.0, 0.03, 1, 1700000000001, 1699000000001, 0, 0)
+            """.trimIndent(),
+        )
+
+        LuguDatabase.MIGRATION_6_7.migrate(db)
+        // Converging on a re-run matters here as much as in the earlier migrations: an
+        // upgrade retried after a bad one must not fail on a column that already exists.
+        LuguDatabase.MIGRATION_6_7.migrate(db)
+
+        val rows = db.query(
+            """
+            SELECT libraryItemId, currentTimeSec, isFinished, isDirty, lastUpdateMs,
+                   serverLastUpdateMs, pushedTimeSec, pushedFinished
+            FROM progress ORDER BY libraryItemId
+            """.trimIndent(),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        listOf(
+                            cursor.getString(0),
+                            cursor.getDouble(1),
+                            cursor.getInt(2),
+                            cursor.getInt(3),
+                            cursor.getLong(4),
+                            cursor.getLong(5),
+                            cursor.getDouble(6),
+                            cursor.getInt(7),
+                        ),
+                    )
+                }
+            }
+        }
+
+        assertThat(rows).containsExactly(
+            // Position, flags and the local stamp survive; the unattributable clock is 0
+            // and no push is claimed.
+            listOf("li_1", 1234.5, 0, 1, 1700000000000L, 0L, NOTHING_PUSHED_SEC, 0),
+            listOf("li_2", 60.0, 1, 0, 1700000000001L, 0L, NOTHING_PUSHED_SEC, 0),
+        ).inOrder()
+        db.close()
+    }
+
     /**
      * The reason the migration backfills instead of waiting for a sync.
      *

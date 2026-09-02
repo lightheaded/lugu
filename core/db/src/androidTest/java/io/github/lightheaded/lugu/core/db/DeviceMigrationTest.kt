@@ -20,9 +20,10 @@ import org.junit.runner.RunWith
  * passes on the JVM and fails here is an app that will not open after an update, and the
  * user has already installed the new version by the time it happens.
  *
- * This runs the chain the way a real upgrade does — 1 to 2 to 3 to 4 to 5 to 6, one database,
- * each step over the last — against the schemas Room exported at the time, which are the
- * only honest record of what is on a phone that has not been updated in a while. *
+ * This runs the chain the way a real upgrade does — one database, each step over the last,
+ * from version 1 to [LATEST_VERSION] — against the schemas Room exported at the time, which
+ * are the only honest record of what is on a phone that has not been updated in a while.
+ *
  * The method names here are underscored rather than the backticked sentences the JVM suites
  * use. A name with spaces in it needs DEX version 040, which needs minSdk 30; lugu's minSdk
  * is 26, so the test APK will not dex with them.
@@ -148,6 +149,53 @@ class DeviceMigrationTest {
         }
     }
 
+    /**
+     * The upgrade must not move anybody's place in a book.
+     *
+     * Version 7 splits a progress column that held two clocks, and the split clears what
+     * it cannot attribute. Clearing the wrong thing here would be the worst kind of
+     * upgrade bug: silent, and only noticed as a book that starts in the wrong place.
+     * So the position and the flags are asserted on the SQLite a phone has.
+     */
+    @Test
+    fun an_upgraded_install_keeps_every_position_it_already_had() {
+        helper.createDatabase(DB_NAME, 6).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO progress (serverId, userId, libraryItemId, episodeKey, currentTimeSec,
+                    durationSec, progress, isFinished, lastUpdateMs, startedAtMs,
+                    serverLastUpdateMs, isDirty)
+                VALUES ('s', 'u', 'li_1', '', 1234.5, 41400.0, 0.03, 0, 1700000000000,
+                    1699000000000, 1700003600000, 1)
+                """.trimIndent(),
+            )
+        }
+
+        helper.runMigrationsAndValidate(DB_NAME, LATEST_VERSION, true, *MIGRATIONS).use { db ->
+            val rows = db.query(
+                """
+                SELECT currentTimeSec, isDirty, serverLastUpdateMs, pushedTimeSec
+                FROM progress WHERE libraryItemId = 'li_1'
+                """.trimIndent(),
+            ).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(
+                            listOf(
+                                cursor.getDouble(0),
+                                cursor.getInt(1),
+                                cursor.getLong(2),
+                                cursor.getDouble(3),
+                            ),
+                        )
+                    }
+                }
+            }
+            assertThat(rows)
+                .containsExactly(listOf(1234.5, 1, 0L, NOTHING_PUSHED_SEC))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
 
@@ -156,7 +204,7 @@ class DeviceMigrationTest {
          * readable at runtime. A mismatch fails loudly the moment a new migration is added
          * without being listed below, which is the point.
          */
-        const val LATEST_VERSION = 6
+        const val LATEST_VERSION = 7
 
         val MIGRATIONS = arrayOf(
             LuguDatabase.MIGRATION_1_2,
@@ -164,6 +212,7 @@ class DeviceMigrationTest {
             LuguDatabase.MIGRATION_3_4,
             LuguDatabase.MIGRATION_4_5,
             LuguDatabase.MIGRATION_5_6,
+            LuguDatabase.MIGRATION_6_7,
         )
     }
 }
