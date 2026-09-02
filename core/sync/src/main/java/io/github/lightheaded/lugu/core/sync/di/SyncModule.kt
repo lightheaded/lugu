@@ -27,10 +27,12 @@ import io.github.lightheaded.lugu.core.db.OutboxDao
 import io.github.lightheaded.lugu.core.db.PositionHistoryDao
 import io.github.lightheaded.lugu.core.db.ProgressDao
 import io.github.lightheaded.lugu.core.db.QueueDao
+import io.github.lightheaded.lugu.core.db.AccountDataDao
 import io.github.lightheaded.lugu.core.db.ServerDao
 import io.github.lightheaded.lugu.core.db.SessionLedgerDao
 import io.github.lightheaded.lugu.core.sync.ActiveServerUrlProvider
 import io.github.lightheaded.lugu.core.sync.Clock
+import io.github.lightheaded.lugu.core.sync.AccountTokenStore
 import io.github.lightheaded.lugu.core.sync.EncryptedTokenStore
 import io.github.lightheaded.lugu.core.sync.WallClock
 import javax.inject.Singleton
@@ -44,6 +46,8 @@ object DatabaseModule {
     fun database(@ApplicationContext context: Context): LuguDatabase = LuguDatabase.build(context)
 
     @Provides fun serverDao(db: LuguDatabase): ServerDao = db.serverDao()
+
+    @Provides fun accountDataDao(db: LuguDatabase): AccountDataDao = db.accountDataDao()
 
     @Provides fun libraryDao(db: LuguDatabase): LibraryDao = db.libraryDao()
 
@@ -125,6 +129,16 @@ object NetworkModule {
 abstract class SyncBindingsModule {
     @Binds
     abstract fun tokenStore(impl: EncryptedTokenStore): TokenStore
+
+    /**
+     * The same instance under its account-aware type.
+     *
+     * Two bindings and one object: `:core:api` asks for [TokenStore] and means the active
+     * account, and `:core:sync` asks for [AccountTokenStore] when it has to name one. A
+     * second instance would be two mutexes over one encrypted file.
+     */
+    @Binds
+    abstract fun accountTokenStore(impl: EncryptedTokenStore): AccountTokenStore
 
     @Binds
     abstract fun serverUrlProvider(impl: ActiveServerUrlProvider): ServerUrlProvider

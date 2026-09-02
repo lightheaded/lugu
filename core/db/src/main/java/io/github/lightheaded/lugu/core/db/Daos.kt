@@ -31,6 +31,133 @@ interface ServerDao {
 
     @Query("DELETE FROM server WHERE serverId = :serverId")
     suspend fun delete(serverId: String)
+
+    /**
+     * Every account this device has signed into, active one first.
+     *
+     * Ordered so the list does not reshuffle under a tap: the active account stays at the
+     * top, and the rest keep one stable order rather than the order rows happen to be
+     * stored in.
+     */
+    @Query("SELECT * FROM server ORDER BY isActive DESC, username, baseUrl")
+    fun observeAll(): Flow<List<ServerEntity>>
+
+    @Query("SELECT * FROM server ORDER BY isActive DESC, username, baseUrl")
+    suspend fun all(): List<ServerEntity>
+
+    @Query("SELECT * FROM server WHERE serverId = :serverId")
+    suspend fun byId(serverId: String): ServerEntity?
+
+    @Query("UPDATE server SET isActive = 1 WHERE serverId = :serverId")
+    suspend fun markActive(serverId: String)
+
+    /**
+     * Makes one stored account the active one.
+     *
+     * Separate from [setActive] because that one takes a whole row and is what sign-in
+     * uses. Switching must not carry a row from the caller: the stored row is the truth,
+     * and a stale copy of it would undo whatever the connection screen last changed.
+     */
+    @Transaction
+    suspend fun activate(serverId: String) {
+        clearActive()
+        markActive(serverId)
+    }
+}
+
+/**
+ * Deletes one account's mirror, and nothing else's.
+ *
+ * Every user-scoped table has carried `(serverId, userId)` since schema v1 so that
+ * multi-server would be a UI change rather than a migration. This is the other half of
+ * that promise: with two accounts on one device, signing out of one must leave the other
+ * untouched, and it must not leave rows behind either. Orphan rows are invisible — every
+ * query is keyed — and they come back as stale data the next time the same account signs
+ * in, which reads as a sync fault.
+ *
+ * `library_item_fts` is listed explicitly. It is an `@Fts4` table with no `contentEntity`,
+ * so nothing syncs it when `library_item` loses rows; the KDoc on `LibraryItemFtsEntity`
+ * says it is written wherever items are written, and this is one of those places.
+ *
+ * `server` is not deleted here. Whether the account row itself goes depends on why this
+ * was called — a sign-out removes it, a re-sync does not — so that stays with the caller.
+ */
+@Dao
+interface AccountDataDao {
+    @Query("DELETE FROM library WHERE serverId = :serverId")
+    suspend fun deleteLibraries(serverId: String)
+
+    @Query("DELETE FROM library_item WHERE serverId = :serverId")
+    suspend fun deleteItems(serverId: String)
+
+    @Query("DELETE FROM library_item_fts WHERE serverId = :serverId")
+    suspend fun deleteSearchIndex(serverId: String)
+
+    @Query("DELETE FROM item_series WHERE serverId = :serverId")
+    suspend fun deleteSeries(serverId: String)
+
+    @Query("DELETE FROM episode WHERE serverId = :serverId")
+    suspend fun deleteEpisodes(serverId: String)
+
+    @Query("DELETE FROM chapter WHERE serverId = :serverId")
+    suspend fun deleteChapters(serverId: String)
+
+    @Query("DELETE FROM progress WHERE serverId = :serverId")
+    suspend fun deleteProgress(serverId: String)
+
+    @Query("DELETE FROM position_history WHERE serverId = :serverId")
+    suspend fun deletePositionHistory(serverId: String)
+
+    @Query("DELETE FROM session_ledger WHERE serverId = :serverId")
+    suspend fun deleteSessions(serverId: String)
+
+    @Query("DELETE FROM outbox WHERE serverId = :serverId")
+    suspend fun deleteOutbox(serverId: String)
+
+    @Query("DELETE FROM queue WHERE serverId = :serverId")
+    suspend fun deleteQueue(serverId: String)
+
+    @Query("DELETE FROM download WHERE serverId = :serverId")
+    suspend fun deleteDownloadRows(serverId: String)
+
+    @Query("DELETE FROM bookmark WHERE serverId = :serverId")
+    suspend fun deleteBookmarks(serverId: String)
+
+    @Query("DELETE FROM collection WHERE serverId = :serverId")
+    suspend fun deleteCollections(serverId: String)
+
+    @Query("DELETE FROM collection_item WHERE serverId = :serverId")
+    suspend fun deleteCollectionItems(serverId: String)
+
+    /**
+     * All of it, in one transaction.
+     *
+     * One transaction so a purge interrupted halfway cannot leave an account half deleted,
+     * which is the state that reads as corruption rather than as a sign-out.
+     *
+     * **The downloaded bytes are not deleted here.** They belong to the download manager,
+     * which owns the files and the storage cap. Deleting the rows and leaving the files
+     * would make the bytes unreachable and uncountable, so the caller must clear the cache
+     * for this account before it calls this.
+     */
+    @Transaction
+    suspend fun purge(serverId: String) {
+        deleteSearchIndex(serverId)
+        deleteItems(serverId)
+        deleteLibraries(serverId)
+        deleteSeries(serverId)
+        deleteEpisodes(serverId)
+        deleteChapters(serverId)
+        deleteProgress(serverId)
+        deletePositionHistory(serverId)
+        deleteSessions(serverId)
+        deleteOutbox(serverId)
+        deleteQueue(serverId)
+        deleteDownloadRows(serverId)
+        deleteBookmarks(serverId)
+        deleteCollections(serverId)
+        deleteCollectionItems(serverId)
+    }
 }
 
 @Dao
@@ -881,6 +1008,16 @@ interface DownloadDao {
         """,
     )
     suspend fun get(serverId: String, userId: String, itemId: String, episodeKey: String): DownloadEntity?
+
+    /**
+     * Every download row for one account, whatever state it is in.
+     *
+     * Unfiltered on purpose. Signing out of an account has to reclaim the bytes of a
+     * download that is queued or paused just as much as a finished one, and a row waiting
+     * on Wi-Fi is the easiest kind to leave behind.
+     */
+    @Query("SELECT * FROM download WHERE serverId = :serverId AND userId = :userId")
+    suspend fun allForAccount(serverId: String, userId: String): List<DownloadEntity>
 
     /**
      * Looks a row up without knowing the account.

@@ -130,7 +130,8 @@ class StatsScreenshotTest {
     /** Built through the real calculator, so the picture and the arithmetic cannot drift apart. */
     private fun summarise(points: List<SessionPoint>, titles: List<TitleTotal>): ListeningStats {
         val zone = ZoneId.of(ZONE)
-        val dayOf = LocalDayIndex { LocalDate.ofInstant(Instant.ofEpochMilli(it), zone).toEpochDay() }
+        // The same mapping StatsRepository uses, including the API 26 spelling of it.
+        val dayOf = LocalDayIndex { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() }
         return ListeningStatsCalculator.summarise(
             points = points,
             titles = titles,

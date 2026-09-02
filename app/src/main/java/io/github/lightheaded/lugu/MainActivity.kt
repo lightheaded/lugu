@@ -46,6 +46,7 @@ import io.github.lightheaded.lugu.feature.library.QueueScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
+import io.github.lightheaded.lugu.feature.settings.AccountsScreen
 import io.github.lightheaded.lugu.feature.settings.ConnectionScreen
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
@@ -180,6 +181,7 @@ private object Routes {
     const val LICENSES = "licenses"
     const val PLAYBACK_RECORD = "playback-record"
     const val STATS = "stats"
+    const val ACCOUNTS = "accounts"
     const val FEEDBACK = "feedback"
     const val CONNECTION = "connection"
     const val COLLECTIONS = "collections"
@@ -489,6 +491,7 @@ private fun LuguApp(
                     onOpenLicenses = { navController.navigate(Routes.LICENSES) },
                     onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
                     onOpenStats = { navController.navigate(Routes.STATS) },
+                    onOpenAccounts = { navController.navigate(Routes.ACCOUNTS) },
                     onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
                     onOpenConnection = { navController.navigate(Routes.CONNECTION) },
                 )
@@ -519,6 +522,16 @@ private fun LuguApp(
                 PlaybackRecordScreen(
                     onBack = { navController.popBackStack() },
                     onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
+                )
+            }
+
+            composable(Routes.ACCOUNTS) {
+                AccountsScreen(
+                    onBack = { navController.popBackStack() },
+                    // Adding an account reuses the sign-in screen. On success it lands on
+                    // Home with the new account active and the stack cleared, which is
+                    // exactly what adding an account should do.
+                    onAddAccount = { navController.navigate(Routes.LOGIN) },
                 )
             }
 

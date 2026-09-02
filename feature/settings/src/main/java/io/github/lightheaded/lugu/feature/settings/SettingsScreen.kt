@@ -100,6 +100,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     onOpenPlaybackRecord: () -> Unit = {},
     onOpenStats: () -> Unit = {},
+    onOpenAccounts: () -> Unit = {},
     onOpenFeedback: () -> Unit = {},
     onOpenConnection: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -112,6 +113,7 @@ fun SettingsScreen(
         onOpenLicenses = onOpenLicenses,
         onOpenPlaybackRecord = onOpenPlaybackRecord,
         onOpenStats = onOpenStats,
+        onOpenAccounts = onOpenAccounts,
         onOpenFeedback = onOpenFeedback,
         onOpenConnection = onOpenConnection,
     )
@@ -185,6 +187,7 @@ private fun settingEntries(
     onOpenLicenses: () -> Unit,
     onOpenPlaybackRecord: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenAccounts: () -> Unit,
     onOpenFeedback: () -> Unit,
     onOpenConnection: () -> Unit,
 ): List<SettingEntry> {
@@ -1177,6 +1180,22 @@ private fun settingEntries(
             },
         )
 
+        add(
+            SettingEntry(
+                id = "accounts",
+                category = "Account",
+                title = "Accounts",
+                keywords = "account accounts server servers switch add second another " +
+                    "multiple user sign in out login logout profile",
+            ) {
+                LinkRow(
+                    title = "Accounts",
+                    subtitle = "Add a second server, and switch between them. Each keeps " +
+                        "its own library, progress and downloads",
+                    onClick = onOpenAccounts,
+                )
+            },
+        )
         add(
             SettingEntry(
                 id = "stats",

@@ -32,6 +32,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 abstract class LuguDatabase : RoomDatabase() {
     abstract fun serverDao(): ServerDao
 
+    /** Deletes one account's mirror. See [AccountDataDao]. */
+    abstract fun accountDataDao(): AccountDataDao
+
     abstract fun libraryDao(): LibraryDao
 
     abstract fun libraryItemDao(): LibraryItemDao

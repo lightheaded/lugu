@@ -3,7 +3,7 @@ package io.github.lightheaded.lugu.core.sync
 import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.AuthExpiredException
 import io.github.lightheaded.lugu.core.api.ServerUrl
-import io.github.lightheaded.lugu.core.api.TokenStore
+import io.github.lightheaded.lugu.core.db.AccountDataDao
 import io.github.lightheaded.lugu.core.db.ServerDao
 import io.github.lightheaded.lugu.core.db.ServerEntity
 import javax.inject.Inject
@@ -22,11 +22,19 @@ data class ActiveAccount(
     val lanBaseUrl: String? = null,
 )
 
+/** One stored account, and whether it can still reach its server without a new password. */
+data class StoredAccount(
+    val account: ActiveAccount,
+    val isActive: Boolean,
+    val isSignedIn: Boolean,
+)
+
 @Singleton
 class AuthRepository @Inject constructor(
     private val client: AbsClient,
     private val serverDao: ServerDao,
-    private val tokenStore: TokenStore,
+    private val accountDataDao: AccountDataDao,
+    private val tokenStore: AccountTokenStore,
     private val progressRepository: ProgressRepository,
     private val serverUrlProvider: ActiveServerUrlProvider,
 ) {
@@ -52,11 +60,17 @@ class AuthRepository @Inject constructor(
         val status = client.status(url)
         val result = client.login(url, username, password)
 
-        tokenStore.save(result.tokens)
         val serverId = "${url}#${result.userId}"
+        // Stored under the account it belongs to, before that account is made active.
+        // `save` resolves the active account at write time, and at this moment the active
+        // account is either nothing at all or the one being signed in *beside*, so it
+        // would put these tokens on the wrong account. See EncryptedTokenStore.saveFor.
+        tokenStore.saveFor(serverId, result.tokens)
         // Signing in again on the same account must not throw away a second address that
         // was already configured: a re-login after an expired refresh token is routine.
-        val existingLan = serverDao.active()?.takeIf { it.serverId == serverId }?.lanBaseUrl
+        // Looked up by id and not through `active()`, because with more than one account
+        // the one being signed into is usually not the active one.
+        val existingLan = serverDao.byId(serverId)?.lanBaseUrl
         val server = ServerEntity(
             // One row per (server, user): signing in as a different user on the same
             // server is a different account, not an overwrite. Derived from the address
@@ -101,14 +115,79 @@ class AuthRepository @Inject constructor(
     suspend fun logout() {
         val active = serverDao.active()
         runCatching { client.send("/logout", io.ktor.http.HttpMethod.Post) }
-        tokenStore.clear()
-        active?.let { serverDao.delete(it.serverId) }
+        active?.let {
+            tokenStore.clearFor(it.serverId)
+            accountDataDao.purge(it.serverId)
+            serverDao.delete(it.serverId)
+        }
         // The custom headers deliberately survive a sign-out. They are a property of the
         // address rather than of the account, and behind an identity-aware proxy they are
         // what makes signing back in possible at all — clearing them here would strand
         // somebody on a login screen that cannot reach the server. The connection screen
         // deletes them explicitly instead, which is a decision rather than a side effect.
         serverUrlProvider.forgetAddressDecision()
+    }
+
+    /**
+     * Every account on this device, active one first.
+     *
+     * [StoredAccount.isSignedIn] is read from the token store rather than assumed from the
+     * row. A row with no tokens is a real state: the refresh token expires after thirty
+     * days, and encrypted storage can be rebuilt by a device restore without the row
+     * going anywhere. An accounts list that showed such a row as signed in would send
+     * somebody to a library that cannot load.
+     */
+    fun observeAccounts(): Flow<List<StoredAccount>> = serverDao.observeAll().map { rows ->
+        rows.map { server ->
+            StoredAccount(
+                account = server.toAccount(),
+                isActive = server.isActive,
+                isSignedIn = tokenStore.tokensFor(server.serverId) != null,
+            )
+        }
+    }
+
+    /**
+     * Makes a stored account the active one.
+     *
+     * Nothing is fetched and nothing is deleted. Every user-scoped row is keyed by server
+     * id, so the whole UI follows the active row on its own — which is the change schema
+     * v1 was shaped for. A switch to an account whose sign-in has lapsed still succeeds:
+     * it lands on that account with a message asking for the password, which is a better
+     * answer than refusing to switch and leaving no way to fix it.
+     */
+    suspend fun switchTo(serverId: String): Result<ActiveAccount> = runCatching {
+        val server = serverDao.byId(serverId) ?: error("That account is not on this device")
+        serverDao.activate(serverId)
+        // The remembered address decision belonged to the previous account.
+        serverUrlProvider.forgetAddressDecision()
+        server.toAccount()
+    }
+
+    /**
+     * Signs out of one account and leaves the others alone.
+     *
+     * **The caller must remove that account's downloads first**, through
+     * `DownloadRepository.removeAllFor`. `:core:sync` cannot reach `:core:download`, and
+     * inverting that dependency for a sign-out would be the wrong repair. Bytes left
+     * behind here are unreachable and still counted against the storage cap, so the
+     * accounts screen does that step before this one.
+     *
+     * Signing out of the active account leaves no account active. That is deliberate: the
+     * alternative is to promote another one silently, and a person who signs out expects
+     * to be asked where to go next rather than to land in a different library.
+     */
+    suspend fun signOutOf(serverId: String): Result<Unit> = runCatching {
+        val server = serverDao.byId(serverId) ?: return@runCatching
+        // Only tell the server when it is the one this client is pointed at. A logout call
+        // aimed at the active account would end the wrong session.
+        if (server.isActive) {
+            runCatching { client.send("/logout", io.ktor.http.HttpMethod.Post) }
+        }
+        tokenStore.clearFor(serverId)
+        accountDataDao.purge(serverId)
+        serverDao.delete(serverId)
+        if (server.isActive) serverUrlProvider.forgetAddressDecision()
     }
 
     /** True when we hold credentials that still stand a chance of working. */

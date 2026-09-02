@@ -22,6 +22,7 @@ import io.github.lightheaded.lugu.core.api.StaticServerUrlProvider
 import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.sync.ActiveServerUrlProvider
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.InMemoryAccountTokens
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
@@ -91,7 +92,8 @@ class SettingsScreenshotTest {
             authRepository = AuthRepository(
                 client = client,
                 serverDao = database.serverDao(),
-                tokenStore = InMemoryTokenStore(),
+                accountDataDao = database.accountDataDao(),
+                tokenStore = InMemoryAccountTokens(),
                 progressRepository = progressRepository,
                 serverUrlProvider = ActiveServerUrlProvider(
                     serverDao = database.serverDao(),

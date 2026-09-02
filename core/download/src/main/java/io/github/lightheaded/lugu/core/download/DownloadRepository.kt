@@ -428,6 +428,27 @@ class DownloadRepository @Inject constructor(
         return swept
     }
 
+    /**
+     * Removes every download of one account, bytes and rows together.
+     *
+     * For signing out of an account while another stays signed in. It goes through the
+     * same [removeRow] as a single delete, so the engine's bytes, the row and the cover
+     * all go the way they always do — a purge that used its own deletion path would be a
+     * second thing to keep correct.
+     *
+     * No undo, and no deferral. The undo window exists so a mistaken tap on one book can
+     * be taken back; a sign-out is confirmed before it starts, and holding bytes for an
+     * account that no longer exists on the device would leave them unreachable and
+     * uncountable against the storage cap.
+     *
+     * Returns how many rows went, so the screen can say what it reclaimed.
+     */
+    suspend fun removeAllFor(serverId: String, userId: String): Int {
+        val rows = downloadDao.allForAccount(serverId, userId)
+        rows.forEach { removeRow(it) }
+        return rows.size
+    }
+
     /** The actual deletion: the engine's bytes for every track, then the row, then the cover. */
     private suspend fun removeRow(row: DownloadEntity) {
         val manifest = runCatching {

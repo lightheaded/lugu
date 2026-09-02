@@ -7,7 +7,6 @@ import io.github.lightheaded.lugu.core.model.LocalDayIndex
 import io.github.lightheaded.lugu.core.model.SessionPoint
 import io.github.lightheaded.lugu.core.model.TitleTotal
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -65,8 +64,15 @@ class StatsRepository @Inject constructor(
         )
     }
 
+    /**
+     * `Instant.atZone().toLocalDate()` and not `LocalDate.ofInstant`.
+     *
+     * The two say the same thing, and the second one is API 34. `minSdk` is 26, so it
+     * would have crashed on every device below Android 14 — caught by lint, which is why
+     * a lint error in this project is a work item rather than noise.
+     */
     private fun dayOf(instantMs: Long, zone: ZoneId): Long =
-        LocalDate.ofInstant(Instant.ofEpochMilli(instantMs), zone).toEpochDay()
+        Instant.ofEpochMilli(instantMs).atZone(zone).toLocalDate().toEpochDay()
 
     private companion object {
         /**

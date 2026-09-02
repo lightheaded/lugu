@@ -76,55 +76,211 @@ import kotlinx.coroutines.sync.withLock
  * with a fallback instead, and reports the loss to [CredentialLossReport] so the login
  * screen can say why it asks.
  */
+/**
+ * A [TokenStore] that can name the account a sign-in belongs to.
+ *
+ * `:core:api` deliberately knows nothing about servers, so [TokenStore] has no account in
+ * its contract and its three methods mean "the active account". Everything that has to
+ * reach a *particular* account — sign-in, which stores tokens before that account is
+ * active, and the accounts screen, which asks whether each stored account can still reach
+ * its server — needs this instead.
+ *
+ * An interface rather than the concrete class because the concrete class is encrypted
+ * storage: it opens an `AndroidKeyStore` that Robolectric does not have, so anything
+ * depending on the class itself cannot be tested off a device. See [InMemoryAccountTokens].
+ */
+interface AccountTokenStore : TokenStore {
+
+    /** One account's tokens, whether or not it is the active one. */
+    suspend fun tokensFor(serverId: String): AuthTokens?
+
+    /** Writes one account's tokens by name. Sign-in must use this rather than `save`. */
+    suspend fun saveFor(serverId: String, tokens: AuthTokens)
+
+    /** Forgets one account's sign-in and leaves every other account signed in. */
+    suspend fun clearFor(serverId: String)
+}
+
+/**
+ * [AccountTokenStore] in memory, for tests and for screens photographed without a device.
+ *
+ * It keeps the same shape as the real one — `save` and `clear` act on whichever account
+ * the caller last named — but it holds nothing at rest and encrypts nothing.
+ */
+class InMemoryAccountTokens(private val activeServerId: String? = null) : AccountTokenStore {
+
+    private val slots = mutableMapOf<String, AuthTokens>()
+
+    override suspend fun tokens(): AuthTokens? = activeServerId?.let { slots[it] }
+
+    override suspend fun tokensFor(serverId: String): AuthTokens? = slots[serverId]
+
+    override suspend fun save(tokens: AuthTokens) {
+        activeServerId?.let { slots[it] = tokens }
+    }
+
+    override suspend fun saveFor(serverId: String, tokens: AuthTokens) {
+        slots[serverId] = tokens
+    }
+
+    override suspend fun clear() {
+        activeServerId?.let { slots.remove(it) }
+    }
+
+    override suspend fun clearFor(serverId: String) {
+        slots.remove(serverId)
+    }
+}
+
 @Singleton
 class EncryptedTokenStore @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val serverDao: ServerDao,
     losses: CredentialLossReport = CredentialLossReport(),
-) : TokenStore {
+) : AccountTokenStore {
 
     private val mutex = Mutex()
 
     private val prefs = SecurePrefs(context, FILE_NAME, CredentialKind.Tokens, losses)
 
     /**
-     * The stored tokens, or null.
+     * The active account's tokens, or null.
      *
-     * Null covers two different states — never signed in, and stored but unreadable — and
-     * that is deliberate: every caller treats both as "ask for a password". Which of the
-     * two it was comes from [CredentialLossReport], not from here.
+     * Null covers three states — never signed in, no account active, and stored but
+     * unreadable — and that is deliberate: every caller treats all three as "ask for a
+     * password". Which of them it was comes from [CredentialLossReport] and from
+     * [ServerDao], not from here.
      */
-    override suspend fun tokens(): AuthTokens? = mutex.withLock {
-        prefs.read<AuthTokens?>(null) { store ->
-            val access = store.getString(KEY_ACCESS, null)
-            if (access == null) {
-                null
-            } else {
-                AuthTokens(
-                    accessToken = access,
-                    refreshToken = store.getString(KEY_REFRESH, null),
-                    accessTokenExpiresAtMs = store.getLong(KEY_EXPIRES, 0L),
-                )
-            }
-        }
+    override suspend fun tokens(): AuthTokens? {
+        val serverId = serverDao.active()?.serverId ?: return null
+        return tokensFor(serverId)
     }
 
-    override suspend fun save(tokens: AuthTokens) = mutex.withLock {
+    /**
+     * One account's tokens, whether or not it is the active one.
+     *
+     * Needed by the accounts screen, which has to say which of several accounts still
+     * holds a usable sign-in without switching to each of them to find out.
+     */
+    override suspend fun tokensFor(serverId: String): AuthTokens? = mutex.withLock {
+        readWhileLocked(serverId) ?: adoptLegacyWhileLocked(serverId)
+    }
+
+    /**
+     * Writes the active account's tokens.
+     *
+     * **A refresh that lands during an account switch writes to the wrong account.** The
+     * active account is resolved here, at write time, and a token refresh is a read
+     * followed by a write. If the switch happens between the two, account A's tokens go
+     * into account B's slot. The cost is bounded: B asks for a password again, A keeps
+     * working, and nothing crosses between them in Room, where every row is keyed by
+     * server id. Nothing is lost and nothing leaks.
+     *
+     * It is not fixed here because the fix is not here. The request would have to carry
+     * the account it belongs to, which is a `:core:api` change — [TokenStore] has no
+     * account in its contract, by design, because `:core:api` knows nothing about servers.
+     * Sign-in uses [saveFor] and never this, so the only writer that can race is the
+     * refresh, and only in the instant a person taps a different account.
+     */
+    override suspend fun save(tokens: AuthTokens) {
+        val serverId = serverDao.active()?.serverId ?: return
+        saveFor(serverId, tokens)
+    }
+
+    /**
+     * Writes one account's tokens by name.
+     *
+     * Sign-in must use this rather than [save]. At the moment a first sign-in stores its
+     * tokens there is no active account yet, and at the moment a second sign-in stores
+     * its tokens the active account is still the previous one.
+     */
+    override suspend fun saveFor(serverId: String, tokens: AuthTokens) = mutex.withLock {
         prefs.write {
-            putString(KEY_ACCESS, tokens.accessToken)
-            putString(KEY_REFRESH, tokens.refreshToken)
-            putLong(KEY_EXPIRES, tokens.accessTokenExpiresAtMs)
+            putString(serverId.key(KEY_ACCESS), tokens.accessToken)
+            putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
+            putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
         }
         Unit
     }
 
-    override suspend fun clear() = mutex.withLock {
+    override suspend fun clear() {
+        val serverId = serverDao.active()?.serverId ?: return
+        clearFor(serverId)
+    }
+
+    /**
+     * Forgets one account's sign-in and leaves every other account signed in.
+     *
+     * The legacy keys go too. They belong to whichever account was the only one before
+     * this store learned to hold several, so leaving them would let a signed-out account
+     * be adopted back by [adoptLegacyWhileLocked] on the next launch.
+     */
+    override suspend fun clearFor(serverId: String) = mutex.withLock {
         prefs.write {
+            remove(serverId.key(KEY_ACCESS))
+            remove(serverId.key(KEY_REFRESH))
+            remove(serverId.key(KEY_EXPIRES))
             remove(KEY_ACCESS)
             remove(KEY_REFRESH)
             remove(KEY_EXPIRES)
         }
         Unit
     }
+
+    private fun readWhileLocked(serverId: String): AuthTokens? =
+        prefs.read<AuthTokens?>(null) { store ->
+            val access = store.getString(serverId.key(KEY_ACCESS), null) ?: return@read null
+            AuthTokens(
+                accessToken = access,
+                refreshToken = store.getString(serverId.key(KEY_REFRESH), null),
+                accessTokenExpiresAtMs = store.getLong(serverId.key(KEY_EXPIRES), 0L),
+            )
+        }
+
+    /**
+     * Moves an install that predates per-account storage onto its account's keys.
+     *
+     * This is the upgrade path, and it is the one thing in this class that must not go
+     * wrong: getting it wrong signs somebody out on update, which is exactly the failure
+     * this class's own KDoc warns about. So the old value is read, written under the new
+     * key, and only then removed — and the removal is skipped when the write did not land,
+     * because a session kept under an old key beats a session deleted from under both.
+     *
+     * It runs at most once per install. After it, there are no legacy keys to find.
+     */
+    private fun adoptLegacyWhileLocked(serverId: String): AuthTokens? = LegacyTokenAdoption.adopt(
+        legacy = prefs.read<AuthTokens?>(null) { store ->
+            val access = store.getString(KEY_ACCESS, null) ?: return@read null
+            AuthTokens(
+                accessToken = access,
+                refreshToken = store.getString(KEY_REFRESH, null),
+                accessTokenExpiresAtMs = store.getLong(KEY_EXPIRES, 0L),
+            )
+        },
+        write = { tokens ->
+            prefs.write {
+                putString(serverId.key(KEY_ACCESS), tokens.accessToken)
+                putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
+                putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
+            }
+        },
+        removeLegacy = {
+            prefs.write {
+                remove(KEY_ACCESS)
+                remove(KEY_REFRESH)
+                remove(KEY_EXPIRES)
+            }
+        },
+    )
+
+    /**
+     * One account's name for a stored value.
+     *
+     * The server id already reads `<address>#<user id>`, so it is unique on its own and
+     * needs no hashing. The separator only has to be something an id cannot contain a
+     * lone copy of, and a key in this file is encrypted anyway.
+     */
+    private fun String.key(name: String): String = "$name@@$this"
 
     /**
      * Stable per-install id, reported to the server as the device identity so its
@@ -147,6 +303,35 @@ class EncryptedTokenStore @Inject constructor(
         const val KEY_REFRESH = "refresh_token"
         const val KEY_EXPIRES = "access_expires_at"
         const val KEY_DEVICE_ID = "device_id"
+    }
+}
+
+/**
+ * Moves one stored value from the key an older version wrote to the key this one reads.
+ *
+ * Pure on purpose, and for the same reason [CredentialStoreRepair] is: the storage needs a
+ * device and an `AndroidKeyStore` that Robolectric does not have, but the *order of the
+ * three steps* does not, and the order is the part that can be wrong. Getting it wrong
+ * signs somebody out on an app update, which is the failure `EncryptedTokenStore`'s own
+ * KDoc names as worse than the deprecation it lives with.
+ *
+ * The rule in one line: **the old copy goes only after the new copy has landed.** A write
+ * that fails leaves the value under the old key, where the next launch will find it again.
+ * The opposite order loses a thirty-day session to a full disk.
+ */
+internal object LegacyTokenAdoption {
+
+    /**
+     * @param legacy what the old key holds, or null when there is nothing to move.
+     * @param write stores it under the new key. False means nothing was written.
+     * @param removeLegacy deletes the old key. Called only after [write] returns true.
+     * @return [legacy] either way, because a value that could not be moved is still the
+     *   value in force. Refusing to return it would sign somebody out to tidy a key.
+     */
+    fun <T> adopt(legacy: T?, write: (T) -> Boolean, removeLegacy: () -> Unit): T? {
+        if (legacy == null) return null
+        if (write(legacy)) removeLegacy()
+        return legacy
     }
 }
 
