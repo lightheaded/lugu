@@ -1722,3 +1722,103 @@ methods of a service that needs a device. The seam is named in the backlog.
 screen rather than as its parts, and the same extraction closes the same gap everywhere else.
 
 The car, a signed release build and a real tunnel still owe answers that no test can give.
+
+## 2026-09-02 — two clocks in one comparison, and a speed nothing read
+
+Three items: the two process-death races left open on 31 August, and a report from Tom
+that a remembered speed is sometimes forgotten after an app update. Two of the three came
+back to a fault of the same shape — a value that was right, read by something that asked
+the wrong question of it.
+
+### The book that resumed thirty seconds behind
+
+The guess written down on 31 August was that a position is published before it is written,
+the way the speed race worked. That was wrong, and no timer window explains thirty seconds.
+
+`ProgressEntity.lastUpdateMs` is documented as the server's `lastUpdate`. `record` wrote
+`System.currentTimeMillis()` into it on every local tick. So the column held a server
+timestamp on an adopted row and a device timestamp on a local one, and
+`ProgressConflictResolver` decided every conflict with `server.lastUpdateMs >
+local.lastUpdateMs`. The answer to that comparison is clock skew, not who listened last.
+
+With the server's clock ahead of the emulator's, a stale server position won every
+conflict. The harness left the book at 49.9s. The outbox had last flushed 19.8s. So
+pull-before-push read the server, found 19.8s stamped later than anything local, and
+adopted lugu's own echo. That is "expected to be at least: 29885, but was 19829".
+
+The rule now asks a question one clock can answer: did the server's copy come from
+somewhere other than here. It is settled two ways, and neither leaves the server's clock.
+The server's revision differs from the one this device last read. Or the position is not
+the one the server accepted from here.
+
+The second half is not redundant, and the reason is a property of the API.
+`PATCH /api/me/progress/:id` answers with an empty body, so a push never learns the stamp
+it earned. A stamp that always looks behind cannot mean "somebody else wrote this". What a
+push does tell us is the position the server now holds, and that is enough to recognise
+our own copy coming back. Two new columns hold it.
+
+**Three more symptoms had the same cause, and each looked like its own bug.** The push
+guard compared the same two clocks, and it ran in the branch that had just decided local
+wins — so on a device running behind the server, lugu refused every push it had decided to
+make, and progress silently stopped syncing outward. The login sweep compared them too, so
+a week of offline listening went to whichever machine had the faster clock. And the
+finished-download sweep reads the same column against a device-clock cutoff, which errs
+towards deleting late rather than early, so that one is a note rather than a fix.
+
+One decision inside the fix is worth keeping, because the obvious version of it is a
+regression. `lastUpdateMs` is left holding the listening time, from whichever device did
+the listening. Stamping an adopted row with this device's clock reads as tidier and would
+flatten the Continue shelf every time a login sweep re-read the server, because every row
+would get the same number. Two clocks meeting in an ordering key is tolerable. Two clocks
+meeting in a conflict key is the defect. The column now says which it is.
+
+### The speed that was never lost
+
+Tom reported that after an update the speed is sometimes forgotten. It was in DataStore
+the whole time. Nothing read it.
+
+`applyRememberedSpeed` carries a doc comment naming the three ways an item reaches the
+player. There were five. The two added since never asked what speed the item should be at,
+so each took whatever the player happened to hold, which on a service that has just
+started is 1x.
+
+An app update is a force stop, so the next open is a fresh process. With "Always ready to
+resume" on, arming loads the last book into a player holding no speed, and the press that
+follows plays it at 1x. That is the report, and the setting is the "sometimes".
+
+The other path was the end-of-book continuation, where the next volume in a series arrived
+at 1x for the same reason. A test now sets the speed on volume **two** while volume one is
+still playing, so the number it asserts cannot have been inherited from the player.
+
+The lesson is about the comment rather than the code. A doc comment that enumerates its
+callers is a comment that goes stale silently, and this one went stale twice.
+
+### The cued volume that never loaded, still unattributed
+
+The third item is not solved, and the run that found it cannot be re-read: CI keeps no
+logcat from the instrumented legs. What the reading found is why there was nothing to
+read.
+
+`continueToNext` recorded nothing unless it succeeded. A book with nothing after it, a
+resolve that returned null and a resolve that threw all left the same silence. From
+outside, a queue that stops looks exactly like a queue that was empty. And it had one
+attempt: the decision comes from Room, but the URLs need a play session, and the moment
+this runs is the moment a phone is least likely to have a good connection. A book ends
+when it ends, tunnel or not.
+
+Both are fixed — every outcome is now a diary line that says which of the three it was,
+and three attempts over about six seconds, abandoned the moment the listener starts
+something else. The row stays open, because a fix that makes the next occurrence legible
+is not the same as a diagnosis.
+
+### Next
+
+CI keeps no logcat from the instrumented legs. That is the single thing that would have
+made this a diagnosis rather than two fixes and a note, and it is cheap.
+
+The arming path's speed is still uncovered by any test, and it needs a device: the setting,
+a process death and an app in the foreground cannot be staged together here.
+
+The baseline recording route is unblocked. `origin/main` now carries
+`record-baselines.yml`, so the download control that still reads "Downloaded" can be
+fixed and photographed.
