@@ -1194,7 +1194,78 @@ interface SessionLedgerDao {
 
     @Query("UPDATE session_ledger SET isUploaded = 1 WHERE id IN (:ids)")
     suspend fun markUploaded(ids: List<String>)
+
+    /**
+     * Every session, reduced to a start and a length.
+     *
+     * Unbounded on purpose, and two numeric columns wide for the same reason. The stats
+     * screen needs day boundaries and streaks, and a streak of two hundred days cannot be
+     * found in a window of thirty. What it must not do is load a year of titles to count
+     * days, so the strings stay out of this query and come from the grouped ones below.
+     *
+     * A heavy year is a few thousand rows of sixteen bytes. If that ever stops being true,
+     * the answer is to prune the ledger — see docs/BACKLOG.md — and not to narrow this.
+     */
+    @Query(
+        """
+        SELECT startedAtMs, timeListeningSec FROM session_ledger
+        WHERE serverId = :serverId AND userId = :userId
+        ORDER BY startedAtMs
+        """,
+    )
+    fun observeSessionPoints(serverId: String, userId: String): Flow<List<SessionPointRow>>
+
+    /**
+     * Listening time per item, most listened first.
+     *
+     * Grouped by the library item and not by the session, so a podcast collects its
+     * episodes under the show. The title and the author are taken with `MAX` because every
+     * row of one item carries the same pair, and an aggregate query has to name a rule.
+     */
+    @Query(
+        """
+        SELECT libraryItemId,
+               MAX(displayTitle) AS title,
+               MAX(displayAuthor) AS author,
+               SUM(timeListeningSec) AS secondsListened
+        FROM session_ledger
+        WHERE serverId = :serverId AND userId = :userId AND timeListeningSec > 0
+        GROUP BY libraryItemId
+        ORDER BY secondsListened DESC
+        LIMIT :limit
+        """,
+    )
+    fun observeTitleTotals(serverId: String, userId: String, limit: Int): Flow<List<TitleTotalRow>>
+
+    /** Listening time per media type, so books and podcasts can be told apart. */
+    @Query(
+        """
+        SELECT LOWER(mediaType) AS mediaType, SUM(timeListeningSec) AS secondsListened
+        FROM session_ledger
+        WHERE serverId = :serverId AND userId = :userId
+        GROUP BY LOWER(mediaType)
+        """,
+    )
+    fun observeMediaTypeTotals(serverId: String, userId: String): Flow<List<MediaTypeTotalRow>>
 }
+
+/** Two columns of one session: when it started, and how much was heard in it. */
+data class SessionPointRow(
+    val startedAtMs: Long,
+    val timeListeningSec: Double,
+)
+
+data class TitleTotalRow(
+    val libraryItemId: String,
+    val title: String,
+    val author: String,
+    val secondsListened: Double,
+)
+
+data class MediaTypeTotalRow(
+    val mediaType: String,
+    val secondsListened: Double,
+)
 
 @Dao
 interface OutboxDao {
