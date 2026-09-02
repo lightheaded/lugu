@@ -59,7 +59,19 @@ carries this category for `io.socket` and `AbsPodcasts`.
 
 | Item | Proven here | Needs hardware or a service |
 | --- | --- | --- |
-| Stats | The aggregation, the day boundaries and the screen | Nothing |
-| Multi-server | Token isolation, the switch, and the sign-out of one account | Two real servers |
-| OIDC | The URL construction, the state check and the callback parse | A provider, and a server configured to use it |
-| Glance widget | The state mapping | A launcher, and a real widget host |
+| Stats | 19 tests over the arithmetic and the calendar, plus four recorded pictures of the real screen | Nothing |
+| Multi-server | The upgrade path for the token store, the purge across fifteen tables, and four pictures of the real screen | Two real servers, and one account whose sign-in has actually lapsed |
+| OIDC | 22 tests over everything the server refuses on, the redirect not being followed, and the cookies going back | A provider, a server configured to use it, and `redirect_uri` on the server's list |
+| Glance widget | Five tests over the two numbers it draws, and that its receiver reaches the merged manifest | A launcher. Glance renders through `RemoteViews`, which has no host outside one |
+
+## What was built, and what it cost
+
+Written after the fact, because three of the five turned out to hide something.
+
+| Item | The thing that was not in the plan |
+| --- | --- |
+| Stats | The ledger's own arithmetic was the easy half. Looking at the first recorded picture found three faults no assertion would have caught, and lint found a fourth that would have crashed every device below Android 14 |
+| Multi-server | Not only a UI change, which is what schema v1 promised. The token store held one set of tokens in one file, so it needed an upgrade path — and that path is the one thing here that signs somebody out if it is wrong |
+| OIDC | lugu has to make the first request itself and not follow the redirect. Doing it the obvious way, from the browser, cannot work: the final call needs cookies a Custom Tab keeps out of reach |
+| Widget | Nothing. It is the only one of the four that was the size it looked |
+| Wear and TV | The spike is in `research/06-wear-and-tv-spike.md`. Wear is worth doing and not yet; TV is declined with the reason |

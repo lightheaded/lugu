@@ -1723,6 +1723,132 @@ screen rather than as its parts, and the same extraction closes the same gap eve
 
 The car, a signed release build and a real tunnel still owe answers that no test can give.
 
+## 2026-09-03 — M4, four of six, and the one that a licence refuses
+
+M4 was summarised in `EXECUTION-PLAN.md` with "re-plan on arrival". The plan is
+[M4-PLAN.md](M4-PLAN.md). Four items are built, one is refused by the project's own
+locked decisions, and one is a spike.
+
+### Chromecast is not built, and the reason is a licence
+
+`androidx.media3:media3-cast:1.11.0` declares a hard dependency on
+`com.google.android.gms:play-services-cast-framework`. That was read from the POM rather
+than assumed. The artifact is proprietary, and two locked rules refuse it: `AGENTS.md`
+requires every dependency to carry a GPL-compatible licence, and M5 wants F-Droid
+reproducible builds. A product flavor does not fix it, because a `play` flavor is still a
+GPL-3.0 app linked against a proprietary blob and would still be the variant on the Play
+Store. This needs a decision from Tom rather than code, and the rejected routes are written
+down so the obvious re-attempt does not happen.
+
+### The ledger got its first reader
+
+`SessionLedgerRepository` had recorded every session since 15 August and nothing had ever
+read it. `ListeningStatsCalculator` holds the part that is easy to get wrong and hard to
+see wrong — day boundaries and streaks — and takes a day as an epoch day number with the
+calendar supplied by the caller, so `:core:model` keeps its KMP-ready contract and the
+arithmetic is testable with no time zone near it. Two decisions are held by tests rather
+than by memory: a session counts entirely on the local day it began, because the ledger
+holds a start and a total and no timeline between them, and a today with nothing in it does
+not end a streak, because the alternative makes the number fall to zero at every midnight.
+
+**Looking at the first recorded picture found three faults that no assertion would have
+caught**, which is the whole argument for a screenshot test. A day with nothing in it was
+drawn in `surfaceVariant`, which is the card's own colour, so a quiet day was invisible and
+read as a day the chart had failed to place — and the first attempt at that raised the
+stub's height, which was never what hid it. A podcast carries the show's own name as its
+author, so the "most listened" row printed "The Tidelands" twice. And the totals line
+wrapped after "in the last", leaving "30" alone on a line, reading as a number in its own
+right.
+
+**Lint found a fourth, and it was a crash.** `LocalDate.ofInstant` is API 34 and `minSdk`
+is 26, so the stats screen would have died on every device below Android 14. That is why a
+lint error in this project is a work item rather than noise.
+
+### Multi-server was not only a UI change after all
+
+Schema v1 keyed every user-scoped row by `(serverId, userId)` so that multi-server would
+be a UI change rather than a migration. It was nearly true. The token store held one set of
+tokens in one file, so a second account would have overwritten the first's sign-in.
+
+`EncryptedTokenStore` now keys every value by account and reads the old keys once to move
+them across. That upgrade path is the one thing in this work that must not go wrong:
+getting it wrong signs somebody out on an app update, which the store's own KDoc already
+called worse than the deprecated library it lives with. The order is extracted into
+`LegacyTokenAdoption` and tested — the old copy goes only after the new copy has landed, so
+a write that fails to a full disk leaves the session where the next launch will find it.
+
+`AccountDataDao` purges one account from all fifteen tables in one transaction. Orphan rows
+are invisible, because every query is keyed, and they come back as stale data when the same
+account signs in again. The FTS table is listed explicitly: it has no `contentEntity`, so
+nothing syncs it when `library_item` loses rows.
+
+The bytes are the caller's job, and that is a module boundary rather than an oversight.
+`:core:sync` cannot reach `:core:download`, so `DownloadRepository` gained `removeAllFor`
+and the accounts view model removes the downloads *before* the purge — after it, the
+repository would have no rows to find and the files would be unreachable and still counted
+against the storage cap.
+
+**One race is documented rather than hidden.** `TokenStore.save` resolves the active
+account at write time, and a refresh is a read then a write, so a refresh landing in the
+instant somebody taps a different account writes A's tokens into B's slot. The cost is
+bounded and the fix is not here: the request would have to carry its account, which is a
+`:core:api` change, and `:core:api` knows nothing about servers by design.
+
+### The identity-provider sign-in, and why the obvious version cannot work
+
+Read out of `server/Auth.js` and `server/auth/OidcAuthStrategy.js`, the same way the socket
+events were, because the published docs say of themselves that they are unmaintained and
+this flow is not in them at all.
+
+lugu makes the `/auth/openid` request **itself**, and does not follow the redirect.
+`/auth/openid/callback` needs the express session and the `auth_method` cookie that the
+first request sets, and it is `auth_method` being `openid-mobile` that makes the server
+answer with JSON instead of a web page. A Custom Tab keeps its cookies in the browser,
+where lugu's HTTP client cannot reach them, so a browser-made first request would leave the
+final call with no session and the server would answer "No session". lugu holds those
+cookies and sends only the provider's own page to the browser.
+
+Three smaller things worth keeping:
+
+- Ktor 3 has no per-request redirect switch, so this uses `http.config {}` — a sibling
+  client sharing the engine, which keeps the TLS setup and any client certificate. A second
+  `HttpClient(OkHttp)` would have signed in without the certificate the rest of the app
+  needs.
+- Percent-encoding is written out rather than taken from `URLEncoder`, which is *form*
+  encoding: it turns a space into `+` and leaves `*` alone. A `+` inside a `code_challenge`
+  is a different challenge, and the sign-in then fails at the provider with nothing to say
+  why.
+- The state check is lugu's own and no server can do it. Any app can register `lugu://`, so
+  a redirect can arrive that this app never started, and exchanging its code would sign
+  somebody into an account they did not choose.
+
+### The widget reuses the automation surface
+
+Its play button sends the same broadcast an automation app sends, through
+`AutomationReceiver`, which already parses, checks and carries out a transport command and
+already survives being called with no player running. A second route to the player is
+always the one that stops working — `applyRememberedSpeed` had exactly that shape and cost
+two shipped 1x bugs. One button, and it toggles, because a widget renders state read from
+Room and cannot know whether the player is playing this instant.
+
+`updatePeriodMillis` is `0` deliberately: Glance recomposes a widget that is on view, so a
+period would only wake the app to redraw a widget nobody is looking at.
+
+### Wear and TV
+
+[research/06-wear-and-tv-spike.md](research/06-wear-and-tv-spike.md). Wear is worth doing
+and not yet — four of the seven layers carry over untouched, which is what the "no Android
+in `:core:*`" rule was for, and the cost is a second UI in a different toolkit. TV is
+declined with the reason, so it does not come back as an open question.
+
+### What is not proven
+
+Recorded per item in [BACKLOG.md](BACKLOG.md#m4-built-2-3-september-2026). In short: the
+sign-in has never met a provider, the widget has never been on a home screen, two accounts
+have never been on one device, and eight new screenshot baselines have never been recorded.
+The eleven baselines that already fail on this machine fail identically with and without
+this work, proved with a stashed control run.
+
 ## 2026-09-02 — two clocks in one comparison, and a speed nothing read
 
 Three items: the two process-death races left open on 31 August, and a report from Tom
