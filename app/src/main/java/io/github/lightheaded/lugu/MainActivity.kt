@@ -89,6 +89,9 @@ class MainActivity : ComponentActivity() {
      */
     private val startup: StartupViewModel by viewModels()
 
+    /** The identity-provider redirect waiting to be handed to the sign-in screen. */
+    private val pendingOidcRedirect = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         enableEdgeToEdge()
@@ -96,6 +99,7 @@ class MainActivity : ComponentActivity() {
         splashScreen.setKeepOnScreenCondition { startup.state.value == StartupState.Checking }
         handleSearchIntent(intent)
         handleEpisodeIntent(intent)
+        handleOidcIntent(intent)
         setContent {
             LuguTheme {
                 RequestNotificationPermission()
@@ -103,6 +107,8 @@ class MainActivity : ComponentActivity() {
                     playback = playback,
                     pendingEpisode = pendingEpisode,
                     onEpisodeHandled = { pendingEpisode.value = null },
+                    pendingOidcRedirect = pendingOidcRedirect,
+                    onOidcHandled = { pendingOidcRedirect.value = null },
                 )
             }
         }
@@ -113,6 +119,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleSearchIntent(intent)
         handleEpisodeIntent(intent)
+        handleOidcIntent(intent)
     }
 
     private fun handleSearchIntent(intent: Intent?) {
@@ -133,6 +140,25 @@ class MainActivity : ComponentActivity() {
         intent?.removeExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID)
         intent?.removeExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
         pendingEpisode.value = target
+    }
+
+    /**
+     * The identity provider's redirect, landed on `lugu://oauth`.
+     *
+     * The data is cleared once read, for the same reason the episode extras are: an
+     * activity keeps the intent that started it, so a rotation would replay the redirect —
+     * and a replayed `code` is one the server has already spent, so the second attempt
+     * fails and reports a sign-in problem to somebody who is already signed in.
+     */
+    private fun handleOidcIntent(intent: Intent?) {
+        val data = intent?.data?.takeIf { it.scheme == OIDC_SCHEME } ?: return
+        intent.data = null
+        pendingOidcRedirect.value = data.toString()
+    }
+
+    private companion object {
+        /** Matches the `android:scheme` on this activity's intent filter. */
+        const val OIDC_SCHEME = "lugu"
     }
 }
 
@@ -226,11 +252,14 @@ private fun LuguApp(
     playback: PlaybackConnection,
     pendingEpisode: StateFlow<EpisodeTarget?>,
     onEpisodeHandled: () -> Unit,
+    pendingOidcRedirect: MutableStateFlow<String?>,
+    onOidcHandled: () -> Unit,
     startViewModel: StartupViewModel = hiltViewModel(),
 ) {
     val navController = rememberNavController()
     val startState by startViewModel.state.collectAsStateWithLifecycle()
     val episodeTarget by pendingEpisode.collectAsStateWithLifecycle()
+    val oidcRedirect by pendingOidcRedirect.collectAsStateWithLifecycle()
 
     // Wait for the signed-in check before choosing a start destination, so a returning
     // user never sees the login screen flash past.
@@ -345,12 +374,18 @@ private fun LuguApp(
             },
         ) {
             composable(Routes.LOGIN) {
+                // The redirect is handed to this screen's own view model, because the
+                // attempt it has to be matched against belongs to the sign-in in progress.
+                // Read here rather than in the activity so it reaches the same view model
+                // instance that started the sign-in.
                 LoginScreen(
                     onSignedIn = {
                         navController.navigate(Routes.HOME) {
                             popUpTo(Routes.LOGIN) { inclusive = true }
                         }
                     },
+                    providerRedirect = oidcRedirect,
+                    onProviderRedirectHandled = onOidcHandled,
                     devServerUrl = BuildConfig.DEV_SERVER_URL,
                     devUsername = BuildConfig.DEV_USER,
                     devPassword = BuildConfig.DEV_PASS,

@@ -54,9 +54,20 @@ data class LoginUiState(
      * storage read fails at startup, long before anybody sees a field.
      */
     val lossNotice: String? = null,
+    /**
+     * The provider page to open in a browser, once the server has named one.
+     *
+     * Held as state rather than launched from the view model because launching a browser
+     * needs an activity, and a view model that reached for one would keep it alive past a
+     * rotation. The screen opens it and calls [onProviderPageOpened].
+     */
+    val providerPage: String? = null,
 ) {
     val canSubmit: Boolean
         get() = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank() && !isBusy
+
+    /** An address is all the provider route needs. There is no password to type. */
+    val canUseProvider: Boolean get() = serverUrl.isNotBlank() && !isBusy
 
     /**
      * Whether this address will be talked to in the clear.
@@ -174,6 +185,72 @@ class LoginViewModel @Inject constructor(
                 }
         }
     }
+
+    // region signing in through an identity provider
+
+    /**
+     * Asks the server for its provider page.
+     *
+     * Nothing is decided here about whether the server has OpenID switched on. It answers
+     * a 400 with a plain-text reason when it does not, and that reason is what reaches the
+     * error line — "OpenID is not enabled" and "Invalid redirect_uri" are both settings on
+     * the server, and both are actionable only if the words survive.
+     */
+    fun useProvider() {
+        val current = _state.value
+        if (!current.canUseProvider) return
+        persistHeaders()
+        viewModelScope.launch {
+            _state.update { it.copy(isBusy = true, error = null) }
+            authRepository.beginOidcSignIn(current.serverUrl)
+                .onSuccess { attempt ->
+                    _state.update { it.copy(isBusy = false, providerPage = attempt.authorizationUrl) }
+                }
+                .onFailure { failure ->
+                    _state.update {
+                        it.copy(
+                            isBusy = false,
+                            error = failure.message ?: "That server did not offer a sign-in provider",
+                        )
+                    }
+                }
+        }
+    }
+
+    /** The browser is open, so the page must not be opened again on the next recomposition. */
+    fun onProviderPageOpened() = _state.update { it.copy(providerPage = null) }
+
+    /**
+     * Finishes a sign-in from the `lugu://oauth` redirect.
+     *
+     * Reached from the activity rather than from a control on this screen, because the
+     * redirect arrives as an intent. Everything after this is the password route's own
+     * path — see `AuthRepository.completeOidcSignIn`.
+     */
+    fun onProviderRedirect(uri: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(isBusy = true, error = null) }
+            authRepository.completeOidcSignIn(uri)
+                .onSuccess {
+                    SyncScheduler.syncNow(context)
+                    credentialLosses.acknowledge()
+                    _state.update { LoginUiState(signedIn = true) }
+                }
+                .onFailure { failure ->
+                    _state.update {
+                        it.copy(isBusy = false, error = failure.message ?: "The sign-in did not finish")
+                    }
+                }
+        }
+    }
+
+    /** Called when the browser closes with no redirect, so a stale attempt cannot be used. */
+    fun abandonProviderSignIn() {
+        authRepository.forgetOidcAttempt()
+        _state.update { it.copy(isBusy = false, providerPage = null) }
+    }
+
+    // endregion
 
     // region connection settings, before there is an account to attach them to
 

@@ -1,7 +1,9 @@
 package io.github.lightheaded.lugu.feature.settings
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.contentType
@@ -68,12 +71,42 @@ import io.github.lightheaded.lugu.core.ui.reservedSpace
 fun LoginScreen(
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
+    /** What came back on `lugu://oauth`, or null. See [LoginViewModel.onProviderRedirect]. */
+    providerRedirect: String? = null,
+    onProviderRedirectHandled: () -> Unit = {},
     devServerUrl: String = "",
     devUsername: String = "",
     devPassword: String = "",
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // The browser is opened here and not in the view model, which has no activity and must
+    // not hold one. A Custom Tab rather than a WebView: RFC 8252 says a native app must not
+    // put itself between somebody and their provider's password field, and a Custom Tab also
+    // shares whatever session the browser already holds, so most sign-ins need no password
+    // typed at all.
+    LaunchedEffect(providerRedirect) {
+        val redirect = providerRedirect ?: return@LaunchedEffect
+        // Cleared before the exchange rather than after it. The exchange can fail, and a
+        // redirect left in place would be replayed on the next recomposition with a code
+        // the server has already spent.
+        onProviderRedirectHandled()
+        viewModel.onProviderRedirect(redirect)
+    }
+
+    val context = LocalContext.current
+    LaunchedEffect(state.providerPage) {
+        val page = state.providerPage ?: return@LaunchedEffect
+        viewModel.onProviderPageOpened()
+        val opened = runCatching {
+            CustomTabsIntent.Builder().setShowTitle(true).build()
+                .launchUrl(context, Uri.parse(page))
+        }
+        // A phone with no browser at all throws rather than declining. The sign-in cannot
+        // continue, and the attempt has to go with it so no later redirect matches it.
+        if (opened.isFailure) viewModel.abandonProviderSignIn()
+    }
 
     // Deliberately not rememberSaveable: a revealed password must not come back revealed
     // after the process is recreated with the screen still on somebody's desk.
@@ -247,6 +280,20 @@ fun LoginScreen(
             } else {
                 Text("Sign in")
             }
+        }
+
+        // Offered to everybody rather than only where a server has OpenID switched on.
+        // Nothing lugu can read before a sign-in says whether it does: /status does not
+        // report it, and asking would mean a request per address typed. So the button is
+        // always here, and a server without a provider answers in words that reach the
+        // error line above.
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = viewModel::useProvider,
+            enabled = state.canUseProvider,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Sign in with your provider")
         }
 
         Spacer(Modifier.height(16.dp))

@@ -1,7 +1,9 @@
 package io.github.lightheaded.lugu.core.sync
 
 import io.github.lightheaded.lugu.core.api.AbsClient
+import io.github.lightheaded.lugu.core.api.AbsOidc
 import io.github.lightheaded.lugu.core.api.AuthExpiredException
+import io.github.lightheaded.lugu.core.api.LoginResult
 import io.github.lightheaded.lugu.core.api.ServerUrl
 import io.github.lightheaded.lugu.core.db.AccountDataDao
 import io.github.lightheaded.lugu.core.db.ServerDao
@@ -22,6 +24,8 @@ data class ActiveAccount(
     val lanBaseUrl: String? = null,
 )
 
+private data class PendingOidc(val baseUrl: String, val attempt: AbsOidc.Attempt)
+
 /** One stored account, and whether it can still reach its server without a new password. */
 data class StoredAccount(
     val account: ActiveAccount,
@@ -38,6 +42,16 @@ class AuthRepository @Inject constructor(
     private val progressRepository: ProgressRepository,
     private val serverUrlProvider: ActiveServerUrlProvider,
 ) {
+    /**
+     * The identity-provider sign-in in progress, if any.
+     *
+     * In memory only, and deliberately: it holds the PKCE verifier, which is the single
+     * secret that makes the whole flow safe. Writing it to storage so that it survived a
+     * process death would put it on disk to save one tap.
+     */
+    @Volatile
+    private var pendingOidc: PendingOidc? = null
+
     fun observeAccount(): Flow<ActiveAccount?> = serverDao.observeActive().map { it?.toAccount() }
 
     suspend fun account(): ActiveAccount? = serverDao.active()?.toAccount()
@@ -92,6 +106,77 @@ class AuthRepository @Inject constructor(
         progressRepository.seedFromServer(server.toAccount(), result.progress)
 
         server.toAccount()
+    }
+
+    /**
+     * Writes the account row for a sign-in that has already succeeded.
+     *
+     * Shared by the password route and the identity-provider route, because what happens
+     * after a `LoginResult` arrives does not depend on how it was earned.
+     */
+    private suspend fun adoptSignedInUser(url: String, result: LoginResult): ActiveAccount {
+        val serverId = "${url}#${result.userId}"
+        tokenStore.saveFor(serverId, result.tokens)
+        val existing = serverDao.byId(serverId)
+        val server = ServerEntity(
+            serverId = serverId,
+            baseUrl = url,
+            userId = result.userId,
+            username = result.username,
+            defaultLibraryId = result.defaultLibraryId,
+            serverVersion = existing?.serverVersion,
+            isActive = true,
+            lanBaseUrl = existing?.lanBaseUrl,
+        )
+        serverDao.setActive(server)
+        progressRepository.seedFromServer(server.toAccount(), result.progress)
+        return server.toAccount()
+    }
+
+    /**
+     * Starts an identity-provider sign-in, and answers with the page to open in a browser.
+     *
+     * The attempt is held in memory until the redirect comes back. **A process death in
+     * between loses it, and the redirect is then refused.** That is the safe direction: the
+     * attempt holds the PKCE verifier, and without the verifier the code cannot be
+     * exchanged by anybody, including lugu. The person taps the button again.
+     *
+     * One attempt at a time. A second start replaces the first, so a redirect belonging to
+     * an abandoned attempt no longer matches and is refused by its state.
+     */
+    suspend fun beginOidcSignIn(rawUrl: String): Result<AbsOidc.Attempt> = runCatching {
+        val url = ServerUrl.normalise(rawUrl) ?: error("That does not look like a server address")
+        // Probed first for the same reason a password sign-in is: a typo has to read as
+        // "that is not an Audiobookshelf server" rather than as an OpenID failure.
+        client.status(url)
+        val attempt = client.beginOidc(url)
+        pendingOidc = PendingOidc(baseUrl = url, attempt = attempt)
+        attempt
+    }
+
+    /**
+     * Finishes the sign-in from whatever came back on `lugu://oauth`.
+     *
+     * Everything after the state check is the password sign-in's own path: the same
+     * `LoginResult`, the same server row, the same progress seed. Two sign-in routes that
+     * ended in two different pieces of code would be two places for the account row to be
+     * wrong, and only one of them could ever be exercised here.
+     */
+    suspend fun completeOidcSignIn(redirectUri: String): Result<ActiveAccount> = runCatching {
+        val pending = pendingOidc ?: error("That sign-in did not start in this app")
+        when (val redirect = AbsOidc.readRedirect(redirectUri, pending.attempt)) {
+            is AbsOidc.Redirect.Failed -> error(redirect.error)
+            is AbsOidc.Redirect.Code -> {
+                val result = client.completeOidc(pending.baseUrl, pending.attempt, redirect.code)
+                pendingOidc = null
+                adoptSignedInUser(pending.baseUrl, result)
+            }
+        }
+    }
+
+    /** Called when a sign-in is abandoned, so a stale attempt cannot be completed later. */
+    fun forgetOidcAttempt() {
+        pendingOidc = null
     }
 
     /**

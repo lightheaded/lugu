@@ -45,6 +45,27 @@
                 <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+
+            <!--
+              Where an identity provider sends the browser back to.
+
+              A private-use scheme and not an https App Link. An App Link needs a domain
+              this app controls, serving an assetlinks.json that names its signing key,
+              and lugu is a client for somebody else's server — there is no such domain.
+              The cost is that another app can claim the same scheme and intercept the
+              redirect. PKCE is what makes that survivable: the code arriving here is
+              worthless without the verifier, which never leaves this process. See
+              AbsOidc in :core:api.
+
+              The path is matched as well as the scheme, so lugu answers for exactly
+              lugu://oauth and not for every lugu:// URL anything on the phone opens.
+            -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lugu" android:host="oauth" />
+            </intent-filter>
         </activity>
 
         <!--

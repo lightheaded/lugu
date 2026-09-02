@@ -45,6 +45,7 @@ dependencies {
     implementation(project(":core:db"))
     implementation(project(":core:sync"))
     implementation(project(":core:download"))
+    implementation(libs.androidx.browser)
     implementation(project(":playback"))
 
     implementation(platform(libs.compose.bom))

@@ -13,6 +13,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -72,6 +73,19 @@ class AbsClient(
     private val refreshMutex = Mutex()
 
     /**
+     * The same client, with redirects left for the caller to read.
+     *
+     * `HttpClient.config` shares the engine, so the TLS setup and any client certificate
+     * carry over — a second `HttpClient(OkHttp)` here would quietly sign in without the
+     * certificate that the rest of the app needs. Ktor 3 has no per-request switch for
+     * this, which is why it is a sibling client rather than one line at the call site.
+     *
+     * Lazy because most installs never sign in through an identity provider, and building
+     * this costs an engine wrapper.
+     */
+    private val httpNoRedirect: HttpClient by lazy { http.config { followRedirects = false } }
+
+    /**
      * Attaches the custom headers for whichever server [url] belongs to. Silent when the
      * URL belongs to nothing configured, which is the case on the very first probe of an
      * address somebody has only just typed.
@@ -113,7 +127,19 @@ class AbsClient(
                 )
             }
         }
-        val body: LoginResponse = response.body()
+        return response.toLoginResult()
+    }
+
+    /**
+     * The sign-in response, whichever route produced it.
+     *
+     * Shared because it is the same payload: `handleLoginSuccess` in the server builds one
+     * shape and both `/login` and `/auth/openid/callback` return it. Two copies of this
+     * would drift, and the half that drifted would be the identity-provider one, because
+     * nothing here can exercise it.
+     */
+    private suspend fun HttpResponse.toLoginResult(): LoginResult {
+        val body: LoginResponse = body()
         val user = body.user ?: throw AbsHttpException(200, "Login response had no user")
         val access = user.accessToken ?: throw AbsHttpException(200, "Login response had no access token")
         return LoginResult(
@@ -127,6 +153,84 @@ class AbsClient(
             defaultLibraryId = body.userDefaultLibraryId,
             progress = user.mediaProgress,
         )
+    }
+
+    /**
+     * Step 1 of the identity-provider sign-in: asks the server where to send the browser.
+     *
+     * `followRedirects = false` is the whole point of this call. The `302` and its
+     * `Set-Cookie` headers are what is wanted; following it would send lugu's HTTP client
+     * to the provider's login page, which is a page for a person and not for a client, and
+     * would drop the session cookies on the floor. See [AbsOidc] for why lugu and not the
+     * browser has to make this request.
+     */
+    suspend fun beginOidc(
+        baseUrl: String,
+        redirectUri: String = AbsOidc.LUGU_REDIRECT_URI,
+    ): AbsOidc.Attempt {
+        val verifier = AbsOidc.newVerifier()
+        val state = AbsOidc.newState()
+        val url = AbsOidc.startUrl(
+            baseUrl = baseUrl,
+            state = state,
+            challenge = AbsOidc.challengeFor(verifier),
+            redirectUri = redirectUri,
+        )
+
+        val response = httpNoRedirect.request(url) {
+            method = HttpMethod.Get
+            connectionHeaders(baseUrl)
+        }
+
+        val location = response.headers[HttpHeaders.Location]
+        if (location.isNullOrBlank()) {
+            // The server answers 400 with a plain-text reason for every refusal here, and
+            // its reasons are the useful ones: an unlisted redirect_uri, or OpenID not
+            // switched on at all. Passed through rather than replaced.
+            val reason = runCatching { response.bodyAsText() }.getOrNull()?.takeIf { it.isNotBlank() }
+            throw AbsHttpException(
+                response.status.value,
+                reason ?: "The server did not offer an identity provider",
+            )
+        }
+
+        return AbsOidc.Attempt(
+            authorizationUrl = location,
+            state = state,
+            codeVerifier = verifier,
+            cookies = response.headers.getAll(HttpHeaders.SetCookie).orEmpty(),
+        )
+    }
+
+    /**
+     * Step 4: swaps the `code` for tokens, carrying the session from step 1.
+     *
+     * The `Cookie` header is not optional. `/auth/openid/callback` answers "No session"
+     * without it, and answers a web page rather than JSON without `auth_method`, which is
+     * one of the cookies step 1 set.
+     */
+    suspend fun completeOidc(baseUrl: String, attempt: AbsOidc.Attempt, code: String): LoginResult {
+        val response = http.request(
+            AbsOidc.callbackUrl(
+                baseUrl = baseUrl,
+                code = code,
+                state = attempt.state,
+                verifier = attempt.codeVerifier,
+            ),
+        ) {
+            method = HttpMethod.Get
+            connectionHeaders(baseUrl)
+            header(HttpHeaders.Cookie, AbsOidc.cookieHeader(attempt.cookies))
+        }
+
+        if (!response.status.isSuccess()) {
+            val reason = runCatching { response.bodyAsText() }.getOrNull()?.takeIf { it.isNotBlank() }
+            throw when (response.status.value) {
+                401 -> AuthExpiredException(reason ?: "The identity provider refused the sign-in")
+                else -> AbsHttpException(response.status.value, reason ?: "The sign-in did not complete")
+            }
+        }
+        return response.toLoginResult()
     }
 
     /**
