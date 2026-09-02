@@ -55,6 +55,7 @@ import io.github.lightheaded.lugu.ui.FeedbackScreen
 import io.github.lightheaded.lugu.ui.LicensesScreen
 import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.PlaybackRecordScreen
+import io.github.lightheaded.lugu.ui.StatsScreen
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -178,6 +179,7 @@ private object Routes {
     const val QUEUE = "queue"
     const val LICENSES = "licenses"
     const val PLAYBACK_RECORD = "playback-record"
+    const val STATS = "stats"
     const val FEEDBACK = "feedback"
     const val CONNECTION = "connection"
     const val COLLECTIONS = "collections"
@@ -486,6 +488,7 @@ private fun LuguApp(
                     },
                     onOpenLicenses = { navController.navigate(Routes.LICENSES) },
                     onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
+                    onOpenStats = { navController.navigate(Routes.STATS) },
                     onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
                     onOpenConnection = { navController.navigate(Routes.CONNECTION) },
                 )
@@ -517,6 +520,10 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
                 )
+            }
+
+            composable(Routes.STATS) {
+                StatsScreen(onBack = { navController.popBackStack() })
             }
 
             composable(Routes.FEEDBACK) {

@@ -99,6 +99,7 @@ fun SettingsScreen(
     onOpenLicenses: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenPlaybackRecord: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
     onOpenFeedback: () -> Unit = {},
     onOpenConnection: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -110,6 +111,7 @@ fun SettingsScreen(
         onSignedOut = onSignedOut,
         onOpenLicenses = onOpenLicenses,
         onOpenPlaybackRecord = onOpenPlaybackRecord,
+        onOpenStats = onOpenStats,
         onOpenFeedback = onOpenFeedback,
         onOpenConnection = onOpenConnection,
     )
@@ -182,6 +184,7 @@ private fun settingEntries(
     onSignedOut: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenPlaybackRecord: () -> Unit,
+    onOpenStats: () -> Unit,
     onOpenFeedback: () -> Unit,
     onOpenConnection: () -> Unit,
 ): List<SettingEntry> {
@@ -1174,6 +1177,22 @@ private fun settingEntries(
             },
         )
 
+        add(
+            SettingEntry(
+                id = "stats",
+                category = "Listening",
+                title = "Listening stats",
+                keywords = "stats statistics history hours time listened streak total " +
+                    "how much progress record chart week year most",
+            ) {
+                LinkRow(
+                    title = "Listening stats",
+                    subtitle = "Hours, days in a row and what you have listened to most, " +
+                        "counted from lugu's own record rather than the server's",
+                    onClick = onOpenStats,
+                )
+            },
+        )
         add(
             SettingEntry(
                 id = "playback-record",
