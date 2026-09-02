@@ -250,6 +250,14 @@ class LuguPlaybackService : MediaLibraryService() {
     private var armingJob: Job? = null
 
     /**
+     * The end-of-book continuation in flight, retries included.
+     *
+     * One at a time, for the reason the arming holds one: the answer takes a round trip
+     * and now takes several, and two of them racing would load two books.
+     */
+    private var continuationJob: Job? = null
+
+    /**
      * The wait between a chosen device connecting and the book starting, or null when there
      * is none in flight.
      *
@@ -930,10 +938,17 @@ class LuguPlaybackService : MediaLibraryService() {
      *
      * A book loaded through `PlaybackConnection.play` gets its speed from the same store, but
      * one loaded straight into the player comes up at whatever speed the player happens to
-     * hold, which on a fresh service is 1x. There are three such paths and every one of them
-     * belongs to somebody who is not looking at the screen: a device connecting, a headset
-     * press through `onPlaybackResumption`, and a car handing back an id through
-     * `onSetMediaItems`. All three call this.
+     * hold, which on a fresh service is 1x. Every such path belongs to somebody who is not
+     * looking at the screen — a device connecting, a headset press, a car handing back an
+     * id, an app that has just been updated — so **every place that hands items to the
+     * player must call this**, and the compiler cannot say so.
+     *
+     * The rule is stated that way rather than as a list on purpose. This comment used to
+     * enumerate the three callers there were when it was written, two more were added
+     * without it, and both of them shipped at 1x: the end-of-book continuation, so the next
+     * volume in a series lost the speed the last one had, and the arming that runs when the
+     * app is opened, which is why Tom saw a speed "forgotten" after every app update. The
+     * store had it all along. Nothing read it.
      *
      * A book that starts by itself at the wrong speed is a worse first impression than one
      * that does not start at all — and it is worst in the car, where the listener has to
@@ -1282,6 +1297,13 @@ class LuguPlaybackService : MediaLibraryService() {
                 return@launch
             }
             stateHolder.set(resolved.nowPlaying)
+            // Armed is a fourth way an item reaches the player, and it was missing from
+            // the three [applyRememberedSpeed] names. An app update kills the process, so
+            // the next open arms the last book into a player holding no speed at all, and
+            // the press that follows plays it at 1x — a remembered speed that was never
+            // lost, only never read. Nothing here starts playing, so the ordering is not
+            // audible; it matches the other three paths on purpose.
+            applyRememberedSpeed(resolved.nowPlaying)
             player.setMediaItems(
                 resolved.mediaItems,
                 resolved.startTrackIndex,
@@ -2052,10 +2074,9 @@ class LuguPlaybackService : MediaLibraryService() {
      */
     private fun continueToNext(startedByListener: Boolean = false) {
         val finished = stateHolder.nowPlaying.value ?: return
-        scope.launch {
-            val continuation = withContext(Dispatchers.IO) {
-                continuationResolver.resolveNext(finished.libraryItemId, finished.episodeId)
-            } ?: return@launch
+        if (continuationJob?.isActive == true) return
+        continuationJob = scope.launch {
+            val continuation = resolveNextWithRetries(finished, startedByListener) ?: return@launch
 
             diary.record(
                 PlaybackEvent.CONTINUATION,
@@ -2065,6 +2086,10 @@ class LuguPlaybackService : MediaLibraryService() {
             if (startedByListener) stateHolder.setContinuationNotice(continuation.reason, cued = false)
 
             stateHolder.set(continuation.resumption.nowPlaying)
+            // The speed this item was last listened at, before the audio can be heard.
+            // Without it the next volume in a series comes up at whatever the player
+            // happens to hold, which on a service that has just started is 1x.
+            applyRememberedSpeed(continuation.resumption.nowPlaying)
             player.setMediaItems(
                 continuation.resumption.mediaItems,
                 continuation.resumption.startTrackIndex,
@@ -2081,6 +2106,90 @@ class LuguPlaybackService : MediaLibraryService() {
             // pause, "ask first" asks nothing on the path it exists for.
             if (continuation.autoStart || startedByListener) player.play() else player.pause()
         }
+    }
+
+    /**
+     * What comes next, asked for more than once.
+     *
+     * The decision itself is made from Room, but the answer needs a play session opened
+     * for the URLs, so one lost packet at the end of a book used to end the queue. The
+     * moment this runs is the moment a phone is least likely to have a good connection —
+     * a book ends when it ends, tunnel or not — and there was nothing to try again: one
+     * attempt, and a failure that loaded nothing, said nothing and left no record. An
+     * instrumented run found exactly that, as a next volume in a series that never
+     * arrived, with no evidence of what had been decided.
+     *
+     * Every outcome is now recorded, including the ordinary one where a book simply has
+     * nothing after it. A queue that stops has to be told apart from a queue that was
+     * empty, and from the outside those look the same.
+     *
+     * The retry stops the moment it is no longer wanted. The listener pressing play on
+     * something else, or the item under the player changing, both mean the answer to
+     * "what comes next" is somebody else's now — loading a book on top of one that has
+     * just been started is the worst thing this feature could do.
+     */
+    private suspend fun resolveNextWithRetries(
+        finished: NowPlaying,
+        startedByListener: Boolean,
+    ): Continuation? {
+        var attempt = 0
+        while (attempt < CONTINUATION_ATTEMPTS) {
+            if (attempt > 0) {
+                delay(CONTINUATION_RETRY_MS shl (attempt - 1))
+                if (!stillWaitingToContinue(finished, startedByListener)) {
+                    diary.record(PlaybackEvent.CONTINUATION_NONE, "dropped, something else started first")
+                    return null
+                }
+            }
+            attempt += 1
+
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    continuationResolver.resolveNext(finished.libraryItemId, finished.episodeId)
+                }
+            }
+            outcome.getOrNull()?.let { return it }
+
+            val failure = outcome.exceptionOrNull()
+            if (failure == null) {
+                // Not a failure: this book has nothing after it. Retrying an empty queue
+                // would only delay the silence.
+                diary.record(PlaybackEvent.CONTINUATION_NONE, "the queue and the series had nothing")
+                return null
+            }
+            diary.record(
+                PlaybackEvent.CONTINUATION_NONE,
+                "attempt $attempt of $CONTINUATION_ATTEMPTS failed: ${failure.javaClass.simpleName}",
+            )
+        }
+        diary.record(
+            PlaybackEvent.CONTINUATION_NONE,
+            "gave up after $CONTINUATION_ATTEMPTS attempts",
+        )
+        return null
+    }
+
+    /**
+     * Whether the continuation this was started for is still the one wanted.
+     *
+     * `mediaItemCount` is no use here, the way it is in [armLastPlayed]: a book that has
+     * run to its end is still loaded in the player, so the count is never zero at the
+     * moment this asks. What does answer it is the loaded item: anything the listener
+     * starts in the meantime replaces it, so an id that still matches means nobody has
+     * chosen anything since.
+     *
+     * Playing is only disqualifying when a book ended by itself. Then the listener has
+     * pressed play on the item that just finished, and loading the next one on top of that
+     * would take away what they asked for. A press asking for the *next* item is the
+     * opposite case — the old item is still playing at that moment by definition, so
+     * treating that as "somebody else started something" would refuse to retry exactly
+     * where the retry was asked for.
+     */
+    private fun stillWaitingToContinue(finished: NowPlaying, startedByListener: Boolean): Boolean {
+        val loaded = stateHolder.nowPlaying.value ?: return false
+        if (loaded.libraryItemId != finished.libraryItemId) return false
+        if (loaded.episodeId != finished.episodeId) return false
+        return startedByListener || !player.isPlaying
     }
 
     /**
@@ -2492,6 +2601,19 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     private companion object {
+        /**
+         * How many times "what comes next" is asked for before the queue stops.
+         *
+         * A book ends where it ends, so this is asked at a moment nobody chose — in a
+         * tunnel, on one bar, on a train. Three attempts over roughly six seconds is long
+         * enough to outlast a stall that resolves itself and short enough that a real
+         * failure is a short silence rather than a long one.
+         */
+        const val CONTINUATION_ATTEMPTS = 3
+
+        /** The first wait before asking again. It doubles after that. */
+        const val CONTINUATION_RETRY_MS = 2_000L
+
         const val TICK_MS = 5_000L
         const val SLEEP_TICK_MS = 500L
 

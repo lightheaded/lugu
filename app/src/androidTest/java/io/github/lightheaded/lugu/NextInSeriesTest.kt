@@ -20,6 +20,9 @@ import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.db.QueueEntity
 import io.github.lightheaded.lugu.core.db.QueueSource
 import io.github.lightheaded.lugu.core.db.ServerEntity
+import io.github.lightheaded.lugu.core.model.MediaType
+import io.github.lightheaded.lugu.core.sync.PlaybackEvent
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.QueuePrefs
 import io.github.lightheaded.lugu.core.sync.QueueSettings
 import io.github.lightheaded.lugu.playback.LuguPlaybackService
@@ -96,6 +99,8 @@ class NextInSeriesTest {
     /** Everything this test changes on the device, so that all of it can be put back. */
     private var settingsToRestore: QueueSettings? = null
     private var queueToRestore: List<QueueEntity>? = null
+    private var speedToRestore: Float? = null
+    private var speedItemToRestore: String? = null
 
     @After
     fun putEverythingBack() {
@@ -111,6 +116,21 @@ class NextInSeriesTest {
                 }
             }
         }
+
+        val speedItem = speedItemToRestore
+        val speed = speedToRestore
+        if (speedItem != null && speed != null) {
+            // Setting a book back to the applicable default forgets the override, which is
+            // the right restore for a book that had none.
+            runCatching {
+                runBlocking {
+                    PlaybackPrefs(context.applicationContext)
+                        .setSpeedFor(speedItem, MediaType.BOOK, speed)
+                }
+            }
+        }
+        speedItemToRestore = null
+        speedToRestore = null
 
         val db = database
         val queue = queueToRestore
@@ -188,6 +208,42 @@ class NextInSeriesTest {
             .that(cuedEntry.source)
             .isEqualTo(QueueSource.AUTO)
         Log.i(TAG, "the next volume was cued at the head of the queue and did not start")
+    }
+
+    /**
+     * The next volume arrives at the speed it was last listened at, not at 1x.
+     *
+     * The end-of-book continuation was the fourth way an item reaches the player and the
+     * only one that never asked what speed it should be at, so a volume with a
+     * remembered speed came up at whatever the player happened to hold. That is audible
+     * from the first word, and it is worst in a car, where the listener has to find a
+     * speed control while driving to undo it.
+     *
+     * The speed is set on volume **two** while volume one is still playing, so the value
+     * cannot have been inherited from the player: volume one is playing at its own speed
+     * throughout, and only a store the service reads can produce this number.
+     */
+    @Test
+    fun the_next_volume_arrives_at_its_own_remembered_speed() {
+        val series = prepare(askFirst = false)
+
+        val prefs = PlaybackPrefs(context.applicationContext)
+        runBlocking {
+            speedToRestore = prefs.speedFor(series.volumeTwo.id, MediaType.BOOK)
+            speedItemToRestore = series.volumeTwo.id
+            prefs.setSpeedFor(series.volumeTwo.id, MediaType.BOOK, REMEMBERED_SPEED)
+        }
+
+        playToTheEndOf(series.volumeOne)
+
+        val player = awaitLoaded(series.volumeTwo.id)
+        val speed = awaitSpeed(player, REMEMBERED_SPEED)
+        assertWithMessage(
+            "the next volume began at ${speed}x when it was last listened at " +
+                "${REMEMBERED_SPEED}x. A book that starts by itself at the wrong speed is a " +
+                "worse first impression than one that does not start at all.",
+        ).that(speed).isWithin(SPEED_EPSILON).of(REMEMBERED_SPEED)
+        Log.i(TAG, "the next volume began at its own remembered speed")
     }
 
     // -----------------------------------------------------------------------------------
@@ -430,8 +486,34 @@ class NextInSeriesTest {
         }
         throw AssertionError(
             "the expected item was not loaded after ${LOAD_TIMEOUT_MS}ms. The item is named " +
-                "by its id rather than printed, because a failure message ends up in a CI log.",
+                "by its id rather than printed, because a failure message ends up in a CI log." +
+                "\n\nWhat the service decided, from its own diary:\n" + continuationDiary(),
         )
+    }
+
+    /**
+     * What the service recorded about continuing, read out of its own diary.
+     *
+     * A CI run failed this way once and left nothing behind to read: the run's logcat is
+     * not retained, and the service recorded nothing at all unless it succeeded. It
+     * records every outcome now, so the failure that used to be a gap can carry its own
+     * evidence — which of "the queue had nothing", "attempt 2 of 3 failed" and "gave up"
+     * it was.
+     *
+     * The diary is a file in lugu's own `filesDir`, and this test runs in lugu's process,
+     * so it is read directly rather than through the class that writes it. Only the
+     * continuation lines are reported: the rest of a long drive is noise here, and a
+     * failure message must not print anything naming what is on somebody's shelf.
+     */
+    private fun continuationDiary(): String {
+        val file = java.io.File(context.filesDir, DIARY_FILE)
+        if (!file.exists()) return "  (no diary file at ${file.name})"
+        val lines = runCatching { file.readLines() }.getOrDefault(emptyList())
+            .map { it.split(DIARY_SEPARATOR) }
+            .filter { it.size >= 2 && it[1] in CONTINUATION_EVENTS }
+            .takeLast(DIARY_LINES)
+            .map { parts -> "  ${parts[1]}${parts.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()}" }
+        return if (lines.isEmpty()) "  (the diary holds no continuation lines)" else lines.joinToString("\n")
     }
 
     private fun loadedItemOf(player: MediaController): String? {
@@ -489,11 +571,66 @@ class NextInSeriesTest {
         return duration
     }
 
+    /**
+     * The speed, once it settles.
+     *
+     * `awaitLoaded` returns as soon as the media id changes, and the speed is applied on
+     * the same coroutine a beat either side of that. Reading once would be a race on
+     * which of the two the controller reports first, so this waits for the value and
+     * reports whatever it last saw when it does not arrive.
+     */
+    private fun awaitSpeed(player: MediaController, wanted: Float): Float {
+        var seen = speedOf(player)
+        val deadline = System.currentTimeMillis() + SPEED_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            seen = speedOf(player)
+            if (kotlin.math.abs(seen - wanted) < SPEED_EPSILON) return seen
+            Thread.sleep(POLL_MS)
+        }
+        return seen
+    }
+
+    private fun speedOf(player: MediaController): Float {
+        var speed = 0f
+        onMain { speed = player.playbackParameters.speed }
+        return speed
+    }
+
     private fun onMain(block: () -> Unit) =
         InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
 
     private companion object {
         const val TAG = "LuguSeries"
+
+        /**
+         * A speed no default produces, so a book at this rate got it from the store.
+         *
+         * It is also one of the seven rates the car button can draw, which keeps the
+         * fixture honest about a value a listener could really be on.
+         */
+        const val REMEMBERED_SPEED = 1.5f
+        const val SPEED_EPSILON = 0.05f
+        const val SPEED_TIMEOUT_MS = 15_000L
+
+        /**
+         * How the diary is stored, spelled out rather than imported.
+         *
+         * `PlaybackDiary` keeps the file name and the separator private, and prising them
+         * open so a test could read a file would make the storage format part of its
+         * contract. Repeating those two is the cheaper mistake: if the format changes, this
+         * reports an empty diary instead of lying about one. The event names are public and
+         * are imported, because those are the part that has to match exactly.
+         */
+        const val DIARY_FILE = "playback-diary.log"
+        const val DIARY_SEPARATOR = "\u001F"
+        const val DIARY_LINES = 12
+
+        /** The two continuation events: the one that worked, and the one that did not. */
+        val CONTINUATION_EVENTS = setOf(
+            PlaybackEvent.CONTINUATION,
+            PlaybackEvent.CONTINUATION_NONE,
+        )
+        
         const val SIGN_IN_PROMPT = "Sign in to your Audiobookshelf server"
         const val LIBRARY_TAB = "Library"
 

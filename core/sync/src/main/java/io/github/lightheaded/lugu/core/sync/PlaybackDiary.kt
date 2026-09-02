@@ -185,5 +185,17 @@ object PlaybackEvent {
     const val SERVICE_DESTROYED = "playback service destroyed"
     const val TASK_REMOVED = "app swiped away"
     const val CONTINUATION = "started the next item"
+
+    /**
+     * A book ended and nothing followed it.
+     *
+     * Recorded for the same reason the sleep timer records not firing: "why did the next
+     * book not start" is asked as often as "why did it". It went unrecorded until an
+     * instrumented run found the next volume in a series simply absent, with no evidence
+     * anywhere of what had been decided. A queue that quietly stops is the worst version
+     * of this feature, because from the outside it looks exactly like a queue that was
+     * empty.
+     */
+    const val CONTINUATION_NONE = "nothing followed the item that ended"
     const val UNEXPECTED_STOP = "stopped without being asked"
 }
