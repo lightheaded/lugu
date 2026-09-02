@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">lugu</string>
+    <!-- The name the launcher's widget picker shows. It names what the widget does, not
+         the app, because the picker already groups by app. -->
+    <string name="widget_continue_label">Carry on listening</string>
 </resources>

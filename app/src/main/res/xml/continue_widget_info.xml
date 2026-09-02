@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Continue widget.
+
+  `initialLayout` is Glance's own loading layout. A widget host draws something the moment
+  it is placed, before any composition has run, and Glance ships a layout for exactly that
+  moment — a layout of lugu's own here would be a second layout language to keep in step
+  with the widget's real content.
+
+  `updatePeriodMillis` is 0 on purpose, and it is not an oversight. Glance recomposes a
+  widget that is on view, so the position moves while somebody is looking at their home
+  screen without any periodic wake behind it. A period here would wake the app to redraw a
+  widget nobody is looking at, which costs battery for nothing — and battery is a standing
+  requirement in docs/BACKLOG.md rather than a nice-to-have.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="180dp"
+    android:minHeight="80dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="3"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

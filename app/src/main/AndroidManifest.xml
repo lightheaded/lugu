@@ -69,6 +69,25 @@
         </activity>
 
         <!--
+          The home-screen widget.
+
+          Not exported. A widget receiver is talked to by the launcher through the system,
+          which does not need the receiver to be exported to any other app, and exporting
+          it would let anything on the phone send it an update broadcast.
+        -->
+        <receiver
+            android:name=".widget.ContinueWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_continue_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/continue_widget_info" />
+        </receiver>
+
+        <!--
           The automation surface: Tasker, Automate, adb, or anything else that can send a
           broadcast. A receiver and not an activity, so a routine that pauses a book does
           not steal focus or flash a window over whatever is on screen.

@@ -217,6 +217,8 @@ dependencies {
     implementation(project(":core:db"))
     implementation(project(":core:sync"))
     implementation(project(":core:download"))
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
     implementation(project(":playback"))
     implementation(project(":feature:library"))
     implementation(project(":feature:player"))
