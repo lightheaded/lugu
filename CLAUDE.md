@@ -22,6 +22,14 @@ Offline-first Android app. The local Room database is the source of truth. Modul
 `./gradlew build` runs unit tests, screenshot tests (Roborazzi), and lint. The
 instrumented tests run on API 26 and API 36 emulators, plus a minified leg on API 36.
 
+**`build` does not compile the instrumented sources.** Change a shared constructor or a
+public signature and the `androidTest` source sets are consumers too, so add
+`./gradlew compileDebugAndroidTestKotlin` — or `assembleDebugAndroidTest` — before you
+push. On 3 September 2026 a green `build` went red on all three emulator legs for one
+missing constructor argument in a test helper, and the same change had a second fault
+underneath it that would have compiled: the helper planted a token for whichever account
+was active, and the per-account token store had just made that the wrong one.
+
 The instrumented job does NOT gate the release (emulator flakiness), but a failure
 turns the run red and must be investigated.
 

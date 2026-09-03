@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu
 
 import android.content.Context
+import io.github.lightheaded.lugu.core.db.ServerDao
 import io.github.lightheaded.lugu.core.model.AuthTokens
 import io.github.lightheaded.lugu.core.sync.EncryptedTokenStore
 import kotlinx.coroutines.runBlocking
@@ -26,29 +27,47 @@ import kotlinx.coroutines.runBlocking
  */
 internal class PlantedToken private constructor(
     private val store: EncryptedTokenStore,
+    private val serverId: String,
     private val displaced: AuthTokens?,
 ) {
 
     fun restore() = runBlocking {
-        if (displaced == null) store.clear() else store.save(displaced)
+        if (displaced == null) store.clearFor(serverId) else store.saveFor(serverId, displaced)
     }
 
     companion object {
         /** Far enough ahead that nothing treats it as expired mid-test. */
         private const val AN_HOUR_MS = 60L * 60L * 1_000L
 
-        fun plant(context: Context): PlantedToken {
-            val store = EncryptedTokenStore(context)
+        /**
+         * Plants a token **for [serverId]**, and not for whichever account is active.
+         *
+         * The account matters now, and it did not before. The store used to hold one set
+         * of tokens for the whole install; it holds one set per account, and every test
+         * that uses this plants its token *before* it makes its own server row active. So
+         * a plant aimed at the active account would land on whatever the device was signed
+         * in to, the test's own account would have no token, and `isSignedIn` would be
+         * false — which is the login screen, and every assertion then failing a long way
+         * from the reason. That is the same failure this file's own KDoc was written about,
+         * arriving by a new route.
+         *
+         * Caught by CI on 3 September 2026: `:app:compileDebugAndroidTestKotlin` failed on
+         * the added constructor parameter, which is the cheap half. The semantic half above
+         * would have compiled and gone red on three emulators.
+         */
+        fun plant(context: Context, serverDao: ServerDao, serverId: String): PlantedToken {
+            val store = EncryptedTokenStore(context, serverDao)
             return runBlocking {
-                val displaced = store.tokens()
-                store.save(
+                val displaced = store.tokensFor(serverId)
+                store.saveFor(
+                    serverId,
                     AuthTokens(
                         accessToken = "instrumented-test-token",
                         refreshToken = null,
                         accessTokenExpiresAtMs = System.currentTimeMillis() + AN_HOUR_MS,
                     ),
                 )
-                PlantedToken(store, displaced)
+                PlantedToken(store, serverId, displaced)
             }
         }
     }

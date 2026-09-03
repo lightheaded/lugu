@@ -86,7 +86,7 @@ class LibraryGridTest {
     @Before
     fun seedAndSignOut() {
         db = LuguDatabase.build(context)
-        token = PlantedToken.plant(context)
+        token = PlantedToken.plant(context, db.serverDao(), TEST_SERVER_ID)
         runBlocking {
             displacedServer = db.serverDao().active()
             db.serverDao().clearActive()

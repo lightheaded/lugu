@@ -211,18 +211,25 @@ class EncryptedTokenStore @Inject constructor(
     /**
      * Forgets one account's sign-in and leaves every other account signed in.
      *
-     * The legacy keys go too. They belong to whichever account was the only one before
-     * this store learned to hold several, so leaving them would let a signed-out account
-     * be adopted back by [adoptLegacyWhileLocked] on the next launch.
+     * **This touches only the named account's keys.** The first version also removed the
+     * legacy keys, on the reasoning that they belong to whichever account was the only one
+     * before this store learned to hold several, so leaving them would let a signed-out
+     * account be adopted back. That reasoning was wrong twice over.
+     *
+     * It is unnecessary: signing out of an account requires being signed in to it, which
+     * requires a read, and a read is what runs [adoptLegacyWhileLocked]. By the time this
+     * is reachable the legacy keys are already gone.
+     *
+     * And it is harmful. Signing out of the *second* account would have deleted the first
+     * account's fallback copy, and any caller that removes one account's token for a
+     * reason of its own — the instrumented tests plant and restore one — would have taken
+     * the device owner's real session with it.
      */
     override suspend fun clearFor(serverId: String) = mutex.withLock {
         prefs.write {
             remove(serverId.key(KEY_ACCESS))
             remove(serverId.key(KEY_REFRESH))
             remove(serverId.key(KEY_EXPIRES))
-            remove(KEY_ACCESS)
-            remove(KEY_REFRESH)
-            remove(KEY_EXPIRES)
         }
         Unit
     }
