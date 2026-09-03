@@ -48,8 +48,18 @@ same host `build` verifies against, and uploads the results as a workflow artifa
 never runs on push or pull request — dispatch it by hand:
 
 ```
-gh workflow run record-baselines.yml
+gh workflow run record-baselines.yml --ref <branch>
 ```
+
+Leave `--ref` off and it records the default branch. Pass the branch when the baselines
+you want belong to work that is not merged yet.
+
+**If that answers `HTTP 403: Must have admin rights to Repository`, check which account
+`gh` is using before you believe it.** The message names a permission, and on a machine
+with two accounts in the keyring the cause is usually the other one being active. `gh auth
+status` lists them, and `gh auth switch --user <owner>` fixes it. This cost time on
+3 September 2026, because the error reads as a repository setting rather than as an
+identity.
 
 Wait for the run to finish, then find it and download the artifact:
 
