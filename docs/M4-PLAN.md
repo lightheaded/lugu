@@ -5,9 +5,12 @@ This is that plan. It replaces the summary for execution purposes. The summary s
 it is as the record of what was expected in August.*
 
 M4 as summarised holds six items: Chromecast, Glance widgets, stats screens, multi-server
-UI, OIDC through Custom Tabs, and WearOS/TV spikes. One of the six cannot be built under
-the project's own locked decisions. The reason is below, and it is a licence conflict
-rather than a matter of effort.
+UI, OIDC through Custom Tabs, and WearOS/TV spikes. One of the six could not be built under
+the project's own locked decisions, and Tom declined it on 3 September. The reason is below,
+and it is a licence conflict rather than a matter of effort.
+
+**M4 is closed with four items built, one declined and one spiked.** The next phase is M5,
+and F-Droid is its priority.
 
 ## What is built, and in what order
 
@@ -19,7 +22,17 @@ rather than a matter of effort.
 | 4 | **Glance widget** | Independent of the other three. Last because it is the only one that needs a new UI toolkit in the build |
 | 5 | **WearOS and TV** | The summary calls these spikes. A spike is a document that answers "what would this cost and what blocks it", not a product |
 
-## Chromecast is not built, and this is why
+## Chromecast — declined 3 September, and F-Droid takes the priority
+
+**Tom's decision, 3 September 2026: no Chromecast for now, and F-Droid is the priority.**
+That settles the question this section was written to put to him. The dependency rule in
+`AGENTS.md` stands, F-Droid stays an M5 goal, and Chromecast leaves M4.
+
+So this section is no longer a question. It is the reason, kept so that the obvious
+re-attempt does not happen, and so that anybody proposing Cast again starts from the
+evidence rather than from scratch.
+
+## Why it could not be built
 
 `androidx.media3:media3-cast:1.11.0` declares a hard dependency on
 `com.google.android.gms:play-services-cast-framework`. That artifact is proprietary. It
@@ -48,9 +61,10 @@ Play Store.
    part of the same need with no proprietary dependency. This is worth its own decision
    later. It is not Chromecast, so it must not be recorded as Chromecast.
 
-**What this needs from Tom:** a decision, not code. Either the GPL-compatible-dependency
-rule changes and F-Droid goes, or Chromecast leaves M4. Nothing in this repository can
-settle that.
+**Answered.** The rule stands and F-Droid wins. If a listener ever asks for Cast, the
+question to reopen is not "can we add the Play services library" — that is settled — but
+"is a free-software local-network handoff worth building", which is option 3 above and a
+different product with a different name.
 
 ## What each item cannot prove on this machine
 
