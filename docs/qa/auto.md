@@ -163,6 +163,21 @@ a garage with no signal. This is the case that matters.
       rate off that set draws the plain speed icon on purpose
 - [ ] Change the rate on the phone's player screen while the car is connected. The car's
       button must follow, with no press in the car
+- [ ] **The bookmark button marks the place, and the icon says the press landed.** Play a
+      book with no bookmarks and press the button once. The icon must change from the empty
+      bookmark to the filled one at once, and the phone's player screen must list a bookmark
+      at that position. A car has no toast, so the icon is the only feedback there is
+- [ ] A second press in the same book adds a second bookmark and changes nothing on screen.
+      That is on purpose: the icon already says the book has bookmarks. See
+      `CarBookmarkButton` for the option that was refused, which flickered on its own
+- [ ] A bookmark made with the phone in flight mode is still there, and syncs when signal
+      comes back
+- [ ] **The bookmark button is absent while a podcast episode plays.** Audiobookshelf has
+      nowhere to store a bookmark for an episode, and a press that failed would look the
+      same to a driver as one that worked. Open a book again: the button must come back with
+      no disconnect
+- [ ] Connect the car during a podcast episode, then start a book. The button must appear
+      and must work on the first press
 
 ## The queue, from the car
 

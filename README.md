@@ -45,7 +45,8 @@ The evidence behind that claim is in [docs/research/](docs/research/); the plan 
 - **A play queue**, with play-next, drag to reorder, and automatic continuation into the
   next book in a series or the next podcast episode
 - **Android Auto**: a browse tree served from the local database, so it works before the
-  phone app has been opened, plus voice search and chapter and speed controls in the car
+  phone app has been opened, plus voice search and chapter, speed and bookmark controls in
+  the car
 - **Bookmarks**, synced to the server and written locally first, so one made in a tunnel
   is still a bookmark
 - **Author, series and narrator pages**, computed locally — the server has no API that

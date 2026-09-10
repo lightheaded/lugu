@@ -148,7 +148,7 @@ the person who finds it will otherwise think it an oversight.
 |---|---|
 | Notification custom seek actions | Ties in with the ordering item above |
 | Physical headset and car test matrix | The AVRCP thresholds are user-tunable by design as an escape hatch; the matrix doc does not exist |
-| Bookmarks on a podcast episode | Audiobookshelf addresses a bookmark by library item alone, so there is nowhere to put an episode's. Local-only bookmarks would be bookmarks that vanish on a new phone (server #884 asks for the same thing) |
+| Bookmarks on a podcast episode | Audiobookshelf addresses a bookmark by library item alone, so there is nowhere to put an episode's. Local-only bookmarks would be bookmarks that vanish on a new phone (server #884 asks for the same thing). Two surfaces hide a control for this reason now: the player screen and the car's bookmark button |
 | Configurable rewind-after-pause curve | Smart rewind scales with time away, which is the right shape; the thresholds are not adjustable. Upstream app#205, 20 comments of people disagreeing about the right number — which is itself the argument for making it a setting |
 
 ## M0 gaps still open

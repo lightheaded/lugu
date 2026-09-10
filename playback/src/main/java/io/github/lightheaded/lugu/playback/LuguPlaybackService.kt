@@ -62,6 +62,7 @@ import io.github.lightheaded.lugu.core.model.SleepTimer
 import io.github.lightheaded.lugu.core.model.SmartRewind
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.BookmarkRepository
 import io.github.lightheaded.lugu.core.sync.HeadsetAction
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
@@ -85,6 +86,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -121,6 +123,8 @@ class LuguPlaybackService : MediaLibraryService() {
     @Inject lateinit var playbackPrefs: PlaybackPrefs
 
     @Inject lateinit var browseTree: BrowseTree
+
+    @Inject lateinit var bookmarkRepository: BookmarkRepository
 
     @Inject lateinit var diary: PlaybackDiary
 
@@ -226,6 +230,22 @@ class LuguPlaybackService : MediaLibraryService() {
 
     /** Controllers that identify themselves as a car, by package name. */
     private val carControllers = mutableSetOf<String>()
+
+    /**
+     * Whether the book now playing already holds a bookmark, or null when the car must not
+     * offer the bookmark button at all.
+     *
+     * Three states rather than two, because the button has three answers: absent for a
+     * podcast episode and for nothing playing, unfilled for a book with no bookmark, and
+     * filled for a book with one. See [CarBookmarkButton] for why the icon carries the
+     * state and why an episode is refused by absence rather than by a failed press.
+     *
+     * Volatile because [carCommands] reads it from a controller callback, which Media3
+     * dispatches on the session's own thread, and nothing promises that is the thread this
+     * collector runs on.
+     */
+    @Volatile
+    private var bookmarksOnItem: Boolean? = null
 
     /**
      * Wall clock at which playback last paused, used to size the smart rewind. Kept
@@ -423,6 +443,17 @@ class LuguPlaybackService : MediaLibraryService() {
         // Kept in a field rather than read on the tick, because building it means walking
         // an episode's chapters and the tick runs twice a second for the whole of a book.
         scope.launch { skipPlans().collect { skipPlan = it } }
+
+        // The car's bookmark button appears, disappears and fills with what is playing, so
+        // every emission is pushed. An emission that changes nothing costs nothing: Media3
+        // tells controllers only about a list that really moved, and this flow emits on a
+        // change of item, of account or of the bookmarks of one book — never on a tick.
+        scope.launch {
+            bookmarkStates().collect { state ->
+                bookmarksOnItem = state
+                pushNotificationLayout()
+            }
+        }
 
         // The accelerometer follows the timer rather than the app: a sensor registered
         // for the whole life of the service is a battery cost nothing on screen explains.
@@ -718,6 +749,37 @@ class LuguPlaybackService : MediaLibraryService() {
                 next,
             )
             player.setPlaybackSpeed(next)
+        }
+    }
+
+    /**
+     * Marks the place now playing, from the car.
+     *
+     * The position is the whole-book one, because that is the only kind of position anything
+     * outside this file uses and the only kind Audiobookshelf stores. A track index would
+     * name a different place in every book that ships its parts differently.
+     *
+     * The title is left blank on purpose. The repository names an unnamed bookmark after its
+     * position, the player screen leaves it blank for the same reason, and a driver has no
+     * keyboard to give it a better name with. One name, made in one place, whichever surface
+     * the bookmark came from.
+     *
+     * Nothing is reported back to the car on a failure, because there is nowhere to report
+     * it: the media template has no toast. There is also little to fail. The write lands in
+     * Room first and the server is told after, so a bookmark made with no signal is a
+     * bookmark. The guards before the launch are the cases with no place to write at all —
+     * nothing playing, an episode, no position yet, nobody signed in — and the button is
+     * already absent for every one of them.
+     */
+    private fun addBookmarkHere() {
+        val context = stateHolder.nowPlaying.value ?: return
+        if (context.episodeId != null) return
+        val position = currentAbsoluteSec() ?: return
+        scope.launch {
+            val account = authRepository.account() ?: return@launch
+            withContext(Dispatchers.IO) {
+                bookmarkRepository.add(account, context.libraryItemId, position, title = "")
+            }
         }
     }
 
@@ -1441,6 +1503,31 @@ class LuguPlaybackService : MediaLibraryService() {
                         announces = settings.skip.announceSkips,
                     )
                 }
+            }
+        }
+
+    /**
+     * What the car's bookmark button should be, or null when it should not be there.
+     *
+     * `flatMapLatest` for the same reason [skipPlans] needs it: *which* book's bookmarks to
+     * watch is decided by what is playing, so the inner flow has to be swapped when that
+     * changes. Combined with the account so that a sign-out, or a switch between two
+     * accounts on one server, takes the button away with it rather than leaving it filled
+     * from somebody else's book.
+     *
+     * Read from Room and never from the server. A bookmark made in a tunnel is in Room the
+     * moment it is made — see `BookmarkRepository` — so the icon fills on the press and not
+     * on the next sync, which is what makes the press visible at all.
+     */
+    @kotlin.OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun bookmarkStates(): Flow<Boolean?> =
+        combine(authRepository.observeAccount(), stateHolder.nowPlaying) { account, now ->
+            account to now
+        }.flatMapLatest { (account, now) ->
+            if (account == null || now == null || now.episodeId != null) {
+                flowOf(null)
+            } else {
+                bookmarkRepository.observe(account, now.libraryItemId).map { it.isNotEmpty() }
             }
         }
 
@@ -2228,14 +2315,18 @@ class LuguPlaybackService : MediaLibraryService() {
         if (this::player.isInitialized) player.playbackParameters.speed else 1.0f
 
     /**
-     * Chapter navigation and speed, as buttons a car can show.
+     * Chapter navigation, speed and the bookmark, as buttons a car can show.
      *
-     * A function rather than a field because the speed button prints the rate, so the list
-     * is different at 1.2x than at 2.0x. See [CarSpeedButton] for why the rate has to reach
-     * the car inside the icon.
+     * A function rather than a field because two of these move. The speed button prints the
+     * rate, so the list is different at 1.2x than at 2.0x — see [CarSpeedButton] for why the
+     * rate has to reach the car inside the icon. The bookmark button is absent for a podcast
+     * episode, which has nowhere to keep a bookmark, and changes icon once the book has one.
      */
-    private fun carCommands(): List<CommandButton> =
-        carChapterCommands + CarSpeedButton.buttonFor(currentSpeed())
+    private fun carCommands(): List<CommandButton> = buildList {
+        addAll(carChapterCommands)
+        add(CarSpeedButton.buttonFor(currentSpeed()))
+        bookmarksOnItem?.let { add(CarBookmarkButton.buttonFor(it)) }
+    }
 
     /**
      * The buttons offered to the notification, the lock screen and the platform session.
@@ -2291,6 +2382,13 @@ class LuguPlaybackService : MediaLibraryService() {
 
             carCommands().forEach { button -> button.sessionCommand?.let { commands.add(it) } }
             NotificationLayout.allCommands().forEach { commands.add(it) }
+            // Granted even while its button is absent. Available commands are read once, at
+            // connection, so a command left out here can never be added later: a car that
+            // connected during a podcast episode would still have no bookmark command an
+            // hour afterwards, with the button in front of the driver and nothing behind it.
+            commands.add(
+                SessionCommand(CarBookmarkButton.COMMAND_BOOKMARK_ADD, android.os.Bundle.EMPTY),
+            )
             // Not a button anywhere. It is how the app tells the service it has come to the
             // foreground, which is the one thing the service cannot see for itself.
             commands.add(
@@ -2349,6 +2447,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 NotificationLayout.COMMAND_CHAPTER_PREVIOUS -> seekChapter(forward = false)
                 NotificationLayout.COMMAND_CHAPTER_NEXT -> seekChapter(forward = true)
                 CarSpeedButton.COMMAND_SPEED_CYCLE -> cycleSpeed()
+                CarBookmarkButton.COMMAND_BOOKMARK_ADD -> addBookmarkHere()
                 PersistencePolicy.COMMAND_ARM_LAST_PLAYED -> armLastPlayed()
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
