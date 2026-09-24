@@ -102,6 +102,31 @@ class AutoPlayTest {
         assertThat(AutoPlay.suppressedByCancel(nowMs = 0, cancelledAtMs = 60_000)).isFalse()
     }
 
+    @Test
+    fun `a device never seen leaving is arriving`() {
+        assertThat(AutoPlay.isReappearance(nowMs = 10_000, goneAtMs = null)).isFalse()
+    }
+
+    /**
+     * The case this exists for: earbuds that lost their link for a few seconds while being
+     * worn, after the listener had paused the book.
+     */
+    @Test
+    fun `a device back seconds after dropping out is not a new connection`() {
+        assertThat(AutoPlay.isReappearance(nowMs = 5_000, goneAtMs = 0)).isTrue()
+    }
+
+    @Test
+    fun `a device away for longer than a drop-out is a new connection`() {
+        val later = AutoPlay.REAPPEARANCE_WINDOW_MS + 1
+        assertThat(AutoPlay.isReappearance(nowMs = later, goneAtMs = 0)).isFalse()
+    }
+
+    @Test
+    fun `a departure from the future suppresses nothing`() {
+        assertThat(AutoPlay.isReappearance(nowMs = 0, goneAtMs = 60_000)).isFalse()
+    }
+
     private fun conditions(
         audioSwitchedOver: Boolean = true,
         deviceStillConnected: Boolean = true,

@@ -41,7 +41,7 @@ private fun dependencies(context: Context): AutoPlayDependencies =
     EntryPointAccessors.fromApplication(context.applicationContext, AutoPlayDependencies::class.java)
 
 /**
- * A device connecting, on the versions of Android where a broadcast is still the way to
+ * A device connecting or disconnecting, on the versions of Android where a broadcast is still the way to
  * hear about it.
  *
  * Android 11 and earlier only. From Android 12 this is both unnecessary and unusable:
@@ -60,7 +60,11 @@ class BluetoothConnectionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.R) return
-        if (intent.action != BluetoothDevice.ACTION_ACL_CONNECTED) return
+        val connected = when (intent.action) {
+            BluetoothDevice.ACTION_ACL_CONNECTED -> true
+            BluetoothDevice.ACTION_ACL_DISCONNECTED -> false
+            else -> return
+        }
 
         val device = IntentCompat.getParcelableExtra(
             intent,
@@ -77,13 +81,22 @@ class BluetoothConnectionReceiver : BroadcastReceiver() {
         scope.launch {
             try {
                 val graph = dependencies(context)
+                val key = AutoPlay.deviceKey(address)
                 withTimeoutOrNull(SETTINGS_TIMEOUT_MS) {
-                    AutoPlayTrigger.onDeviceConnected(
-                        context = context.applicationContext,
-                        key = AutoPlay.deviceKey(address),
-                        prefs = graph.playbackPrefs(),
-                        diary = graph.diary(),
-                    )
+                    if (connected) {
+                        AutoPlayTrigger.onDeviceConnected(
+                            context = context.applicationContext,
+                            key = key,
+                            prefs = graph.playbackPrefs(),
+                            diary = graph.diary(),
+                        )
+                    } else {
+                        AutoPlayTrigger.onDeviceDisconnected(
+                            context = context.applicationContext,
+                            key = key,
+                            prefs = graph.playbackPrefs(),
+                        )
+                    }
                 }
             } finally {
                 pending.finish()

@@ -2,8 +2,10 @@ package io.github.lightheaded.lugu.playback
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.media.AudioManager
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import io.github.lightheaded.lugu.core.model.AutoPlay
 import io.github.lightheaded.lugu.core.model.AutoPlayDevice
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
@@ -68,6 +70,11 @@ internal object AutoPlayTrigger {
 
         val device = AutoPlay.match(settings.devices, key) ?: return null
 
+        if (AutoPlay.isReappearance(nowMs, departures(context).goneAtMs(key))) {
+            diary.record(AUTO_PLAY_REFUSED, "${device.name}, it was only back from a drop-out")
+            return null
+        }
+
         if (AutoPlay.suppressedByCancel(nowMs, cancelledAtMs)) {
             diary.record(AUTO_PLAY_REFUSED, "${device.name}, a start had just been cancelled")
             return null
@@ -90,6 +97,33 @@ internal object AutoPlayTrigger {
         )
         return device
     }
+
+    /**
+     * A device with this key has gone away. Remembered only for the chosen devices, so that
+     * its coming back seconds later is not taken for someone putting it on.
+     *
+     * Kept on disk rather than in a field like [cancelledAtMs], because the process has no
+     * reason to stay alive once the device it was bound for has gone, and the return has to
+     * be recognised by whichever process is there to hear it.
+     */
+    suspend fun onDeviceDisconnected(
+        context: Context,
+        key: String,
+        prefs: PlaybackPrefs,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        val settings = prefs.settings.first().autoPlay
+        if (AutoPlay.match(settings.devices, key) == null) return
+        departures(context).edit { putLong(key, nowMs) }
+    }
+
+    private fun departures(context: Context): SharedPreferences =
+        context.getSharedPreferences(DEPARTURES_FILE, Context.MODE_PRIVATE)
+
+    private fun SharedPreferences.goneAtMs(key: String): Long? =
+        if (contains(key)) getLong(key, 0L) else null
+
+    private const val DEPARTURES_FILE = "lugu_auto_play_departures"
 
     /**
      * What the service is asked to do, named here rather than on the service because this is

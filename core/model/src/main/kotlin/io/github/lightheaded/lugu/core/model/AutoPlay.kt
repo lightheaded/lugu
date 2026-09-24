@@ -87,6 +87,21 @@ object AutoPlay {
     const val CANCEL_SUPPRESSES_MS = 60_000L
 
     /**
+     * How long a device has to have been gone for its return to count as a new connection.
+     *
+     * Earbuds drop their link and pick it up again while they are being worn — one side
+     * loses the other, the phone goes into a pocket, the radio is simply busy — and to the
+     * system each return is a device appearing, exactly as if it had just come out of its
+     * case. Treated as one, it started the last book seconds after the listener had paused
+     * it, with the headphones never having left their ears.
+     *
+     * Two minutes is far longer than any drop-out and far shorter than putting a pair away
+     * and taking it out again for a reason. Getting it wrong in this direction costs one press
+     * of play; in the other it is a book talking unasked.
+     */
+    const val REAPPEARANCE_WINDOW_MS = 2 * 60_000L
+
+    /**
      * The key for a device, from its hardware address.
      *
      * Case is normalised because the connection broadcast, the bonded device list and the
@@ -156,6 +171,17 @@ object AutoPlay {
         if (cancelledAtMs == null) return false
         val since = nowMs - cancelledAtMs
         return since in 0 until CANCEL_SUPPRESSES_MS
+    }
+
+    /**
+     * Whether a device connecting now is only coming back from a drop-out.
+     *
+     * A null [goneAtMs] means the device has not been seen leaving, so its arrival is new.
+     */
+    fun isReappearance(nowMs: Long, goneAtMs: Long?): Boolean {
+        if (goneAtMs == null) return false
+        val since = nowMs - goneAtMs
+        return since in 0 until REAPPEARANCE_WINDOW_MS
     }
 
     /**

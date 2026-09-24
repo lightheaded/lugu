@@ -62,8 +62,19 @@ class AutoPlayCompanionService : CompanionDeviceService() {
 
     @Deprecated("Superseded by onDeviceEvent, which forwards to it")
     override fun onDeviceDisappeared(address: String) {
-        // Nothing. A device going away is already handled where it matters: Media3 pauses on
-        // the audio route becoming noisy, and the settings decide whether it should.
+        // The pause is not handled here: Media3 pauses on the audio route becoming noisy, and
+        // the settings decide whether it should. What is needed from this is the time, so a
+        // return seconds later is recognised as a drop-out rather than a new arrival.
+        val key = AutoPlay.deviceKey(address)
+        scope.launch {
+            runCatching {
+                AutoPlayTrigger.onDeviceDisconnected(
+                    context = applicationContext,
+                    key = key,
+                    prefs = playbackPrefs,
+                )
+            }
+        }
     }
 
     override fun onDestroy() {
