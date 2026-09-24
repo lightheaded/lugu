@@ -368,6 +368,9 @@ class LuguPlaybackService : MediaLibraryService() {
                 retryJob?.cancel()
                 pausedByRoute = null
                 networkStall = null
+                // A pause during an auto-play wait is the listener's answer to it. Without
+                // this the wait ran on and started the book five seconds after the pause.
+                if (autoPlayJob?.isActive == true || autoPlayWaiting) cancelAutoPlay()
             },
             onStopRequested = {
                 stopAttributor.declare(StopAttributor.REASON_STOP_COMMAND, System.currentTimeMillis())
