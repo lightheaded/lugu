@@ -45,6 +45,15 @@ class ListControlsTest {
     }
 
     @Test
+    fun `not finished keeps what is unstarted and what is in progress, and nothing finished`() {
+        assertThat(ListControls.matches(facts(progress = 0f), ListFilter.NOT_FINISHED)).isTrue()
+        assertThat(ListControls.matches(facts(progress = 0.4f), ListFilter.NOT_FINISHED)).isTrue()
+        // Finished by the flag, not by the position: the web can mark a book finished at 0.
+        assertThat(ListControls.matches(facts(progress = 0f, isFinished = true), ListFilter.NOT_FINISHED))
+            .isFalse()
+    }
+
+    @Test
     fun `an item finished without ever reporting progress still counts as started`() {
         // Marking something finished on the web leaves no position behind, so a naive
         // "progress is zero means unstarted" would put it back on the unplayed shelf.

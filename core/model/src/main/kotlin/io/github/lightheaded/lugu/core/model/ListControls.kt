@@ -63,12 +63,20 @@ enum class EpisodeSort(val id: String, val label: String) {
 /**
  * Which rows survive.
  *
- * Deliberately a small closed set rather than a query language. These are the five
- * questions actually asked of a list of things to listen to; anything else is what the
- * search box is for.
+ * Deliberately a small closed set rather than a query language. These are the questions
+ * actually asked of a list of things to listen to; anything else is what the search box
+ * is for.
  */
 enum class ListFilter(val id: String, val label: String) {
     ALL("all", "All"),
+
+    /**
+     * Everything still to listen to: not started and in progress together.
+     *
+     * It sits next to "All" because it is the other broad question. The three after it
+     * narrow the list further.
+     */
+    NOT_FINISHED("not_finished", "Not finished"),
     UNPLAYED("unplayed", "Not started"),
     IN_PROGRESS("in_progress", "In progress"),
     FINISHED("finished", "Finished"),
@@ -115,6 +123,7 @@ data class ListFacts(
 object ListControls {
     fun matches(facts: ListFacts, filter: ListFilter): Boolean = when (filter) {
         ListFilter.ALL -> true
+        ListFilter.NOT_FINISHED -> !facts.isFinished
         ListFilter.UNPLAYED -> !facts.isStarted
         ListFilter.IN_PROGRESS -> facts.progressFraction > 0f && !facts.isFinished
         ListFilter.FINISHED -> facts.isFinished
