@@ -411,17 +411,27 @@ internal fun DownloadRowView(
 }
 
 /**
- * Three orderings, because the questions asked of a downloads list are which one is this,
- * what is taking the space, and what did I fetch last.
+ * Four orderings, because the questions asked of a downloads list are which one is this,
+ * what is taking the space, what did I fetch last, and what was I listening to.
  */
 private val DOWNLOAD_SORTS = listOf(
     SortOption(ItemSort.TITLE.id, "Title"),
     SortOption(ItemSort.SIZE.id, ItemSort.SIZE.label),
     SortOption(ItemSort.ADDED.id, "Recently added"),
+    SortOption(ItemSort.RECENTLY_PLAYED.id, ItemSort.RECENTLY_PLAYED.label),
 )
 
 /**
- * The listening filters do not apply here — nothing on this screen knows how far through
- * a book anyone is — so the set is cut to the two states a download can be in.
+ * The two states a download can be in, plus "Not finished".
+ *
+ * "In progress" here means downloading, because a row's progress fraction is the
+ * download's own. The other listening filters stay out for that reason. "Not finished"
+ * reads only the listening flag, so it means the same as everywhere else: downloaded and
+ * not yet heard to the end.
  */
-private val DOWNLOAD_FILTERS = listOf(ListFilter.ALL, ListFilter.IN_PROGRESS, ListFilter.DOWNLOADED)
+private val DOWNLOAD_FILTERS = listOf(
+    ListFilter.ALL,
+    ListFilter.NOT_FINISHED,
+    ListFilter.IN_PROGRESS,
+    ListFilter.DOWNLOADED,
+)

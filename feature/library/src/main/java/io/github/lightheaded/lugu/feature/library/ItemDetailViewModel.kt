@@ -68,6 +68,7 @@ data class EpisodeRow(
             progressFraction = progressFraction,
             isFinished = isFinished,
             isDownloaded = download?.isComplete == true,
+            lastPlayedAtMs = progress?.lastUpdateMs ?: 0L,
         )
 }
 

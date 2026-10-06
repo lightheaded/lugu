@@ -9,11 +9,13 @@ import io.github.lightheaded.lugu.core.model.ItemSort
 import io.github.lightheaded.lugu.core.model.ListControls
 import io.github.lightheaded.lugu.core.model.ListFacts
 import io.github.lightheaded.lugu.core.model.ListFilter
+import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
+import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -148,6 +150,11 @@ data class DownloadsUiState(
      * govern.
      */
     val retainedStreamBytes: Long = 0,
+    /**
+     * The listening progress of each row, by [rowKey]: when it was last played, for the
+     * recently-played sort, and whether it is finished, for the "Not finished" filter.
+     */
+    val progressByRow: Map<String, MediaProgress> = emptyMap(),
     val settings: DownloadSettings = DownloadSettings(),
     val query: String = "",
     val sort: ItemSort = ItemSort.ADDED,
@@ -175,6 +182,7 @@ class DownloadsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val downloadRepository: DownloadRepository,
     private val libraryPrefs: LibraryPrefs,
+    progressRepository: ProgressRepository,
     downloadPrefs: DownloadPrefs,
 ) : ViewModel() {
 
@@ -209,8 +217,17 @@ class DownloadsViewModel @Inject constructor(
                     downloadRepository.observeAll(current),
                     downloadRepository.observeBytesUsed(current),
                     downloadPrefs.settings,
-                ) { downloads, bytes, settings ->
-                    DownloadsUiState(downloads = downloads, bytesUsed = bytes, settings = settings)
+                    progressRepository.observeAll(current),
+                ) { downloads, bytes, settings, progress ->
+                    DownloadsUiState(
+                        downloads = downloads,
+                        bytesUsed = bytes,
+                        settings = settings,
+                        // Keyed like a row: a book's own progress, or one episode's.
+                        progressByRow = progress.associateBy {
+                            "${it.libraryItemId}#${it.episodeId.orEmpty()}"
+                        },
+                    )
                 }.map { it.copy(retainedStreamBytes = downloadRepository.retainedStreamBytes()) }
             }
         }
@@ -218,7 +235,7 @@ class DownloadsViewModel @Inject constructor(
     val state: StateFlow<DownloadsUiState> =
         combine(content, query, listPrefs, message, selection) { base, search, prefs, note, picked ->
             val (order, chosenFilter) = prefs
-            val facts = base.downloads.factsByKey()
+            val facts = base.downloads.factsByKey(base.progressByRow)
             val visible = ListControls.sortItems(
                 base.downloads.filter {
                     val row = facts.getValue(it.rowKey)
@@ -330,7 +347,7 @@ class DownloadsViewModel @Inject constructor(
      * that list is the only ordering information there is. Size is a real field, so it
      * needs no such trick.
      */
-    private fun List<DownloadStatus>.factsByKey(): Map<String, ListFacts> =
+    private fun List<DownloadStatus>.factsByKey(listened: Map<String, MediaProgress>): Map<String, ListFacts> =
         withIndex().associate { (index, status) ->
             status.rowKey to ListFacts(
                 title = status.title,
@@ -340,6 +357,10 @@ class DownloadsViewModel @Inject constructor(
                 // A finished download is not "in progress", whatever its percentage says.
                 progressFraction = if (status.isComplete) 0f else status.percent.coerceIn(0f, 1f),
                 isDownloaded = status.isComplete,
+                lastPlayedAtMs = listened[status.rowKey]?.lastUpdateMs ?: 0L,
+                // The listening flag, not the download's: "Not finished" here means
+                // downloaded and not yet heard to the end.
+                isFinished = listened[status.rowKey]?.isFinished == true,
             )
         }
 }

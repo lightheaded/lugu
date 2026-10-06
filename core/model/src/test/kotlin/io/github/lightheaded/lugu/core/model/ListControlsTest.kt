@@ -100,6 +100,22 @@ class ListControlsTest {
     }
 
     @Test
+    fun `episodes played most recently come first, and the never-played tail is newest first`() {
+        val rows = listOf(
+            facts(title = "Old, unplayed", publishedAtMs = 100),
+            facts(title = "Played yesterday", publishedAtMs = 50, lastPlayedAtMs = 2_000),
+            facts(title = "New, unplayed", publishedAtMs = 300),
+            facts(title = "Played today", publishedAtMs = 10, lastPlayedAtMs = 3_000),
+        )
+
+        val sorted = ListControls.sortEpisodes(rows, EpisodeSort.RECENTLY_PLAYED) { it }
+
+        assertThat(sorted.map { it.title })
+            .containsExactly("Played today", "Played yesterday", "New, unplayed", "Old, unplayed")
+            .inOrder()
+    }
+
+    @Test
     fun `podcasts with the newest episode come first, and unknown dates last`() {
         // Zero means lugu has not fetched the episodes yet. Ranking that as the oldest
         // possible date is correct, but the unknown tail still needs an order a person can

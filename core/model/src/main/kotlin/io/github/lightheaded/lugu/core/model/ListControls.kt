@@ -4,9 +4,14 @@ package io.github.lightheaded.lugu.core.model
  * How a list is ordered and narrowed.
  *
  * Declared in the model rather than in a screen because the same two questions — what
- * order, and which subset — are asked of the library grid, the episode list and the
- * downloads screen. Building the answer three times is how three screens end up sorting
- * by three different notions of "recent".
+ * order, and which subset — are asked of four lists: the library grid ([ItemSort]), the
+ * episode list of one podcast and the Episodes view ([EpisodeSort]), and the downloads
+ * screen (its own pick of [ItemSort]). Building the answer per screen is how screens end up
+ * sorting by different notions of "recent".
+ *
+ * A new sort or filter goes into every one of the four lists, or the change says why one
+ * of them cannot have it. "Recently played" first reached the grid alone, because the
+ * episode lists read [EpisodeSort] and Downloads keeps its own list.
  */
 
 /** Ordering for a list of library items. */
@@ -53,6 +58,9 @@ enum class EpisodeSort(val id: String, val label: String) {
     LONGEST("longest", "Longest"),
     SHORTEST("shortest", "Shortest"),
     TITLE("title", "Title"),
+
+    /** What was listened to most recently, first. The same question as [ItemSort.RECENTLY_PLAYED]. */
+    RECENTLY_PLAYED("recently_played", "Recently played"),
     ;
 
     companion object {
@@ -221,5 +229,11 @@ object ListControls {
         EpisodeSort.LONGEST -> rows.sortedByDescending { facts(it).durationSec }
         EpisodeSort.SHORTEST -> rows.sortedBy { facts(it).durationSec }
         EpisodeSort.TITLE -> rows.sortedWith { a, b -> naturalCompare(facts(a).title, facts(b).title) }
+        // Never-played episodes form the tail, newest first, because that is how a feed is
+        // read. A title order there would scatter one show's new episodes through the tail.
+        EpisodeSort.RECENTLY_PLAYED -> rows.sortedWith(
+            compareByDescending<T> { facts(it).lastPlayedAtMs }
+                .thenByDescending { facts(it).publishedAtMs },
+        )
     }
 }
