@@ -34,6 +34,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.github.lightheaded.lugu.core.download.NewEpisodeIntent
 import io.github.lightheaded.lugu.core.model.formatClock
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.feature.library.AllEpisodesScreen
 import io.github.lightheaded.lugu.feature.library.BrowseGroupScreen
 import io.github.lightheaded.lugu.feature.library.BrowseScreen
 import io.github.lightheaded.lugu.feature.library.CollectionScreen
@@ -212,6 +213,9 @@ private object Routes {
     const val CONNECTION = "connection"
     const val COLLECTIONS = "collections"
     const val COLLECTION = "collections/{collectionId}"
+
+    /** The episodes of every podcast in the library in view, in one list. */
+    const val ALL_EPISODES = "episodes"
 
     /** Authors, series or narrators — the three groupings the item page links to. */
     const val BROWSE = "browse/{kind}"
@@ -401,6 +405,7 @@ private fun LuguApp(
                     onOpenQueue = { navController.navigate(Routes.QUEUE) },
                     onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
                     onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
+                    onOpenEpisodes = { navController.navigate(Routes.ALL_EPISODES) },
                     // A shelf tap on something already in progress means "carry on", so it
                     // plays rather than opening a page and asking again.
                     onPlay = { itemId, episodeId ->
@@ -500,6 +505,20 @@ private fun LuguApp(
                 BrowseGroupScreen(
                     onBack = { navController.popBackStack() },
                     onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
+
+            composable(Routes.ALL_EPISODES) {
+                val playerViewModel: PlayerViewModel = hiltViewModel()
+                AllEpisodesScreen(
+                    onBack = { navController.popBackStack() },
+                    onPlay = { itemId, episodeId ->
+                        playerViewModel.play(itemId, episodeId)
+                        navController.navigate(Routes.PLAYER)
+                    },
+                    onOpenEpisode = { itemId, episodeId ->
+                        navController.navigate(Routes.episode(itemId, episodeId))
+                    },
                 )
             }
 

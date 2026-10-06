@@ -88,6 +88,7 @@ fun HomeScreen(
     onOpenQueue: () -> Unit,
     onBrowse: (kind: String) -> Unit,
     onOpenCollections: () -> Unit,
+    onOpenEpisodes: () -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     /**
      * The bottom of the screen, drawn by the shell around the tab bar this screen hands in.
@@ -205,6 +206,7 @@ fun HomeScreen(
                 onOpenItem = onOpenItem,
                 onBrowse = onBrowse,
                 onOpenCollections = onOpenCollections,
+                onOpenEpisodes = onOpenEpisodes,
                 modifier = Modifier.fillMaxSize().padding(padding),
                 viewModel = libraryViewModel,
                 gridState = libraryGridState,
