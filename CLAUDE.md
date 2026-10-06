@@ -49,8 +49,8 @@ See `docs/qa/instrumented.md` for the full picture.
 
 ## Delivering a change
 
-"Open the PR, merge and deliver" means this procedure. It ends when Obtainium offers the
-new APK on the maintainer's phone. Obtainium tracks the Latest release and reads the version from its tag.
+"Open the PR, merge and deliver" means this procedure. It ends when the maintainer confirms
+the new APK from Obtainium and the checkout is back on `main`. Obtainium tracks the Latest release and reads the version from its tag.
 
 **The merge is a fast-forward push, never a GitHub merge.** History on `main` is linear,
 and the maintainer signs every commit. The merge, squash and rebase buttons and `gh pr merge` make
@@ -72,6 +72,9 @@ commits that the maintainer did not sign. Never use them. Never force-push `main
 11. Give the maintainer the tag. On the phone, Obtainium shows that version after "check for updates".
     After the install, Settings → About → Version shows `<versionName> (<versionCode>)`.
     The name must equal the tag without the `v`.
+12. When the maintainer confirms the build on the phone, clean up. Delete the branch on `origin`.
+13. If the work ran in a worktree, remove the worktree and its local branch.
+14. In the main checkout, switch to `main` and fast-forward it to `origin/main`.
 
 ```sh
 gh pr create -R lightheaded/lugu --base main --head <branch>
@@ -82,6 +85,9 @@ git push origin HEAD:main
 gh run list -R lightheaded/lugu --branch main -L 1
 gh run watch <id> -R lightheaded/lugu --exit-status
 gh release view -R lightheaded/lugu --json tagName,assets
+git push origin --delete <branch>
+git worktree remove <worktree path> && git branch -D <branch>   # from the main checkout
+git switch main && git pull --ff-only
 ```
 
 `versionName` is `<versionBase>.<run number>`, for example `0.2.0-alpha01.98`. The stable
