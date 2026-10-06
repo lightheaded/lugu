@@ -559,6 +559,7 @@ private fun LibraryTabPreview() {
         onOpenItem = {},
         onBrowse = {},
         onOpenCollections = {},
+        onOpenEpisodes = {},
     )
 }
 
@@ -586,6 +587,7 @@ private fun LibrarySelectionPreview() {
         onOpenItem = {},
         onBrowse = {},
         onOpenCollections = {},
+        onOpenEpisodes = {},
     )
 }
 

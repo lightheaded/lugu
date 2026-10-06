@@ -1204,6 +1204,24 @@ interface EpisodeDao {
     )
     suspend fun summaries(serverId: String, userId: String): List<EpisodeSummaryRow>
 
+    /**
+     * Every episode in the mirror of one library's podcasts, each with its podcast's title.
+     *
+     * This feeds the episodes view, which lists the episodes of all podcasts together. The
+     * join on the item table does two jobs: it scopes the list to one library, and it names
+     * the podcast, which a row needs as soon as episodes of many shows stand side by side.
+     */
+    @Query(
+        """
+        SELECT e.*, i.title AS podcastTitle FROM episode e
+        JOIN library_item i
+          ON i.serverId = e.serverId AND i.userId = e.userId AND i.id = e.libraryItemId
+        WHERE e.serverId = :serverId AND e.userId = :userId AND i.libraryId = :libraryId
+        ORDER BY e.publishedAtMs DESC
+        """,
+    )
+    fun observeForLibrary(serverId: String, userId: String, libraryId: String): Flow<List<LibraryEpisodeRow>>
+
     @Upsert
     suspend fun upsertAll(episodes: List<EpisodeEntity>)
 
@@ -1412,6 +1430,12 @@ interface SessionLedgerDao {
     )
     fun observeMediaTypeTotals(serverId: String, userId: String): Flow<List<MediaTypeTotalRow>>
 }
+
+/** One episode, and the title of the podcast it belongs to. */
+data class LibraryEpisodeRow(
+    @Embedded val episode: EpisodeEntity,
+    val podcastTitle: String,
+)
 
 /** One podcast's episodes in the mirror, counted, with the newest publish date. */
 data class EpisodeSummaryRow(

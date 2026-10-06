@@ -5,6 +5,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -89,6 +91,7 @@ fun LibraryScreen(
     onOpenItem: (String) -> Unit,
     onBrowse: (kind: String) -> Unit,
     onOpenCollections: () -> Unit,
+    onOpenEpisodes: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LibraryViewModel = hiltViewModel(),
     // Hoisted by the tab shell, so the grid keeps its place while the other tab is in
@@ -132,6 +135,7 @@ fun LibraryScreen(
         onOpenItem = onOpenItem,
         onBrowse = onBrowse,
         onOpenCollections = onOpenCollections,
+        onOpenEpisodes = onOpenEpisodes,
         modifier = modifier,
         gridState = gridState,
     )
@@ -193,6 +197,7 @@ internal fun LibraryContent(
     onOpenItem: (String) -> Unit,
     onBrowse: (kind: String) -> Unit,
     onOpenCollections: () -> Unit,
+    onOpenEpisodes: () -> Unit,
     modifier: Modifier = Modifier,
     gridState: LazyGridState = rememberLazyGridState(),
 ) {
@@ -232,7 +237,12 @@ internal fun LibraryContent(
         if (state.selectionActive) {
             LibrarySelectionBar(selectedCount = state.selectedIds.size, actions = selection)
         } else {
-            BrowseLinks(onBrowse = onBrowse, onOpenCollections = onOpenCollections)
+            BrowseLinks(
+                onBrowse = onBrowse,
+                onOpenCollections = onOpenCollections,
+                // Only a podcast library has episodes to list.
+                onOpenEpisodes = onOpenEpisodes.takeIf { state.isPodcastLibrary },
+            )
 
             ListControlsBar(
                 query = state.query,
@@ -429,18 +439,30 @@ private fun LibraryEmptyState(content: LibraryEmptyContent, modifier: Modifier =
  * one out: the first three group by what the metadata says, and a collection groups by what
  * a person decided. That difference matters to how the list was built and not at all to
  * somebody looking for a way in.
+ *
+ * A podcast library also offers Episodes, first: the episodes of every podcast in one list.
+ * Five links do not fit across a narrow phone, so the row scrolls sideways.
  */
 @Composable
 private fun BrowseLinks(
     onBrowse: (kind: String) -> Unit,
     onOpenCollections: () -> Unit,
+    onOpenEpisodes: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (onOpenEpisodes != null) {
+            TextButton(onClick = onOpenEpisodes) {
+                Text("Episodes", style = MaterialTheme.typography.labelLarge)
+            }
+        }
         BrowseKind.entries.forEach { kind ->
             TextButton(onClick = { onBrowse(kind.id) }) {
                 Text(kind.label, style = MaterialTheme.typography.labelLarge)

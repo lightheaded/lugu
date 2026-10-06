@@ -535,6 +535,11 @@ internal fun EpisodeRowView(
     onAddToQueue: () -> Unit,
     onSetFinished: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * The podcast the episode belongs to, for a list that spans podcasts. Null on one
+     * podcast's page, where every row has the same podcast and the bar already names it.
+     */
+    podcastTitle: String? = null,
 ) {
     val subline = remember(row.episode) { episodeSubline(row.episode) }
     val background = if (isSelected) {
@@ -563,6 +568,15 @@ internal fun EpisodeRowView(
                 .weight(1f)
                 .padding(vertical = 8.dp),
         ) {
+            if (podcastTitle != null) {
+                Text(
+                    podcastTitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 row.episode.title,
                 style = MaterialTheme.typography.bodyLarge,

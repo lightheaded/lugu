@@ -213,6 +213,17 @@ class LibraryRepository @Inject constructor(
         }
 
     /**
+     * Every episode the mirror holds for the podcasts of one library, across all of them.
+     *
+     * The mirror holds only the podcasts somebody opened or that [fillEpisodeDates] fetched,
+     * so a caller that wants the whole library runs that pass first.
+     */
+    fun observeLibraryEpisodes(account: ActiveAccount, libraryId: String): Flow<List<LibraryEpisode>> =
+        episodeDao.observeForLibrary(account.serverId, account.userId, libraryId).map { rows ->
+            rows.map { LibraryEpisode(it.episode.toDomain(), it.podcastTitle) }
+        }
+
+    /**
      * When the newest episode of each podcast came out, by item id.
      *
      * Only podcasts with episodes in the mirror are in the map. A podcast that nobody opened
@@ -840,6 +851,9 @@ internal fun LibraryItemEntity.toDomain(): LibraryItem = LibraryItem(
     updatedAtMs = updatedAtMs,
     coverPath = coverPath,
 )
+
+/** One episode in a list that spans podcasts, so it carries the name of its own. */
+data class LibraryEpisode(val episode: PodcastEpisode, val podcastTitle: String)
 
 internal fun EpisodeEntity.toDomain(): PodcastEpisode = PodcastEpisode(
     id = id,
