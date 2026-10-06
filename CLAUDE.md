@@ -47,6 +47,50 @@ record what you found in `docs/BACKLOG.md`. Never re-run to make a red job go aw
 
 See `docs/qa/instrumented.md` for the full picture.
 
+## Delivering a change
+
+"Open the PR, merge and deliver" means this procedure. It ends when Obtainium offers the
+new APK on the maintainer's phone. Obtainium tracks the Latest release and reads the version from its tag.
+
+**The merge is a fast-forward push, never a GitHub merge.** History on `main` is linear,
+and the maintainer signs every commit. The merge, squash and rebase buttons and `gh pr merge` make
+commits that the maintainer did not sign. Never use them. Never force-push `main`. Never use `--no-verify`.
+
+1. Run `./gradlew build` and `./gradlew compileDebugAndroidTestKotlin`. Both must pass.
+2. If only a Roborazzi test fails on a macOS host, let CI decide. Never record baselines
+   locally. Use `record-baselines.yml` (see `docs/qa/screenshots.md`).
+3. Make each commit subject and body fit for a release note. The release job builds its
+   notes from them (`AGENTS.md` → Releases).
+4. Push the branch and open the PR. Use the `type(scope): ...` title style.
+   End the body with the attribution line of the session.
+5. Wait for the `build` check. If it is red, fix the code and push again.
+6. Fetch `origin`. If `origin/main` is not an ancestor of the branch, rebase with signing on.
+7. Make sure that each commit in `origin/main..HEAD` shows `G`.
+8. Push the branch to `main`. GitHub then marks the PR as merged.
+9. Watch the run on `main`. If `instrumented` is red, investigate it (see CI). It does not stop the release.
+10. Make sure the release has a new tag `v<versionName>` and the asset `lugu-latest.apk`.
+11. Give the maintainer the tag. On the phone, Obtainium shows that version after "check for updates".
+    After the install, Settings → About → Version shows `<versionName> (<versionCode>)`.
+    The name must equal the tag without the `v`.
+
+```sh
+gh pr create -R lightheaded/lugu --base main --head <branch>
+gh pr checks <n> -R lightheaded/lugu --watch
+git fetch origin && git merge-base --is-ancestor origin/main HEAD || git -c commit.gpgsign=true rebase origin/main
+git log --format='%h %G? %s' origin/main..HEAD
+git push origin HEAD:main
+gh run list -R lightheaded/lugu --branch main -L 1
+gh run watch <id> -R lightheaded/lugu --exit-status
+gh release view -R lightheaded/lugu --json tagName,assets
+```
+
+`versionName` is `<versionBase>.<run number>`, for example `0.2.0-alpha01.98`. The stable
+link is `https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk`.
+
+`ci.yml` cancels a running run on the same ref. Thus a second push to `main` during a run
+cancels the first, and the first gets no release. If the signing keystore secret is missing,
+the release job passes but publishes nothing. In both cases, step 10 finds no new tag.
+
 ## Compose overlay rule
 
 **A clickable overlay must not cover fixed interactive controls.** `StatusStrip` is
