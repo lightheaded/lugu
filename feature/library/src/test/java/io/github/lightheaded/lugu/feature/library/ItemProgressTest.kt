@@ -45,4 +45,18 @@ class ItemProgressTest {
     fun `an item with no progress at all is absent rather than zeroed`() {
         assertThat(ItemProgress.byItem(emptyList())).isEmpty()
     }
+
+    @Test
+    fun `last played is the newest row of an item, episode or not`() {
+        val rows = listOf(
+            MediaProgress(libraryItemId = "book", lastUpdateMs = 40),
+            MediaProgress(libraryItemId = "pod", lastUpdateMs = 10),
+            MediaProgress(libraryItemId = "pod", episodeId = "old", lastUpdateMs = 100),
+            MediaProgress(libraryItemId = "pod", episodeId = "new", lastUpdateMs = 900, isFinished = true),
+        )
+
+        // The podcast's item-level row is older than its newest episode, so it must not win
+        // the way it does in byItem.
+        assertThat(ItemProgress.lastPlayedByItem(rows)).containsExactly("book", 40L, "pod", 900L)
+    }
 }

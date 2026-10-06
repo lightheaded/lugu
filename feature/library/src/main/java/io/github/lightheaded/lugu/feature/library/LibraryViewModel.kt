@@ -167,13 +167,16 @@ class LibraryViewModel @Inject constructor(
      * podcast cover showed no progress at all, however much of it had been listened to,
      * and the "In progress" filter could not see one either. The browse and collection
      * grids already read it this way; this one was the odd screen out.
+     *
+     * The last-played times come from the same rows in the same pass, so that the
+     * recently-played sort does not open a second query on the progress table.
      */
-    private val progressByItem: StateFlow<Map<String, MediaProgress>> = account
+    private val progressByItem: StateFlow<ProgressByItem> = account
         .flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else progressRepository.observeAll(current)
         }
-        .map { list -> ItemProgress.byItem(list) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+        .map { list -> ProgressByItem(ItemProgress.byItem(list), ItemProgress.lastPlayedByItem(list)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProgressByItem())
 
     /**
      * Which items are on the phone, so the "Downloaded" filter answers with the truth
@@ -242,13 +245,14 @@ class LibraryViewModel @Inject constructor(
         // library has no episodes to sort by.
         val stored = if (isPodcastLibrary) shaping.podcastSort else shaping.bookSort
         val sort = if (stored == ItemSort.LATEST_EPISODE && !isPodcastLibrary) ItemSort.TITLE else stored
-        val rows = itemList.map { LibraryRow(it, shaping.progress[it.id]) }
+        val rows = itemList.map { LibraryRow(it, shaping.progress.shown[it.id]) }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
         val facts = rows.associate {
             it.item.id to it.facts(
                 isDownloaded = it.item.id in shaping.downloaded,
                 latestEpisodeAtMs = shaping.latestEpisodes[it.item.id] ?: 0L,
+                lastPlayedAtMs = shaping.progress.lastPlayed[it.item.id] ?: 0L,
             )
         }
         val visible = ListControls.sortItems(
@@ -275,8 +279,14 @@ class LibraryViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
+    private data class ProgressByItem(
+        /** The one row each card shows; see [ItemProgress.byItem]. */
+        val shown: Map<String, MediaProgress> = emptyMap(),
+        val lastPlayed: Map<String, Long> = emptyMap(),
+    )
+
     private data class Shaping(
-        val progress: Map<String, MediaProgress>,
+        val progress: ProgressByItem,
         val downloaded: Set<String>,
         val latestEpisodes: Map<String, Long>,
         val bookSort: ItemSort,
@@ -545,7 +555,11 @@ class LibraryViewModel @Inject constructor(
  * The author is the secondary field because it is what the grid shows underneath the
  * title, so ordering by it lands where the eye already is.
  */
-private fun LibraryRow.facts(isDownloaded: Boolean, latestEpisodeAtMs: Long): ListFacts = ListFacts(
+private fun LibraryRow.facts(
+    isDownloaded: Boolean,
+    latestEpisodeAtMs: Long,
+    lastPlayedAtMs: Long,
+): ListFacts = ListFacts(
     title = item.title,
     secondary = item.authorName,
     addedAtMs = item.addedAtMs,
@@ -554,4 +568,5 @@ private fun LibraryRow.facts(isDownloaded: Boolean, latestEpisodeAtMs: Long): Li
     progressFraction = progressFraction,
     isFinished = isFinished,
     isDownloaded = isDownloaded,
+    lastPlayedAtMs = lastPlayedAtMs,
 )

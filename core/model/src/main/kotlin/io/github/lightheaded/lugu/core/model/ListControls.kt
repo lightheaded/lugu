@@ -27,6 +27,12 @@ enum class ItemSort(val id: String, val label: String) {
      * and the list would fall back to title order while the chip claimed otherwise.
      */
     LATEST_EPISODE("latest_episode", "Latest episode"),
+
+    /**
+     * What was listened to most recently, first. Offered for books and podcasts alike:
+     * both have progress rows, so both have an answer.
+     */
+    RECENTLY_PLAYED("recently_played", "Recently played"),
     ;
 
     companion object {
@@ -97,6 +103,11 @@ data class ListFacts(
     val progressFraction: Float = 0f,
     val isFinished: Boolean = false,
     val isDownloaded: Boolean = false,
+    /**
+     * When it was last listened to, from the `lastUpdateMs` of its progress. For a podcast,
+     * the newest of its episodes. Zero when it has never been played.
+     */
+    val lastPlayedAtMs: Long = 0L,
 ) {
     val isStarted: Boolean get() = progressFraction > 0f || isFinished
 }
@@ -185,6 +196,12 @@ object ListControls {
         // not "aired in 1970". The title breaks ties so that the unknown tail is readable.
         ItemSort.LATEST_EPISODE -> rows.sortedWith(
             compareByDescending<T> { facts(it).publishedAtMs }
+                .thenComparator { a, b -> naturalCompare(facts(a).title, facts(b).title) },
+        )
+        // Same shape as the latest-episode sort: zero is "never played", so those rows form
+        // the tail, in title order so that the tail is readable.
+        ItemSort.RECENTLY_PLAYED -> rows.sortedWith(
+            compareByDescending<T> { facts(it).lastPlayedAtMs }
                 .thenComparator { a, b -> naturalCompare(facts(a).title, facts(b).title) },
         )
     }

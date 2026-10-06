@@ -21,6 +21,7 @@ class ListControlsTest {
         progress: Float = 0f,
         isFinished: Boolean = false,
         isDownloaded: Boolean = false,
+        lastPlayedAtMs: Long = 0,
     ) = ListFacts(
         title = title,
         secondary = secondary,
@@ -30,6 +31,7 @@ class ListControlsTest {
         progressFraction = progress,
         isFinished = isFinished,
         isDownloaded = isDownloaded,
+        lastPlayedAtMs = lastPlayedAtMs,
     )
 
     @Test
@@ -104,6 +106,25 @@ class ListControlsTest {
 
         assertThat(sorted.map { it.title })
             .containsExactly("Fresh", "Stale", "Unknown A", "Unknown B")
+            .inOrder()
+    }
+
+    @Test
+    fun `the most recently played comes first, and the never played last by title`() {
+        // A finished item keeps its place: it was listened to then, and the sort answers
+        // "what did I listen to", not "what is left".
+        val rows = listOf(
+            facts(title = "Never 10", lastPlayedAtMs = 0),
+            facts(title = "Last week", lastPlayedAtMs = 100),
+            facts(title = "Never 2", lastPlayedAtMs = 0),
+            facts(title = "Finished today", lastPlayedAtMs = 300, isFinished = true),
+            facts(title = "Yesterday", lastPlayedAtMs = 200),
+        )
+
+        val sorted = ListControls.sortItems(rows, ItemSort.RECENTLY_PLAYED) { it }
+
+        assertThat(sorted.map { it.title })
+            .containsExactly("Finished today", "Yesterday", "Last week", "Never 2", "Never 10")
             .inOrder()
     }
 

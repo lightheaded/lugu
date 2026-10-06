@@ -299,4 +299,17 @@ internal object ItemProgress {
         rows.groupBy { it.libraryItemId }.mapValues { (_, forItem) ->
             forItem.firstOrNull { it.episodeId == null } ?: forItem.maxBy { it.lastUpdateMs }
         }
+
+    /**
+     * When each item was last listened to: the newest `lastUpdateMs` across all its rows.
+     *
+     * Not read from [byItem], because that prefers the item-level row, and a podcast can
+     * carry one that is older than its newest episode. A book has only the item-level row,
+     * so for a book this is that row's time.
+     *
+     * A finished row counts like any other. "Recently played" means listened to, and the
+     * book finished last night is the one most people look for first the next day.
+     */
+    fun lastPlayedByItem(rows: List<MediaProgress>): Map<String, Long> =
+        rows.groupBy { it.libraryItemId }.mapValues { (_, forItem) -> forItem.maxOf { it.lastUpdateMs } }
 }

@@ -86,6 +86,7 @@ class FastScrollRailTest {
         assertThat(ItemSort.DURATION.isAlphabetical).isFalse()
         assertThat(ItemSort.PROGRESS.isAlphabetical).isFalse()
         assertThat(ItemSort.LATEST_EPISODE.isAlphabetical).isFalse()
+        assertThat(ItemSort.RECENTLY_PLAYED.isAlphabetical).isFalse()
     }
 
     private fun earns(itemCount: Int, letterCount: Int, alphabetical: Boolean): Boolean =

@@ -264,6 +264,8 @@ internal fun LibraryContent(
                 // Latest episode is offered only where there are episodes. In a book
                 // library every row would tie, and the grid would show title order under a
                 // chip that claims a different one.
+                // Recently played is offered in both kinds of library: books and episodes
+                // both have progress rows to read the time from.
                 sortOptions = ItemSort.entries
                     .filter { it != ItemSort.SIZE }
                     .filter { it != ItemSort.LATEST_EPISODE || state.isPodcastLibrary }
