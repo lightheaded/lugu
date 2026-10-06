@@ -115,6 +115,31 @@ still reads every change they get. Promotion with no tag takes the newest prerel
 cancels the first, and the first gets no release. If the signing keystore secret is missing,
 the release job passes but publishes nothing. In both cases, step 10 finds no new tag.
 
+## Where the maintainer's rules are written
+
+**Write each rule that the maintainer gives about how to work into this file or into
+`AGENTS.md`, and commit it with the work.** An agent's own memory can keep a copy too, but
+that copy is not enough by itself: the repository is what the next session reads.
+
+## Sorts and filters go into every list
+
+**A new sort or filter option goes into every list that has list controls.** If one of the
+lists cannot have it, the change says why. On 6 October 2026, "Recently played" reached the
+Library grid only. The episode lists read `EpisodeSort`, not `ItemSort`, and Downloads keeps
+its own list, so the maintainer found the gap on the phone.
+
+Before you call the change done, search for `ListControlsBar(`, `SortOption(` and
+`ListFilter.entries`, and check each result. Today there are four lists:
+
+| List | Sorts | Filters |
+|---|---|---|
+| Library grid (`LibraryScreen.kt`) | `ItemSort` | `ListFilter.entries` |
+| One podcast's episodes (`ItemDetailScreen.kt`) | `EpisodeSort` | `ListFilter.entries` |
+| Episodes view (`AllEpisodesScreen.kt`) | `EpisodeSort` | `ListFilter.entries` |
+| Downloads (`DownloadsScreen.kt`) | `DOWNLOAD_SORTS` | `DOWNLOAD_FILTERS` |
+
+Each list remembers its own sort and filter in `LibraryPrefs`. A new list gets its own keys.
+
 ## Compose overlay rule
 
 **A clickable overlay must not cover fixed interactive controls.** `StatusStrip` is
