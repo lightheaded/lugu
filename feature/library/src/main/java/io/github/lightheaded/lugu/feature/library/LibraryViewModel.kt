@@ -232,18 +232,16 @@ class LibraryViewModel @Inject constructor(
             latestEpisodeDates,
             settings,
         ) { progress, downloaded, latest, prefs ->
-            Shaping(progress, downloaded, latest, prefs.itemSort, prefs.itemFilter)
+            Shaping(progress, downloaded, latest, prefs.itemSort, prefs.podcastSort, prefs.itemFilter)
         },
         extras,
     ) { libs, selected, itemList, shaping, extras ->
         val isPodcastLibrary = libs.firstOrNull { it.id == selected }?.mediaType == MediaType.PODCAST
-        // The stored choice is one for every library. It is kept as it is, so that a return
-        // to the podcasts finds it again, but a book library has no episodes to sort by.
-        val sort = if (shaping.sort == ItemSort.LATEST_EPISODE && !isPodcastLibrary) {
-            ItemSort.TITLE
-        } else {
-            shaping.sort
-        }
+        // Book libraries and podcast libraries each keep their own choice. The book key can
+        // still hold "Latest episode" from the time when one key served both, and a book
+        // library has no episodes to sort by.
+        val stored = if (isPodcastLibrary) shaping.podcastSort else shaping.bookSort
+        val sort = if (stored == ItemSort.LATEST_EPISODE && !isPodcastLibrary) ItemSort.TITLE else stored
         val rows = itemList.map { LibraryRow(it, shaping.progress[it.id]) }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
@@ -281,7 +279,8 @@ class LibraryViewModel @Inject constructor(
         val progress: Map<String, MediaProgress>,
         val downloaded: Set<String>,
         val latestEpisodes: Map<String, Long>,
-        val sort: ItemSort,
+        val bookSort: ItemSort,
+        val podcastSort: ItemSort,
         val filter: ListFilter,
     )
 
@@ -322,13 +321,18 @@ class LibraryViewModel @Inject constructor(
 
     fun onQueryChange(value: String) = query.update { value }
 
-    /** Remembered rather than reset per visit: an ordering someone chose is a decision. */
+    /**
+     * Remembered rather than reset per visit: an ordering someone chose is a decision.
+     *
+     * Stored for the kind of library in view, so that a sort chosen among the books does
+     * not re-order the podcasts, and the reverse.
+     */
     fun setSort(sort: ItemSort) {
         viewModelScope.launch {
-            libraryPrefs.setItemSort(sort)
-            if (sort != ItemSort.LATEST_EPISODE) return@launch
+            val library = libraries.value.firstOrNull { it.id == selectedLibraryId.value }
+            libraryPrefs.setItemSortFor(library?.mediaType, sort)
+            if (sort != ItemSort.LATEST_EPISODE || library == null) return@launch
             val current = authRepository.account() ?: return@launch
-            val library = libraries.value.firstOrNull { it.id == selectedLibraryId.value } ?: return@launch
             fillEpisodeDates(current, library)
         }
     }
@@ -514,7 +518,7 @@ class LibraryViewModel @Inject constructor(
                 }.onFailure { error.value = it.message ?: "Could not sync the library" }
 
                 val library = libraries.firstOrNull { it.id == id }
-                if (library != null && libraryPrefs.current().itemSort == ItemSort.LATEST_EPISODE) {
+                if (library != null && libraryPrefs.current().podcastSort == ItemSort.LATEST_EPISODE) {
                     fillEpisodeDates(current, library)
                 }
             }

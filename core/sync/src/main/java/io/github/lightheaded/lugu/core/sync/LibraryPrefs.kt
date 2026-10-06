@@ -78,10 +78,27 @@ data class LibrarySettings(
      * switch rather than a hardcoded answer.
      */
     val shelvesFollowLibrary: Boolean = true,
+    /** The grid's ordering in a book library. */
     val itemSort: ItemSort = ItemSort.TITLE,
+    /**
+     * The grid's ordering in a podcast library, kept apart from [itemSort].
+     *
+     * One key for both used to mean that a sort chosen among the books also re-ordered the
+     * podcasts. The two want different orders: "Latest episode" means nothing for a book,
+     * and is the order a feed reader expects for podcasts.
+     */
+    val podcastSort: ItemSort = ItemSort.TITLE,
     val itemFilter: ListFilter = ListFilter.ALL,
     val episodeSort: EpisodeSort = EpisodeSort.NEWEST,
     val episodeFilter: ListFilter = ListFilter.ALL,
+    /**
+     * The episodes view's own ordering and filter, kept apart from one podcast's.
+     *
+     * Somebody who works through one show oldest-first does not want the episodes of every
+     * show listed oldest-first too.
+     */
+    val allEpisodesSort: EpisodeSort = EpisodeSort.NEWEST,
+    val allEpisodesFilter: ListFilter = ListFilter.ALL,
     /**
      * The downloads screen's own ordering, kept apart from the grid's.
      *
@@ -108,6 +125,15 @@ data class LibrarySettings(
         return visible.sortedBy { known[nameOf(it)] ?: (shelfOrder.size + declared.indexOf(it)) }
     }
 }
+
+/**
+ * The grid's ordering for a podcast library, from the stored keys.
+ *
+ * Before the podcast key existed, one key held the choice for every library. A phone that
+ * stored a sort there, "Latest episode" included, finds it again in its podcast library.
+ * Once the podcast key is written, it wins.
+ */
+internal fun storedPodcastSort(own: String?, shared: String?): ItemSort = ItemSort.fromId(own ?: shared)
 
 @Singleton
 class LibraryPrefs @Inject constructor(
@@ -160,6 +186,15 @@ class LibraryPrefs @Inject constructor(
         store.edit { it[ITEM_SORT] = sort.id }
     }
 
+    suspend fun setPodcastSort(sort: ItemSort) {
+        store.edit { it[PODCAST_SORT] = sort.id }
+    }
+
+    /** Stores [sort] as the grid's ordering for the libraries that hold [mediaType]. */
+    suspend fun setItemSortFor(mediaType: MediaType?, sort: ItemSort) {
+        if (mediaType == MediaType.PODCAST) setPodcastSort(sort) else setItemSort(sort)
+    }
+
     suspend fun setItemFilter(filter: ListFilter) {
         store.edit { it[ITEM_FILTER] = filter.id }
     }
@@ -170,6 +205,14 @@ class LibraryPrefs @Inject constructor(
 
     suspend fun setEpisodeFilter(filter: ListFilter) {
         store.edit { it[EPISODE_FILTER] = filter.id }
+    }
+
+    suspend fun setAllEpisodesSort(sort: EpisodeSort) {
+        store.edit { it[ALL_EPISODES_SORT] = sort.id }
+    }
+
+    suspend fun setAllEpisodesFilter(filter: ListFilter) {
+        store.edit { it[ALL_EPISODES_FILTER] = filter.id }
     }
 
     suspend fun setDownloadSort(sort: ItemSort) {
@@ -188,9 +231,12 @@ class LibraryPrefs @Inject constructor(
         hiddenShelves = this[HIDDEN_SHELVES]?.toNames()?.toSet().orEmpty(),
         shelvesFollowLibrary = this[SHELVES_FOLLOW_LIBRARY] ?: true,
         itemSort = ItemSort.fromId(this[ITEM_SORT]),
+        podcastSort = storedPodcastSort(own = this[PODCAST_SORT], shared = this[ITEM_SORT]),
         itemFilter = ListFilter.fromId(this[ITEM_FILTER]),
         episodeSort = EpisodeSort.fromId(this[EPISODE_SORT]),
         episodeFilter = ListFilter.fromId(this[EPISODE_FILTER]),
+        allEpisodesSort = EpisodeSort.fromId(this[ALL_EPISODES_SORT]),
+        allEpisodesFilter = ListFilter.fromId(this[ALL_EPISODES_FILTER]),
         // Nothing stored means the declared default rather than [ItemSort.fromId]'s, which
         // is the library grid's answer and not this screen's.
         downloadSort = this[DOWNLOAD_SORT]?.let { ItemSort.fromId(it) } ?: ItemSort.ADDED,
@@ -211,9 +257,12 @@ class LibraryPrefs @Inject constructor(
         val HIDDEN_SHELVES = stringPreferencesKey("hidden_shelves")
         val SHELVES_FOLLOW_LIBRARY = booleanPreferencesKey("shelves_follow_library")
         val ITEM_SORT = stringPreferencesKey("item_sort")
+        val PODCAST_SORT = stringPreferencesKey("podcast_sort")
         val ITEM_FILTER = stringPreferencesKey("item_filter")
         val EPISODE_SORT = stringPreferencesKey("episode_sort")
         val EPISODE_FILTER = stringPreferencesKey("episode_filter")
+        val ALL_EPISODES_SORT = stringPreferencesKey("all_episodes_sort")
+        val ALL_EPISODES_FILTER = stringPreferencesKey("all_episodes_filter")
         val DOWNLOAD_SORT = stringPreferencesKey("download_sort")
         val DOWNLOAD_FILTER = stringPreferencesKey("download_filter")
     }
