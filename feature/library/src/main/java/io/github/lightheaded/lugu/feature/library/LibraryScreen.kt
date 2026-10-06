@@ -251,8 +251,12 @@ internal fun LibraryContent(
                 // phone. The server's own size field counts the ebook and anything flagged
                 // excluded, so ordering the library by it would rank books by something
                 // nobody fetched.
+                // Latest episode is offered only where there are episodes. In a book
+                // library every row would tie, and the grid would show title order under a
+                // chip that claims a different one.
                 sortOptions = ItemSort.entries
                     .filter { it != ItemSort.SIZE }
+                    .filter { it != ItemSort.LATEST_EPISODE || state.isPodcastLibrary }
                     .map { SortOption(it.id, it.label) },
                 selectedSortId = state.sort.id,
                 onSortSelected = { controls.onSortSelected(ItemSort.fromId(it)) },

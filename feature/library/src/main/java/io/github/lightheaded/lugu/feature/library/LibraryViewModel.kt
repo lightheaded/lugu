@@ -11,6 +11,7 @@ import io.github.lightheaded.lugu.core.model.ListControls
 import io.github.lightheaded.lugu.core.model.ListFacts
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.model.MediaProgress
+import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
@@ -86,6 +87,8 @@ data class LibraryUiState(
     val query: String = "",
     val sort: ItemSort = ItemSort.TITLE,
     val filter: ListFilter = ListFilter.ALL,
+    /** Whether the selected library holds podcasts, which decides the sorts on offer. */
+    val isPodcastLibrary: Boolean = false,
     val isSyncing: Boolean = false,
     /**
      * True only for a sync somebody asked for by pulling the grid down.
@@ -184,6 +187,13 @@ class LibraryViewModel @Inject constructor(
         .map { rows -> rows.filter { it.isComplete }.map { it.libraryItemId }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
+    /** When each podcast's newest episode came out, for the latest-episode sort. */
+    private val latestEpisodeDates: StateFlow<Map<String, Long>> = account
+        .flatMapLatest { current ->
+            if (current == null) flowOf(emptyMap()) else libraryRepository.observeLatestEpisodeDates(current)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     private val items: StateFlow<List<LibraryItem>> =
         combine(account, selectedLibraryId, query) { current, libraryId, text ->
             Triple(current, libraryId, text)
@@ -216,18 +226,36 @@ class LibraryViewModel @Inject constructor(
         libraries,
         selectedLibraryId,
         items,
-        combine(progressByItem, downloadedItemIds, settings) { progress, downloaded, prefs ->
-            Shaping(progress, downloaded, prefs.itemSort, prefs.itemFilter)
+        combine(
+            progressByItem,
+            downloadedItemIds,
+            latestEpisodeDates,
+            settings,
+        ) { progress, downloaded, latest, prefs ->
+            Shaping(progress, downloaded, latest, prefs.itemSort, prefs.itemFilter)
         },
         extras,
     ) { libs, selected, itemList, shaping, extras ->
+        val isPodcastLibrary = libs.firstOrNull { it.id == selected }?.mediaType == MediaType.PODCAST
+        // The stored choice is one for every library. It is kept as it is, so that a return
+        // to the podcasts finds it again, but a book library has no episodes to sort by.
+        val sort = if (shaping.sort == ItemSort.LATEST_EPISODE && !isPodcastLibrary) {
+            ItemSort.TITLE
+        } else {
+            shaping.sort
+        }
         val rows = itemList.map { LibraryRow(it, shaping.progress[it.id]) }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
-        val facts = rows.associate { it.item.id to it.facts(it.item.id in shaping.downloaded) }
+        val facts = rows.associate {
+            it.item.id to it.facts(
+                isDownloaded = it.item.id in shaping.downloaded,
+                latestEpisodeAtMs = shaping.latestEpisodes[it.item.id] ?: 0L,
+            )
+        }
         val visible = ListControls.sortItems(
             rows.filter { ListControls.matches(facts.getValue(it.item.id), shaping.filter) },
-            shaping.sort,
+            sort,
         ) { facts.getValue(it.item.id) }
         val onScreen = extras.selection.retaining(visible.map { it.item.id })
 
@@ -236,8 +264,9 @@ class LibraryViewModel @Inject constructor(
             selectedLibraryId = selected,
             items = visible,
             query = extras.query,
-            sort = shaping.sort,
+            sort = sort,
             filter = shaping.filter,
+            isPodcastLibrary = isPodcastLibrary,
             isSyncing = extras.isSyncing,
             isPulling = extras.isPulling,
             syncNote = extras.syncNote,
@@ -251,6 +280,7 @@ class LibraryViewModel @Inject constructor(
     private data class Shaping(
         val progress: Map<String, MediaProgress>,
         val downloaded: Set<String>,
+        val latestEpisodes: Map<String, Long>,
         val sort: ItemSort,
         val filter: ListFilter,
     )
@@ -294,7 +324,33 @@ class LibraryViewModel @Inject constructor(
 
     /** Remembered rather than reset per visit: an ordering someone chose is a decision. */
     fun setSort(sort: ItemSort) {
-        viewModelScope.launch { libraryPrefs.setItemSort(sort) }
+        viewModelScope.launch {
+            libraryPrefs.setItemSort(sort)
+            if (sort != ItemSort.LATEST_EPISODE) return@launch
+            val current = authRepository.account() ?: return@launch
+            val library = libraries.value.firstOrNull { it.id == selectedLibraryId.value } ?: return@launch
+            fillEpisodeDates(current, library)
+        }
+    }
+
+    /**
+     * Fetches what the latest-episode sort needs, for one podcast library.
+     *
+     * Only when that sort is chosen: the pass costs a request per podcast the first time,
+     * and somebody who sorts by title gets nothing for that data.
+     */
+    private suspend fun fillEpisodeDates(current: ActiveAccount, library: Library) {
+        if (library.mediaType != MediaType.PODCAST) return
+        val what = library.name.ifBlank { "your podcasts" }
+        var shown = false
+        libraryRepository.fillEpisodeDates(current, library.id) { done, total ->
+            shown = true
+            syncNote.value = SyncNote(
+                text = "Checking episode dates in $what — $done of $total",
+                fraction = done.toFloat() / total,
+            )
+        }.onFailure { error.value = it.message ?: "Could not check the episode dates" }
+        if (shown) syncNote.value = null
     }
 
     fun setFilter(filter: ListFilter) {
@@ -456,6 +512,11 @@ class LibraryViewModel @Inject constructor(
                         fraction = if (total > 0) synced.toFloat() / total else null,
                     )
                 }.onFailure { error.value = it.message ?: "Could not sync the library" }
+
+                val library = libraries.firstOrNull { it.id == id }
+                if (library != null && libraryPrefs.current().itemSort == ItemSort.LATEST_EPISODE) {
+                    fillEpisodeDates(current, library)
+                }
             }
 
             syncNote.value = SyncNote("Syncing where you got to")
@@ -480,10 +541,11 @@ class LibraryViewModel @Inject constructor(
  * The author is the secondary field because it is what the grid shows underneath the
  * title, so ordering by it lands where the eye already is.
  */
-private fun LibraryRow.facts(isDownloaded: Boolean): ListFacts = ListFacts(
+private fun LibraryRow.facts(isDownloaded: Boolean, latestEpisodeAtMs: Long): ListFacts = ListFacts(
     title = item.title,
     secondary = item.authorName,
     addedAtMs = item.addedAtMs,
+    publishedAtMs = latestEpisodeAtMs,
     durationSec = item.durationSec,
     progressFraction = progressFraction,
     isFinished = isFinished,

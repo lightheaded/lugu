@@ -88,6 +88,25 @@ class ListControlsTest {
         assertThat(sorted.map { it.title }).containsExactly("new", "middle", "old").inOrder()
     }
 
+    @Test
+    fun `podcasts with the newest episode come first, and unknown dates last`() {
+        // Zero means lugu has not fetched the episodes yet. Ranking that as the oldest
+        // possible date is correct, but the unknown tail still needs an order a person can
+        // scan, so the title breaks the tie.
+        val rows = listOf(
+            facts(title = "Unknown B", publishedAtMs = 0),
+            facts(title = "Stale", publishedAtMs = 100),
+            facts(title = "Unknown A", publishedAtMs = 0),
+            facts(title = "Fresh", publishedAtMs = 300),
+        )
+
+        val sorted = ListControls.sortItems(rows, ItemSort.LATEST_EPISODE) { it }
+
+        assertThat(sorted.map { it.title })
+            .containsExactly("Fresh", "Stale", "Unknown A", "Unknown B")
+            .inOrder()
+    }
+
     /**
      * The bug this exists to prevent: lexicographic ordering compares one character at a
      * time, so "10" sorts before "2" and a series is listed in an order that recommends

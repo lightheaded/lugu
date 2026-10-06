@@ -34,6 +34,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -127,6 +128,9 @@ class LibraryRepository @Inject constructor(
      */
     private val passLocks = ConcurrentHashMap<String, Mutex>()
 
+    /** One episode-date pass at a time. See [fillEpisodeDates]. */
+    private val episodeDatesLock = Mutex()
+
     /**
      * The libraries this listener wants to see.
      *
@@ -207,6 +211,57 @@ class LibraryRepository @Inject constructor(
         episodeDao.observeForItem(account.serverId, account.userId, itemId).map { rows ->
             rows.map { it.toDomain() }
         }
+
+    /**
+     * When the newest episode of each podcast came out, by item id.
+     *
+     * Only podcasts with episodes in the mirror are in the map. A podcast that nobody opened
+     * is absent until [fillEpisodeDates] fetches it.
+     */
+    fun observeLatestEpisodeDates(account: ActiveAccount): Flow<Map<String, Long>> =
+        episodeDao.observeSummaries(account.serverId, account.userId).map { rows ->
+            rows.associate { it.libraryItemId to it.latestPublishedAtMs }
+        }
+
+    /**
+     * Fetches the episodes of each podcast in [libraryId] that the mirror holds only in part.
+     *
+     * The paged item listing carries no episode dates, so the only way to know when a
+     * podcast last published is the expanded fetch of that one podcast. That is one request
+     * per podcast, so this pass skips every podcast whose episode count already matches the
+     * server's. The first pass on a library fetches all of them. After that, a pass fetches
+     * only the podcasts that gained episodes.
+     *
+     * A count that matches can still hide a change: a feed that keeps its last ten episodes
+     * drops one as it gains one. The socket's item update and opening the podcast both
+     * refresh it, which covers that case while the app runs.
+     *
+     * A podcast that fails is skipped, so one unreachable item cannot stop the rest. A pass
+     * that starts while another runs returns at once, because the other pass does the same
+     * work. Returns how many podcasts this pass fetched.
+     */
+    suspend fun fillEpisodeDates(
+        account: ActiveAccount,
+        libraryId: String,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): Result<Int> = runCatching {
+        if (!episodeDatesLock.tryLock()) return@runCatching 0
+        try {
+            val held = episodeDao.summaries(account.serverId, account.userId)
+                .associate { it.libraryItemId to it.episodeCount }
+            val partial = itemDao.observeByLibrary(account.serverId, account.userId, libraryId).first()
+                .filter { MediaType.fromWire(it.mediaType) == MediaType.PODCAST }
+                .filter { (held[it.id] ?: 0) < it.numEpisodes }
+
+            partial.forEachIndexed { index, podcast ->
+                syncItemDetail(account, podcast.id)
+                onProgress(index + 1, partial.size)
+            }
+            partial.size
+        } finally {
+            episodeDatesLock.unlock()
+        }
+    }
 
     /**
      * One episode, by its own id.

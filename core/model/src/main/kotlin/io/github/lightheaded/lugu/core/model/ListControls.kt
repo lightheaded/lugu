@@ -19,6 +19,14 @@ enum class ItemSort(val id: String, val label: String) {
 
     /** Only meaningful where rows have bytes on the phone — the downloads screen. */
     SIZE("size", "Largest first"),
+
+    /**
+     * Podcasts whose newest episode came out most recently, first.
+     *
+     * Only meaningful in a podcast library. A book has no episodes, so every book would tie
+     * and the list would fall back to title order while the chip claimed otherwise.
+     */
+    LATEST_EPISODE("latest_episode", "Latest episode"),
     ;
 
     companion object {
@@ -78,6 +86,10 @@ data class ListFacts(
     val title: String,
     val secondary: String? = null,
     val addedAtMs: Long = 0L,
+    /**
+     * When it came out. For an episode, its own date. For a podcast, the date of its newest
+     * episode. Zero when lugu does not know yet.
+     */
     val publishedAtMs: Long = 0L,
     val durationSec: Double = 0.0,
     /** Bytes on the phone. Zero everywhere it does not apply, which is most places. */
@@ -169,6 +181,12 @@ object ListControls {
         ItemSort.PROGRESS -> rows.sortedByDescending { facts(it).progressFraction }
         // Largest first: this ordering exists to answer "what is taking up the space".
         ItemSort.SIZE -> rows.sortedByDescending { facts(it).sizeBytes }
+        // Newest first, and a podcast with no known date last: zero is "not fetched yet",
+        // not "aired in 1970". The title breaks ties so that the unknown tail is readable.
+        ItemSort.LATEST_EPISODE -> rows.sortedWith(
+            compareByDescending<T> { facts(it).publishedAtMs }
+                .thenComparator { a, b -> naturalCompare(facts(a).title, facts(b).title) },
+        )
     }
 
     fun <T> sortEpisodes(rows: List<T>, sort: EpisodeSort, facts: (T) -> ListFacts): List<T> = when (sort) {

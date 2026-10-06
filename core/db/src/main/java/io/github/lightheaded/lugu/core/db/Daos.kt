@@ -1177,6 +1177,33 @@ interface EpisodeDao {
         limit: Int,
     ): List<EpisodeEntity>
 
+    /**
+     * Per podcast in the mirror: how many episodes it holds, and when the newest came out.
+     *
+     * This is what orders the library grid by latest episode. The server cannot answer it,
+     * because its item listing carries no episode dates and offers no sort by them. The
+     * count tells the caller which podcasts the mirror holds only in part.
+     */
+    @Query(
+        """
+        SELECT libraryItemId, COUNT(*) AS episodeCount, MAX(publishedAtMs) AS latestPublishedAtMs
+        FROM episode
+        WHERE serverId = :serverId AND userId = :userId
+        GROUP BY libraryItemId
+        """,
+    )
+    fun observeSummaries(serverId: String, userId: String): Flow<List<EpisodeSummaryRow>>
+
+    @Query(
+        """
+        SELECT libraryItemId, COUNT(*) AS episodeCount, MAX(publishedAtMs) AS latestPublishedAtMs
+        FROM episode
+        WHERE serverId = :serverId AND userId = :userId
+        GROUP BY libraryItemId
+        """,
+    )
+    suspend fun summaries(serverId: String, userId: String): List<EpisodeSummaryRow>
+
     @Upsert
     suspend fun upsertAll(episodes: List<EpisodeEntity>)
 
@@ -1385,6 +1412,13 @@ interface SessionLedgerDao {
     )
     fun observeMediaTypeTotals(serverId: String, userId: String): Flow<List<MediaTypeTotalRow>>
 }
+
+/** One podcast's episodes in the mirror, counted, with the newest publish date. */
+data class EpisodeSummaryRow(
+    val libraryItemId: String,
+    val episodeCount: Int,
+    val latestPublishedAtMs: Long,
+)
 
 /** Two columns of one session: when it started, and how much was heard in it. */
 data class SessionPointRow(
