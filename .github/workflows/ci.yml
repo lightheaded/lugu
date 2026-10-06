@@ -347,7 +347,7 @@ jobs:
           if-no-files-found: warn
 
       # Exactly one release per build, tagged with the version the APK actually
-      # reports, and marked as the repository's Latest.
+      # reports, and published as a prerelease.
       #
       # This replaced a rolling `latest` tag whose asset was clobbered in place. That
       # scheme gave an update tracker nothing that ever changed, and Obtainium fell
@@ -355,12 +355,13 @@ jobs:
       # offering the same one. The tag must equal "v" + the installed versionName, or
       # Obtainium cannot reconcile the two and reinstalls on every check.
       #
-      # The unchanging download link survives as the release-independent
-      # /releases/latest/download/lugu-latest.apk, which --latest keeps pointing here.
-      # Releases are deliberately NOT marked --prerelease: a repo whose every release
-      # is a prerelease has no Latest at all, which breaks both that link and the
-      # tracker's default behaviour. The version string already says alpha.
-      - name: Publish alpha release
+      # A prerelease, so that the maintainer tests each build in the same flow as
+      # everybody else before it reaches them. Obtainium offers a prerelease only to an
+      # install with "Include prereleases" on. GitHub never marks a prerelease as
+      # Latest, so /releases/latest/download/lugu-latest.apk keeps pointing at the
+      # newest confirmed build. `promote-release.yml` turns a tested prerelease into the
+      # Latest release, with notes that start at the previous release.
+      - name: Publish prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -376,71 +377,16 @@ jobs:
           fi
           VERSION="$BASE.${GITHUB_RUN_NUMBER}"
 
-          # Every commit back to the previous release tag, turned into a TL;DR
-          # (subject lines) and a detailed section (full bodies, where the actual
-          # feature description lives — see AGENTS.md's Releases section). Notes
-          # were previously just the install boilerplate below with no feature
-          # content at all.
+          # The notes start at the tag before this build, of either kind, so each
+          # prerelease says what is new since the one before it.
           #
-          # On 28 August this step died with `gh: Argument list too long`, exit 126,
-          # and no release. What is proved: the notes were passed as one argument, and
-          # Linux refuses an argument over 128 KB. What is NOT proved: which range that
-          # run used. Both the failing run and the one after it fetched tags, so the
-          # obvious explanation — no tag, therefore the whole history at 198 KB — is not
-          # supported by the logs, and the failing run printed neither its range nor its
-          # size. That is why the two `echo` lines below exist.
-          #
-          # The range is bounded anyway, because the unbounded fallback is wrong on its
-          # own terms: the whole history is not a release note. A tag can go missing for
-          # an ordinary reason, because a force push can leave the last release tag
-          # unreachable from HEAD, so this must degrade rather than break.
+          # On 28 August this step died with `gh: Argument list too long`, exit 126, and
+          # no release: the notes were passed as one argument, and Linux refuses an
+          # argument over 128 KB. So the notes go through a file, and the script bounds
+          # the range when no tag is reachable — a force push can leave the last release
+          # tag unreachable from HEAD, so this must degrade rather than break.
           PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="$PREV_TAG..HEAD"
-            LIMIT=""
-          else
-            RANGE="HEAD"
-            LIMIT="--max-count=50"
-            echo "No v* tag is reachable from HEAD. Describing the last 50 commits." >&2
-          fi
-          echo "Release notes cover $RANGE ${LIMIT:-(no limit)}"
-
-          TLDR=$(git log $LIMIT "$RANGE" --format='- %s' --no-merges)
-          DETAILS=$(git log $LIMIT "$RANGE" --format='### %s%n%n%b' --no-merges \
-            | grep -v '^Co-Authored-By:' | grep -v '^Claude-Session:')
-
-          # A release body is capped at 125000 characters by the API, so a long run of
-          # work has to be cut somewhere. The TL;DR is kept whole, because it names
-          # every change. The detail is what gets cut, and the note says so.
-          DETAIL_CAP=90000
-          if [ "$(printf '%s' "$DETAILS" | wc -c)" -gt "$DETAIL_CAP" ]; then
-            DESCRIBED=$(printf '%s' "$DETAILS" | head -c "$DETAIL_CAP")
-            DETAILS="$DESCRIBED
-
-          The detail is cut here, because it passed the size a release page holds. Every
-          change is named in the TL;DR above, and \`git log $RANGE\` holds the rest."
-          fi
-
-          # Written to a file rather than passed as an argument. A note longer than
-          # 128 KB cannot be an argument at all: the kernel refuses the exec, and the
-          # failure reads as a missing `gh` rather than as an oversized note.
-          {
-            echo "lugu $VERSION — alpha build from \`${GITHUB_SHA::7}\`."
-            echo
-            echo "## TL;DR"
-            echo "$TLDR"
-            echo
-            echo "## What changed"
-            echo "$DETAILS"
-            echo
-            echo "Install over any previous lugu build; the signing key is stable."
-            echo "Always-current download: https://github.com/lightheaded/lugu/releases/latest/download/lugu-latest.apk"
-            echo "Pre-alpha: see the README for what works and what does not."
-            echo
-            echo "\`lugu-mapping-$VERSION.txt\` is the R8 mapping for this exact build. A stack"
-            echo "trace from it is obfuscated and means nothing without it:"
-            echo "\`retrace lugu-mapping-$VERSION.txt trace.txt\`."
-          } > release-notes.md
+          .github/scripts/release-notes.sh "$VERSION" "$GITHUB_SHA" "$PREV_TAG" prerelease > release-notes.md
           echo "Release notes: $(wc -c < release-notes.md) bytes"
 
           # Named with the version so that a mapping downloaded next to a crash report
@@ -453,4 +399,4 @@ jobs:
           fi
 
           gh release create "v$VERSION" $ASSETS \
-            --title "lugu $VERSION" --notes-file release-notes.md --latest
+            --title "lugu $VERSION" --notes-file release-notes.md --prerelease

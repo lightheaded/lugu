@@ -1,0 +1,70 @@
+name: promote-release
+
+# Turns a tested prerelease into the Latest release.
+#
+# Every build on `main` is published as a prerelease (see the release job in ci.yml).
+# Only an install with "Include prereleases" on gets it. When the maintainer has tested
+# it on a phone, this workflow makes that same release, with the same APK, the Latest
+# one. Obtainium's default setting and the always-current download link then reach it.
+#
+# Nothing is built here. The APK that was tested is the APK that ships.
+#
+# Run it from the Actions tab, from the GitHub app, or with:
+#   gh workflow run promote-release.yml -R lightheaded/lugu -f tag=v<versionName>
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The prerelease to promote, for example v0.2.0-alpha01.98. Empty means the newest prerelease.'
+        required: false
+        type: string
+
+# Two promotions at once would race for Latest.
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: the notes walk back to the previous release.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Promote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --limit 50 --json tagName,isPrerelease \
+              -q '[.[] | select(.isPrerelease)][0].tagName')
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "No prerelease to promote." >&2
+            exit 1
+          fi
+          if [ "$(gh release view "$TAG" --json isPrerelease -q .isPrerelease)" != "true" ]; then
+            echo "$TAG is not a prerelease. Nothing to promote." >&2
+            exit 1
+          fi
+
+          # The current Latest, before this promotion. The notes start there, so that
+          # somebody who skips the prereleases still reads every change they get.
+          SINCE=$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName // ""')
+          SHA=$(git rev-list -n 1 "$TAG")
+          VERSION=${TAG#v}
+          echo "Promoting $TAG ($SHA), notes since ${SINCE:-(none)}"
+
+          .github/scripts/release-notes.sh "$VERSION" "$SHA" "$SINCE" release > release-notes.md
+          echo "Release notes: $(wc -c < release-notes.md) bytes"
+
+          gh release edit "$TAG" --prerelease=false --latest --notes-file release-notes.md
+          gh release view "$TAG" --json tagName,isPrerelease,url

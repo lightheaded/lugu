@@ -158,6 +158,10 @@ Two things to keep true:
 - A release without feature content (just install instructions and mapping-file
   boilerplate) is the failure mode this guards against: notes with nothing in
   them tell an installer nothing about why they'd want the update.
+- Each build on `main` is a prerelease, and its notes start at the tag before it.
+  When the maintainer has tested it, `promote-release.yml` makes it the Latest
+  release and writes its notes again from the previous release. Both use
+  `.github/scripts/release-notes.sh`. See `CLAUDE.md` → Delivering a change.
 - `Co-Authored-By:` and `Claude-Session:` trailers are stripped from the
   detailed section before publishing — useful in git history, not useful to
   someone reading a release.
