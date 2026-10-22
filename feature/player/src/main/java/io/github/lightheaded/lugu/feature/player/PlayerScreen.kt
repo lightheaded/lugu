@@ -648,6 +648,9 @@ private fun CoverArt(
  * [authorLink]. The credit is drawn in the primary colour when it leads somewhere, as the
  * links on the item page are, because nobody presses grey text to find out whether it
  * does anything. With no destination it stays grey and does not take a tap.
+ *
+ * The credit line keeps its height when there is no credit, as `reservedSpace` does for a
+ * message: the line under the title must not appear from nothing when "Starting…" fills it.
  */
 @Composable
 internal fun TitleAndAuthor(
@@ -665,15 +668,24 @@ internal fun TitleAndAuthor(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.clickable(enabled = enabled, onClick = onOpen),
     )
-    author?.let {
-        val linked = enabled && onOpenAuthor != null
-        Text(
-            it,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (linked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = if (linked) Modifier.clickable(onClick = { onOpenAuthor?.invoke() }) else Modifier,
-        )
-    }
+    // The credit line is always one line tall. An item with no author keeps the empty
+    // line, so "Starting…" can appear in it while the next item starts and push nothing
+    // down. An empty line is not drawn, not read out and takes no tap. It holds real text,
+    // because an empty string measures shorter than one line.
+    val shown = !author.isNullOrBlank()
+    val linked = shown && enabled && onOpenAuthor != null
+    Text(
+        if (shown) author.orEmpty() else STARTING_LABEL,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (linked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = when {
+            !shown -> Modifier.alpha(0f).clearAndSetSemantics {}
+            linked -> Modifier.clickable(onClick = { onOpenAuthor?.invoke() })
+            else -> Modifier
+        },
+    )
 }
 
 /** The current chapter, and the way into the chapter list. */
