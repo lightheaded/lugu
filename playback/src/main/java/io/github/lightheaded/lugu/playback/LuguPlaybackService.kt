@@ -1840,9 +1840,17 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     private fun persistPosition(reason: String) {
-        val context = stateHolder.nowPlaying.value ?: return
-        val absolute = currentAbsoluteSec() ?: return
-        if (absolute < 0) return
+        // Decided now, on the main thread, because the player can start again before the
+        // write below finishes. See [ProgressPushRule].
+        val pushes = ProgressPushRule.pushesNow(reason, player.isPlaying)
+        val context = stateHolder.nowPlaying.value
+        val absolute = currentAbsoluteSec()
+        if (context == null || absolute == null || absolute < 0) {
+            // Nothing to write, but a due push still goes: the outbox can hold an older
+            // write, and the run also uploads the listening sessions.
+            if (pushes) SyncScheduler.flushNow(this)
+            return
+        }
         // A tick that has not moved is not worth a database write.
         if (reason == "tick" && kotlin.math.abs(absolute - lastPersistedSec) < 0.5) return
 
@@ -1869,6 +1877,8 @@ class LuguPlaybackService : MediaLibraryService() {
                     listenedDeltaSec = if (reason == "tick") listenedSec else 0.0,
                 )
             }
+            // After the write, not beside it: a run that starts first finds nothing to send.
+            if (pushes) SyncScheduler.flushNow(this@LuguPlaybackService)
         }
     }
 
@@ -1937,9 +1947,9 @@ class LuguPlaybackService : MediaLibraryService() {
             if (!isPlaying) {
                 lastTickWallClockMs = 0L
                 pausedAtWallClockMs = now
+                // The write starts the push itself, once it is in the outbox.
                 persistPosition(reason = "pause")
                 applySleepTimerPauseRule()
-                SyncScheduler.flushNow(this@LuguPlaybackService)
             } else {
                 hasPlayedSinceCreate = true
                 applyRewindOnResume()
