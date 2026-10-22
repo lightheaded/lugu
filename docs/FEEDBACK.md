@@ -96,7 +96,7 @@ Links should be consistent **everywhere**, not just on one screen:
 
 | Item | Status |
 |---|---|
-| Now-playing title links to the item page | done |
+| Now-playing title links to the item page | done; for an episode it opens the episode page (5103659) |
 | Author/series/narrator links | done 16 Aug |
 | Now-playing **cover** links to the item page too | done 16 Aug |
 

@@ -41,6 +41,8 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | `SignInTest` | Yes |
 | `PlaybackResumptionTest` | Yes |
 | `NextInSeriesTest` | Yes, and a series on it |
+| `RealtimeSocketTest` | Yes |
+| `AutoDownloadRulesTest` | Yes, and a series on it |
 | `harness` `the_harness_outlives_a_force_stop_of_lugu` | No |
 | `harness` `..._after_the_process_is_killed` | Yes |
 | `harness` `a_force_stop_never_resumes_the_wrong_thing` | Yes |

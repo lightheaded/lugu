@@ -169,6 +169,8 @@ Where: `MainActivity.kt:408-418` · `StartupViewModel.kt:30-34`
 
 ### The crash prompt speaks with two voices
 
+**Partly done 22 October.** The voice is done in 6a09432 (`fix(ux): local dates and times, whole-row switches, and a link from an episode to its show`). The anchor above the bottom content is open, and [BACKLOG.md](BACKLOG.md) records it.
+
 **Severity: low.**
 
 **Current.** "lugu crashed last time. Want me to look into it?" then a button "Tell me what happened" — two "me"s on opposite sides of the conversation. The popup also floats over the tab bar until answered.
@@ -289,7 +291,9 @@ Where: `DownloadsScreen.kt:281, 296-303`
 
 Where: `DownloadsViewModel.kt:174-182` · `contrast LibraryViewModel.kt:337`
 
-### A downloaded episode opens the show page, not the episode
+### ~~A downloaded episode opens the show page, not the episode~~
+
+**Done 22 October** in 5103659 (`fix(navigation): the player title opens the episode, and the author is a link`). A Downloads row with an episode opens the episode page.
 
 **Severity: low.**
 
@@ -421,7 +425,9 @@ Where: `QueueScreen.kt:179-217, 246-333`
 
 Where: `ItemDetailViewModel.kt:400-413` · `ItemDetailScreen.kt:653-668`
 
-### Episode-row controls sit under the 48 dp minimum
+### ~~Episode-row controls sit under the 48 dp minimum~~
+
+**Done 22 October** in 6a09432 (`fix(ux): local dates and times, whole-row switches, and a link from an episode to its show`). Each control draws at 40 dp in a 48 dp touch target.
 
 **Severity: medium.**
 
@@ -472,6 +478,8 @@ Where: `ItemDetailViewModel.kt:287-334` · `ItemDetailScreen.kt:300-318`
 Where: `ItemDetailScreen.kt` · `ChapterSheet.kt`
 
 ### The episode page has no artwork and no way to its show
+
+**Partly done 22 October.** The show name in the top bar opens the show page: 6a09432 added the link, and bd45240 (`fix(feedback): a tap anywhere on the attach row flips the switch, and an episode links to its show`) connected it to the navigation. The cover beside the title is open.
 
 **Severity: low.**
 
@@ -653,7 +661,9 @@ Where: `PlayerScreen.kt:465-475` · `BookmarkSheet.kt:189-219`
 
 Where: `ChapterSheet.kt:102` · `SleepSheet.kt:123` · `PlayerScreen.kt:641, 701`
 
-### The transcoding note resurrects, and speaks developer
+### ~~The transcoding note resurrects, and speaks developer~~
+
+**Done 22 October.** The dismissal is in 4ef8095 (`fix(player): a dismissed transcoding note stays away when you open the player again`). The wording is in 6a09432: "Converted for streaming — jumps may land a few seconds off".
 
 **Severity: low.**
 
@@ -695,7 +705,9 @@ Where: `LoginScreen.kt:98-166, 331-342` · `ConnectionScreen.kt:381-392`
 
 Where: `LoginScreen.kt:104-108, 174-188` · `LoginViewModel.kt:29`
 
-### The Connection screen cannot be found by settings search
+### ~~The Connection screen cannot be found by settings search~~
+
+**Done 22 October** in 6a09432 (`fix(ux): local dates and times, whole-row switches, and a link from an episode to its show`). The account entry holds the Connection words.
 
 **Severity: medium.**
 
@@ -705,7 +717,9 @@ Where: `LoginScreen.kt:104-108, 174-188` · `LoginViewModel.kt:29`
 
 Where: `SettingsScreen.kt:1072-1078`
 
-### Switch rows toggle only on the switch
+### ~~Switch rows toggle only on the switch~~
+
+**Done 22 October** in 6a09432 for `SwitchRow` in Settings, and in bd45240 (`fix(feedback): a tap anywhere on the attach row flips the switch, and an episode links to its show`) for the feedback attach row. `ShelfRow` keeps its own switch, because a whole-row toggle would take the taps on its disabled arrows, and those arrows must stay inert.
 
 **Severity: medium.**
 
@@ -755,7 +769,9 @@ Where: `SettingsScreen.kt:189-1207`
 
 Where: `FeedbackScreen.kt:196-208, 326-331, 442-445` · `FeedbackReport.kt:66-68`
 
-### The playback record speaks UK time to everyone
+### ~~The playback record speaks UK time to everyone~~
+
+**Done 22 October** in 6a09432 (`fix(ux): local dates and times, whole-row switches, and a link from an episode to its show`). The record uses the phone's locale.
 
 **Severity: medium.**
 
@@ -915,6 +931,6 @@ The docs record deliberate choices with reasons. This audit does not re-raise th
 
 **Not re-raised (rejected in docs):** dialogs for in-place information · remembering search text (a stale search reads as lost data) · tab switches in the back stack · long-press-select on the queue (long-press means drag there) · chapters as the car's queue · chapter-scoped notification progress · detecting unmarked adverts · paging long episode lists · a "Keep" button on position notices.
 
-**Already in BACKLOG.md (confirmed, not new):** the "—" placeholder rule on three screens · per-row download errors vs the no-reflow rule · continuation cannot be undone · no per-item download-notification progress · offline covers for never-opened items · add-to-collection missing from the grid selection bar · the car speed button's fixed label.
+**Already in BACKLOG.md (confirmed, not new):** the "—" placeholder rule on three screens · per-row download errors vs the no-reflow rule · continuation cannot be undone · no per-item download-notification progress · offline covers for never-opened items · ~~add-to-collection missing from the grid selection bar~~ (done 22 October) · the car speed button's fixed label.
 
 **Fixed recently and verified still good:** the status strip replacing the shifting top-bar spinner · the honest "starting" play button · mini player and tab bar separation · the tappable now-playing cover · download refusals that show their arithmetic.
