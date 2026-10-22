@@ -48,6 +48,7 @@ import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
 import io.github.lightheaded.lugu.feature.library.QueueScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
+import io.github.lightheaded.lugu.feature.player.PlayerLink
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.AccountsScreen
@@ -184,7 +185,7 @@ internal fun episodeTargetOf(intent: Intent?): EpisodeTarget? {
     return EpisodeTarget(itemId, episodeId)
 }
 
-private object Routes {
+internal object Routes {
     /** The sign-in screen, with an optional account to sign in to again. See [LoginArgs]. */
     const val LOGIN = "login?${LoginArgs.ACCOUNT}={${LoginArgs.ACCOUNT}}"
 
@@ -256,6 +257,13 @@ private object Routes {
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
         )
         return "browse/$kind/$encoded"
+    }
+
+    /** The route of a page the player links to. See [PlayerLink] for which tap leads where. */
+    fun of(link: PlayerLink): String = when (link) {
+        is PlayerLink.Item -> item(link.itemId)
+        is PlayerLink.Episode -> episode(link.itemId, link.episodeId)
+        is PlayerLink.Group -> browseGroup(link.kind, link.name)
     }
 }
 
@@ -476,6 +484,10 @@ private fun LuguApp(
                 DownloadsScreen(
                     onBack = { navController.popBackStack() },
                     onOpenItem = { navController.navigate(Routes.item(it)) },
+                    // A downloaded episode opens its own page, not the show it is part of.
+                    onOpenEpisode = { itemId, episodeId ->
+                        navController.navigate(Routes.episode(itemId, episodeId))
+                    },
                 )
             }
 
@@ -574,8 +586,9 @@ private fun LuguApp(
             composable(Routes.PLAYER) {
                 PlayerScreen(
                     onBack = { navController.popBackStack() },
-                    // Consistent navigation: the title is a link to the item wherever it appears.
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    // The cover and title lead to what plays (the episode, for a podcast), and
+                    // the credit under them to the author or the show. See `PlayerLink`.
+                    onOpenLink = { navController.navigate(Routes.of(it)) },
                     // The same route Home's top bar opens, so the queue is one screen and
                     // not two. The player is where a listener asks "what is after this",
                     // and until now only Home could answer.

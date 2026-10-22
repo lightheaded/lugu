@@ -99,7 +99,7 @@ import io.github.lightheaded.lugu.playback.PositionJump
 @Composable
 fun PlayerScreen(
     onBack: () -> Unit,
-    onOpenItem: (String) -> Unit = {},
+    onOpenLink: (PlayerLink) -> Unit = {},
     onOpenQueue: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: PlayerViewModel = hiltViewModel(),
@@ -305,7 +305,7 @@ fun PlayerScreen(
                         scrubbing?.let { viewModel.seekTo(it.toDouble()) }
                         scrubbing = null
                     },
-                    onOpenItem = onOpenItem,
+                    onOpenLink = onOpenLink,
                     onOpenChapters = { showChapterSheet = true },
                     viewModel = viewModel,
                     onSpeed = { showSpeedSheet = true },
@@ -329,7 +329,7 @@ fun PlayerScreen(
                         scrubbing?.let { viewModel.seekTo(it.toDouble()) }
                         scrubbing = null
                     },
-                    onOpenItem = onOpenItem,
+                    onOpenLink = onOpenLink,
                     onOpenChapters = { showChapterSheet = true },
                     viewModel = viewModel,
                     onSpeed = { showSpeedSheet = true },
@@ -378,7 +378,7 @@ private fun PortraitPlayerContent(
     scrubbing: Float?,
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
-    onOpenItem: (String) -> Unit,
+    onOpenLink: (PlayerLink) -> Unit,
     onOpenChapters: () -> Unit,
     viewModel: PlayerViewModel,
     onSpeed: () -> Unit,
@@ -400,7 +400,7 @@ private fun PortraitPlayerContent(
             coverUrl = nowPlaying?.coverUrl,
             title = nowPlaying?.title,
             enabled = nowPlaying != null,
-            onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+            onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
             modifier = Modifier.fillMaxWidth(0.8f).aspectRatio(1f),
         )
 
@@ -409,7 +409,8 @@ private fun PortraitPlayerContent(
             title = nowPlaying?.title ?: "Nothing playing",
             author = nowPlaying?.author,
             enabled = nowPlaying != null,
-            onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+            onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
+            onOpenAuthor = nowPlaying?.authorLink?.let { link -> { onOpenLink(link) } },
         )
 
         state.chapter?.let { chapter ->
@@ -506,7 +507,7 @@ private fun LandscapePlayerContent(
     scrubbing: Float?,
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
-    onOpenItem: (String) -> Unit,
+    onOpenLink: (PlayerLink) -> Unit,
     onOpenChapters: () -> Unit,
     viewModel: PlayerViewModel,
     onSpeed: () -> Unit,
@@ -532,7 +533,7 @@ private fun LandscapePlayerContent(
                 coverUrl = nowPlaying?.coverUrl,
                 title = nowPlaying?.title,
                 enabled = nowPlaying != null,
-                onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+                onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
                 // Bounded by the row's height rather than by width, because width is the
                 // scarce dimension in landscape and height is what a phone on its side
                 // still has plenty of.
@@ -543,7 +544,8 @@ private fun LandscapePlayerContent(
                 title = nowPlaying?.title ?: "Nothing playing",
                 author = nowPlaying?.author,
                 enabled = nowPlaying != null,
-                onOpen = { nowPlaying?.libraryItemId?.let(onOpenItem) },
+                onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
+                onOpenAuthor = nowPlaying?.authorLink?.let { link -> { onOpenLink(link) } },
             )
         }
 
@@ -629,13 +631,22 @@ private fun CoverArt(
     )
 }
 
-/** The title is a link to the item wherever it is shown. */
+/**
+ * The title and the credit under it, each a link of its own.
+ *
+ * The title leads to the thing that plays: the book, or for a podcast the episode — see
+ * [titleLink]. The credit leads to the author, or for a podcast to the show — see
+ * [authorLink]. The credit is drawn in the primary colour when it leads somewhere, as the
+ * links on the item page are, because nobody presses grey text to find out whether it
+ * does anything. With no destination it stays grey and does not take a tap.
+ */
 @Composable
-private fun TitleAndAuthor(
+internal fun TitleAndAuthor(
     title: String,
     author: String?,
     enabled: Boolean,
     onOpen: () -> Unit,
+    onOpenAuthor: (() -> Unit)? = null,
 ) {
     Text(
         title,
@@ -646,10 +657,12 @@ private fun TitleAndAuthor(
         modifier = Modifier.clickable(enabled = enabled, onClick = onOpen),
     )
     author?.let {
+        val linked = enabled && onOpenAuthor != null
         Text(
             it,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (linked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = if (linked) Modifier.clickable(onClick = { onOpenAuthor?.invoke() }) else Modifier,
         )
     }
 }

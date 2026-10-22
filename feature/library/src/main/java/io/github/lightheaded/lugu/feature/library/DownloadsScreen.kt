@@ -69,6 +69,24 @@ private const val LONGEST_READ_MS = 24_000L
 private const val PER_WORD_MS = 500L
 
 /**
+ * A row opens the thing it lists. Rows are one per episode, so an episode row opens the
+ * episode page; a book row opens the book. The show page made the listener find the
+ * episode again in the show's list.
+ */
+internal fun openDownload(
+    download: DownloadStatus,
+    onOpenItem: (String) -> Unit,
+    onOpenEpisode: (itemId: String, episodeId: String) -> Unit,
+) {
+    val episodeId = download.episodeId
+    if (episodeId.isNullOrEmpty()) {
+        onOpenItem(download.libraryItemId)
+    } else {
+        onOpenEpisode(download.libraryItemId, episodeId)
+    }
+}
+
+/**
  * How long one message stays on screen.
  *
  * A fixed time fits one length of message. This channel now carries two: a refusal of two
@@ -92,6 +110,7 @@ internal fun readingTimeMs(message: String): Long {
 fun DownloadsScreen(
     onBack: () -> Unit,
     onOpenItem: (String) -> Unit,
+    onOpenEpisode: (itemId: String, episodeId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
@@ -238,7 +257,7 @@ fun DownloadsScreen(
                     download = download,
                     selectionActive = state.selectionActive,
                     isSelected = download.rowKey in state.selectedIds,
-                    onOpen = { onOpenItem(download.libraryItemId) },
+                    onOpen = { openDownload(download, onOpenItem, onOpenEpisode) },
                     onToggle = { viewModel.toggleSelection(download.rowKey) },
                     onRemove = { viewModel.remove(download) },
                     onRetry = { viewModel.retry(download) },
