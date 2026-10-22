@@ -278,8 +278,11 @@ class NextInSeriesTest {
         val two = volumes[1]
         assertSequencesAreInOrder(db, account, one, two)
 
-        // Server first, then Room. The other order lets a pull land between the two and
-        // put back what was just cleared.
+        // Outbox, then server, then Room. A push that is still in the outbox can land after
+        // the server clear and put the row back, and the next pull carries it into Room —
+        // an earlier test in this class can have just played volume two. A pull that lands
+        // between the server clear and the Room clear does the same, so Room goes last.
+        awaitNoPushPending(db, account, listOf(one.id, two.id))
         TestServerProgress.clear(listOf(one.id, two.id))
         clearProgressInRoom(db, account, listOf(one.id, two.id))
 
@@ -387,6 +390,48 @@ class NextInSeriesTest {
                 .firstOrNull { it.seriesName == TestServerConfig.seriesQuery }
                 ?.sequence
         }
+
+    /**
+     * Waits until the outbox holds no progress for these items, and stays empty for a moment.
+     *
+     * The flusher deletes an entry only after the server accepted it, so an empty outbox
+     * means no push for these items is still on its way. The quiet window catches the last
+     * write of a player that the previous test paused in its `@After`.
+     *
+     * Only these items are watched. An entry for some other book that fails and backs off
+     * cannot touch these two, and waiting for it would turn its retry delay into a timeout
+     * here. The prefix repeats how `ProgressRepository` builds `dedupeKey` — item id, then
+     * `#` — for the same reason [DIARY_FILE] is repeated: if that format changes, this
+     * waits for nothing, and the old race comes back instead of a false failure.
+     */
+    private fun awaitNoPushPending(db: LuguDatabase, account: ServerEntity, itemIds: List<String>) {
+        val prefixes = itemIds.map { "$it#" }
+        fun pending(): Int = runBlocking {
+            db.outboxDao().peek(account.serverId, account.userId, limit = Int.MAX_VALUE)
+                .count { entry -> prefixes.any { entry.dedupeKey.startsWith(it) } }
+        }
+
+        var emptySince = -1L
+        var left = 0
+        val deadline = System.currentTimeMillis() + OUTBOX_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            left = pending()
+            val now = System.currentTimeMillis()
+            if (left > 0) {
+                emptySince = -1L
+            } else if (emptySince < 0) {
+                emptySince = now
+            } else if (now - emptySince >= OUTBOX_QUIET_MS) {
+                return
+            }
+            Thread.sleep(POLL_MS)
+        }
+        throw AssertionError(
+            "$left progress push(es) for the series were still in the outbox after " +
+                "${OUTBOX_TIMEOUT_MS}ms. The server cannot be reset while a push is on its " +
+                "way, because the push would put back the progress the reset removes.",
+        )
+    }
 
     /**
      * Puts both volumes back to unstarted in the mirror.
@@ -637,6 +682,10 @@ class NextInSeriesTest {
         const val UI_TIMEOUT_MS = 30_000L
         const val POLL_MS = 250L
         const val CONNECT_TIMEOUT_SEC = 20L
+
+        /** On CI the outbox worker runs within a second of a write. The rest is room for a retry. */
+        const val OUTBOX_TIMEOUT_MS = 60_000L
+        const val OUTBOX_QUIET_MS = 2_000L
 
         /** The same measured wait [PlaybackResumptionTest] uses for a first cold mirror. */
         const val SYNC_TIMEOUT_MS = 180_000L
