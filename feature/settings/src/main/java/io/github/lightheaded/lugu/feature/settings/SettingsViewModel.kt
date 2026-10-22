@@ -209,6 +209,9 @@ class SettingsViewModel @Inject constructor(
     fun setNotifyNewEpisodes(enabled: Boolean) =
         viewModelScope.launch { downloadPrefs.setNotifyNewEpisodes(enabled) }
 
+    fun setNotifyNewBooks(enabled: Boolean) =
+        viewModelScope.launch { downloadPrefs.setNotifyNewBooks(enabled) }
+
     fun setSkipBack(seconds: Int) = viewModelScope.launch { prefs.setSkipBack(seconds) }
 
     fun setSkipForward(seconds: Int) = viewModelScope.launch { prefs.setSkipForward(seconds) }

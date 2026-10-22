@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import androidx.work.CoroutineWorker
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -128,13 +129,21 @@ class ReconcileWorker @AssistedInject constructor(
     private val authRepository: AuthRepository,
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
+    private val newBooks: NewBookWatch,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val account = authRepository.account() ?: return Result.success()
+        // The sync that a sign-in starts. Everything it finds is the library, not news.
+        if (inputData.getBoolean(SIGN_IN, false)) runCatching { newBooks.startSession() }
         val libraries = libraryRepository.syncLibraries(account).getOrElse { return Result.retry() }
         libraries.forEach { libraryRepository.syncLibraryItems(account, it.id) }
         progressRepository.reconcile(account)
         return Result.success()
+    }
+
+    internal companion object {
+        /** Input flag: this run is the first sync of a sign-in. */
+        const val SIGN_IN = "sign_in"
     }
 }
 
@@ -163,6 +172,7 @@ object SyncScheduler {
         val request = OneTimeWorkRequestBuilder<ReconcileWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+            .setInputData(workDataOf(ReconcileWorker.SIGN_IN to true))
             .build()
         WorkManager.getInstance(context)
             .enqueueUniqueWork(FIRST_SYNC_WORK, ExistingWorkPolicy.REPLACE, request)

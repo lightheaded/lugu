@@ -1019,6 +1019,25 @@ private fun settingEntries(
                 )
             },
         )
+        add(
+            SettingEntry(
+                id = "notify-new-books",
+                category = "Downloading ahead",
+                title = "Tell me about new books",
+                keywords = "notification new book audiobook added arrived library alert notify",
+            ) {
+                SwitchRow(
+                    title = "Tell me about new books",
+                    // The second sentence for the reason the episode row gives: a first
+                    // sync that only takes stock must not read as a broken switch.
+                    subtitle = "A quiet notification when a book arrives in a library you " +
+                        "have opened. The first sync after signing in or changing account " +
+                        "only takes stock.",
+                    checked = downloads.notifyNewBooks,
+                    onChange = viewModel::setNotifyNewBooks,
+                )
+            },
+        )
 
         add(
             SettingEntry(

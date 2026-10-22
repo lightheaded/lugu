@@ -13,9 +13,15 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
 import io.github.lightheaded.lugu.core.model.parseShowNotes
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
+import io.github.lightheaded.lugu.core.sync.NewBook
+import io.github.lightheaded.lugu.core.sync.NewBookAnnouncer
 import io.github.lightheaded.lugu.core.sync.NewEpisode
 import java.text.DateFormat
 import java.util.Date
@@ -25,7 +31,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * The extras and actions a new-episode notification carries.
+ * The extras and actions a new-episode or new-book notification carries.
+ *
+ * A book has no episode id. Its intents leave that extra out, and the item id alone names
+ * what to play, queue or open.
  *
  * Declared here, beside the code that writes them, rather than in `:app`: this module
  * cannot see the app module, and a pair of string keys copied into two places is a pair of
@@ -63,7 +72,8 @@ object NewEpisodeIntent {
 data class NewEpisodeAction(
     val kind: Kind,
     val libraryItemId: String,
-    val episodeId: String,
+    /** Null for a book: the action is for the item itself. */
+    val episodeId: String?,
     val serverId: String,
     val userId: String,
     val notificationId: Int,
@@ -79,7 +89,10 @@ data class NewEpisodeAction(
         account.serverId == serverId && account.userId == userId
 
     companion object {
-        /** Null for anything that is not a complete action: an unknown verb or a missing id. */
+        /**
+         * Null for anything that is not a complete action: an unknown verb, or a missing
+         * item or account id. A missing episode id is a book, not a fault.
+         */
         fun from(intent: Intent?): NewEpisodeAction? {
             intent ?: return null
             val kind = when (intent.action) {
@@ -91,7 +104,7 @@ data class NewEpisodeAction(
             return NewEpisodeAction(
                 kind = kind,
                 libraryItemId = text(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID) ?: return null,
-                episodeId = text(NewEpisodeIntent.EXTRA_EPISODE_ID) ?: return null,
+                episodeId = text(NewEpisodeIntent.EXTRA_EPISODE_ID),
                 serverId = text(NewEpisodeIntent.EXTRA_SERVER_ID) ?: return null,
                 userId = text(NewEpisodeIntent.EXTRA_USER_ID) ?: return null,
                 notificationId = intent.getIntExtra(NewEpisodeIntent.EXTRA_NOTIFICATION_ID, NO_ID),
@@ -123,7 +136,7 @@ data class NewEpisodeAction(
 @Singleton
 class NewEpisodeNotifier @Inject constructor(
     @ApplicationContext private val context: Context,
-) {
+) : NewBookAnnouncer {
     /**
      * Posts the batch. [descriptions] maps an episode id to its feed description, which
      * becomes the snippet; an episode missing from it simply has none.
@@ -136,19 +149,12 @@ class NewEpisodeNotifier @Inject constructor(
         descriptions: Map<String, String?> = emptyMap(),
     ) {
         if (episodes.isEmpty()) return
-        // Below API 33 the permission does not exist and notifications are allowed by
-        // default; above it, being refused is an answer to respect silently.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
+        if (!allowed()) return
 
-        ensureChannel()
+        ensureChannel(CHANNEL_ID, "New episodes")
         val manager = NotificationManagerCompat.from(context)
         val rows = episodes.take(MAX_ROWS)
-        val withSummary = episodes.size > 1 || otherRowsShowing(rows.map(::notificationIdOf))
+        val withSummary = episodes.size > 1 || otherRowsShowing(GROUP_KEY, rows.map(::notificationIdOf))
 
         for (episode in rows) {
             val id = notificationIdOf(episode)
@@ -161,17 +167,57 @@ class NewEpisodeNotifier @Inject constructor(
     }
 
     /**
-     * Takes one row away after its action has been carried out, and the summary with it
-     * when fewer than two rows are left: a group of one needs no heading.
+     * Posts the new books from a library sync, by the same rules as episodes: one row per
+     * book with Play and Add to queue, a group of their own, and a summary for two or
+     * more. Their own channel too, so somebody can silence one kind and keep the other.
+     *
+     * [books] arrive newest first. The setting is checked by the caller, in the sync.
+     */
+    // allowed() checks POST_NOTIFICATIONS first, and runCatching covers a revoke in between.
+    @SuppressLint("MissingPermission")
+    fun notifyBooks(account: ActiveAccount, books: List<NewBook>) {
+        if (books.isEmpty()) return
+        if (!allowed()) return
+
+        ensureChannel(BOOK_CHANNEL_ID, "New books")
+        val manager = NotificationManagerCompat.from(context)
+        val rows = books.take(MAX_ROWS)
+        val withSummary = books.size > 1 || otherRowsShowing(BOOK_GROUP_KEY, rows.map(::notificationIdOf))
+
+        for (book in rows) {
+            val id = notificationIdOf(book)
+            runCatching { manager.notify(id, bookRow(account, book, id, withSummary)) }
+        }
+        if (withSummary) {
+            runCatching { manager.notify(BOOK_SUMMARY_ID, bookSummary(books)) }
+        }
+    }
+
+    override fun announce(account: ActiveAccount, books: List<NewBook>) = notifyBooks(account, books)
+
+    /**
+     * Takes one row away after its action has been carried out, and the summary of its
+     * group with it when fewer than two rows are left: a group of one needs no heading.
      */
     fun dismiss(notificationId: Int) {
         if (notificationId == NewEpisodeAction.NO_ID) return
         val manager = NotificationManagerCompat.from(context)
         runCatching { manager.cancel(notificationId) }
-        if (activeRowIds().count { it != notificationId } < 2) {
-            runCatching { manager.cancel(SUMMARY_ID) }
+        for ((group, summaryId) in listOf(GROUP_KEY to SUMMARY_ID, BOOK_GROUP_KEY to BOOK_SUMMARY_ID)) {
+            if (activeRowIds(group, summaryId).count { it != notificationId } < 2) {
+                runCatching { manager.cancel(summaryId) }
+            }
         }
     }
+
+    /**
+     * Below API 33 the permission does not exist and notifications are allowed by
+     * default; above it, being refused is an answer to respect silently.
+     */
+    private fun allowed(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
 
     private fun row(
         account: ActiveAccount,
@@ -181,27 +227,51 @@ class NewEpisodeNotifier @Inject constructor(
         silentUnderSummary: Boolean,
     ): Notification {
         val content = rowContent(episode, description, Locale.getDefault(), TimeZone.getDefault())
-        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+        return rowBuilder(
+            channel = CHANNEL_ID,
+            group = GROUP_KEY,
+            content = content,
+            open = openItem(episode.libraryItemId, episode.episodeId, id),
+            play = action(NewEpisodeIntent.ACTION_PLAY, account, episode.libraryItemId, episode.episodeId, id),
+            enqueue = action(NewEpisodeIntent.ACTION_ENQUEUE, account, episode.libraryItemId, episode.episodeId, id),
+            silentUnderSummary = silentUnderSummary,
+        )
+    }
+
+    private fun bookRow(account: ActiveAccount, book: NewBook, id: Int, silentUnderSummary: Boolean): Notification =
+        rowBuilder(
+            channel = BOOK_CHANNEL_ID,
+            group = BOOK_GROUP_KEY,
+            content = bookRowContent(book),
+            open = openItem(book.libraryItemId, null, id),
+            play = action(NewEpisodeIntent.ACTION_PLAY, account, book.libraryItemId, null, id),
+            enqueue = action(NewEpisodeIntent.ACTION_ENQUEUE, account, book.libraryItemId, null, id),
+            silentUnderSummary = silentUnderSummary,
+        )
+
+    /** One row, episode or book: the same layout, the same two buttons, the same order. */
+    private fun rowBuilder(
+        channel: String,
+        group: String,
+        content: RowContent,
+        open: PendingIntent?,
+        play: PendingIntent,
+        enqueue: PendingIntent,
+        silentUnderSummary: Boolean,
+    ): Notification {
+        val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(content.title)
-            .setSubText(content.podcast)
+            .setSubText(content.podcast.ifEmpty { null })
             .setContentText(content.text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(content.expanded))
             // The date is in the text. A second, different time in the header — the time
             // the check ran — would only invite the question which one is meant.
             .setShowWhen(false)
-            .setContentIntent(openEpisode(episode, id))
-            .addAction(
-                android.R.drawable.ic_media_play,
-                "Play",
-                action(NewEpisodeIntent.ACTION_PLAY, account, episode, id),
-            )
-            .addAction(
-                android.R.drawable.ic_input_add,
-                "Add to queue",
-                action(NewEpisodeIntent.ACTION_ENQUEUE, account, episode, id),
-            )
-            .setGroup(GROUP_KEY)
+            .setContentIntent(open)
+            .addAction(android.R.drawable.ic_media_play, "Play", play)
+            .addAction(android.R.drawable.ic_input_add, "Add to queue", enqueue)
+            .setGroup(group)
             .setAutoCancel(true)
         // Only when a summary is posted with it: a lone row told to stay silent for a
         // summary that does not exist would never alert at all.
@@ -224,7 +294,7 @@ class NewEpisodeNotifier @Inject constructor(
             .setContentTitle(title)
             .setContentText(episodes.take(MAX_ROWS).joinToString(" · ") { it.episodeTitle })
             .setStyle(style)
-            .setContentIntent(openEpisode(tapTarget(episodes), SUMMARY_ID))
+            .setContentIntent(tapTarget(episodes).let { openItem(it.libraryItemId, it.episodeId, SUMMARY_ID) })
             .setGroup(GROUP_KEY)
             .setGroupSummary(true)
             .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
@@ -232,8 +302,30 @@ class NewEpisodeNotifier @Inject constructor(
             .build()
     }
 
+    private fun bookSummary(books: List<NewBook>): Notification {
+        val style = NotificationCompat.InboxStyle()
+        books.take(MAX_ROWS).forEach { style.addLine(bookLine(it)) }
+        val more = books.size - MAX_ROWS
+        if (more > 0) style.setSummaryText("and $more more")
+        val title = if (books.size == 1) "New book" else "${books.size} new books"
+        // The newest book, for the reason [tapTarget] gives for episodes.
+        val newest = books.first()
+        return NotificationCompat.Builder(context, BOOK_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle(title)
+            .setContentText(books.take(MAX_ROWS).joinToString(" · ") { it.title })
+            .setStyle(style)
+            .setContentIntent(openItem(newest.libraryItemId, null, BOOK_SUMMARY_ID))
+            .setGroup(BOOK_GROUP_KEY)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+            .setAutoCancel(true)
+            .build()
+    }
+
     /**
-     * Opens one episode's page, with the library underneath it.
+     * Opens one episode's page, or one book's page when [episodeId] is null, with the
+     * library underneath it.
      *
      * The launcher intent is still the base, so the activity starts the way it always
      * starts and the graph comes up with Home at its root; the two ids ride on it as
@@ -245,11 +337,11 @@ class NewEpisodeNotifier @Inject constructor(
      * posted last. `FLAG_UPDATE_CURRENT` then covers the summary, whose id is fixed: a
      * second batch replaces it, and its tap must replace the first one's extras as well.
      */
-    private fun openEpisode(episode: NewEpisode, requestCode: Int): PendingIntent? {
+    private fun openItem(libraryItemId: String, episodeId: String?, requestCode: Int): PendingIntent? {
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
             ?: return null
-        intent.putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, episode.libraryItemId)
-        intent.putExtra(NewEpisodeIntent.EXTRA_EPISODE_ID, episode.episodeId)
+        intent.putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, libraryItemId)
+        if (episodeId != null) intent.putExtra(NewEpisodeIntent.EXTRA_EPISODE_ID, episodeId)
         return PendingIntent.getActivity(
             context,
             requestCode,
@@ -269,13 +361,14 @@ class NewEpisodeNotifier @Inject constructor(
     private fun action(
         verb: String,
         account: ActiveAccount,
-        episode: NewEpisode,
+        libraryItemId: String,
+        episodeId: String?,
         notificationId: Int,
     ): PendingIntent {
         val intent = Intent(verb)
             .setClassName(context.packageName, NewEpisodeIntent.ACTION_RECEIVER)
-            .putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, episode.libraryItemId)
-            .putExtra(NewEpisodeIntent.EXTRA_EPISODE_ID, episode.episodeId)
+            .putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, libraryItemId)
+            .apply { if (episodeId != null) putExtra(NewEpisodeIntent.EXTRA_EPISODE_ID, episodeId) }
             .putExtra(NewEpisodeIntent.EXTRA_SERVER_ID, account.serverId)
             .putExtra(NewEpisodeIntent.EXTRA_USER_ID, account.userId)
             .putExtra(NewEpisodeIntent.EXTRA_NOTIFICATION_ID, notificationId)
@@ -288,25 +381,27 @@ class NewEpisodeNotifier @Inject constructor(
     }
 
     /** Whether rows from an earlier batch are still in the shade beside these new ones. */
-    private fun otherRowsShowing(newIds: List<Int>): Boolean =
-        activeRowIds().any { it !in newIds }
+    private fun otherRowsShowing(group: String, newIds: List<Int>): Boolean =
+        activeRowIds(group, summaryIdOf(group)).any { it !in newIds }
 
-    private fun activeRowIds(): List<Int> {
+    private fun summaryIdOf(group: String) = if (group == BOOK_GROUP_KEY) BOOK_SUMMARY_ID else SUMMARY_ID
+
+    private fun activeRowIds(group: String, summaryId: Int): List<Int> {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return emptyList()
         return runCatching { manager.activeNotifications.toList() }.getOrDefault(emptyList())
-            .filter { it.notification.group == GROUP_KEY && it.id != SUMMARY_ID }
+            .filter { it.notification.group == group && it.id != summaryId }
             .map { it.id }
     }
 
-    private fun ensureChannel() {
+    private fun ensureChannel(id: String, name: String) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+        if (manager.getNotificationChannel(id) != null) return
         manager.createNotificationChannel(
             NotificationChannel(
-                CHANNEL_ID,
-                "New episodes",
-                // A new episode is news, not an interruption: it can wait for the next
-                // time the phone is picked up.
+                id,
+                name,
+                // A new episode or book is news, not an interruption: it can wait for the
+                // next time the phone is picked up.
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
@@ -316,8 +411,19 @@ class NewEpisodeNotifier @Inject constructor(
         const val CHANNEL_ID = "lugu_episodes"
         const val GROUP_KEY = "lugu_new_episodes"
         const val SUMMARY_ID = 4103
+        const val BOOK_CHANNEL_ID = "lugu_books"
+        const val BOOK_GROUP_KEY = "lugu_new_books"
+        const val BOOK_SUMMARY_ID = 4104
         const val MAX_ROWS = 5
     }
+}
+
+/** The new-episode notifier also announces new books, so there is one notifier and one receiver. */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class NewBookAnnouncerModule {
+    @Binds
+    abstract fun announcer(notifier: NewEpisodeNotifier): NewBookAnnouncer
 }
 
 /**
@@ -328,9 +434,17 @@ class NewEpisodeNotifier @Inject constructor(
  * fixed ids lugu posts under are stepped around; a clash between two episodes would only
  * replace one row with the other.
  */
-internal fun notificationIdOf(episode: NewEpisode): Int {
-    val id = "${episode.libraryItemId}/${episode.episodeId}".hashCode()
-    return if (id == NewEpisodeNotifier.SUMMARY_ID || id == NewEpisodeAction.NO_ID) id + 2 else id
+internal fun notificationIdOf(episode: NewEpisode): Int =
+    clearOfFixedIds("${episode.libraryItemId}/${episode.episodeId}".hashCode())
+
+/** A book's row id. Prefixed, so a book and an episode never share an id by construction. */
+internal fun notificationIdOf(book: NewBook): Int = clearOfFixedIds("book/${book.libraryItemId}".hashCode())
+
+private fun clearOfFixedIds(id: Int): Int {
+    val fixed = setOf(NewEpisodeNotifier.SUMMARY_ID, NewEpisodeNotifier.BOOK_SUMMARY_ID, NewEpisodeAction.NO_ID)
+    var free = id
+    while (free in fixed) free += 2
+    return free
 }
 
 /** The words on one row, worked out apart from the builder so a test can read them. */
@@ -342,6 +456,30 @@ internal data class RowContent(
     /** The expanded body: the date on its own line, then the snippet. */
     val expanded: String,
 )
+
+/**
+ * The words on one book row: the title, the author under it, and the snippet.
+ *
+ * The author goes in the sub-text, where an episode has its podcast, and again in front of
+ * the snippet. The sub-text is small and some launchers drop it, and "by whom" is the
+ * first thing somebody asks about a book.
+ */
+internal fun bookRowContent(book: NewBook): RowContent {
+    val author = book.authorName?.takeIf { it.isNotBlank() }
+    val snippet = descriptionSnippet(book.description)
+    return RowContent(
+        title = book.title,
+        podcast = author.orEmpty(),
+        text = listOfNotNull(author, snippet).joinToString(" · ").ifEmpty { "New in your library" },
+        expanded = listOfNotNull(author, snippet).joinToString("\n").ifEmpty { "New in your library" },
+    )
+}
+
+/** One line of the book summary. */
+internal fun bookLine(book: NewBook): String {
+    val author = book.authorName?.takeIf { it.isNotBlank() } ?: return book.title
+    return "${book.title}, by $author"
+}
 
 internal fun rowContent(
     episode: NewEpisode,

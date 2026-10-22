@@ -24,9 +24,11 @@ import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.model.PlayMethod
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.Clock
+import io.github.lightheaded.lugu.core.sync.DataStoreNewBookMarks
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
+import io.github.lightheaded.lugu.core.sync.NewBookWatch
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import kotlinx.coroutines.test.runTest
@@ -125,6 +127,11 @@ class OfflineResolutionTest {
                 seriesDao = db.itemSeriesDao(),
                 libraryPrefs = LibraryPrefs(context = context),
                 clock = clock,
+                newBooks = NewBookWatch(
+                    marks = DataStoreNewBookMarks(context = context),
+                    downloadPrefs = downloadPrefs,
+                    announcer = java.util.Optional.empty(),
+                ),
             ),
             downloadRepository = DownloadRepository(
                 context = context,

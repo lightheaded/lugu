@@ -112,6 +112,7 @@ class LibraryRepository @Inject constructor(
     private val seriesDao: ItemSeriesDao,
     private val libraryPrefs: LibraryPrefs,
     private val clock: Clock,
+    private val newBooks: NewBookWatch,
 ) {
     /**
      * When the series listing for each library last finished, so the next pass can decline.
@@ -464,6 +465,14 @@ class LibraryRepository @Inject constructor(
         }
     }
 
+    /**
+     * Records that the user has the library in view. Only an opened library can announce
+     * a new book; see [NewBookWatch].
+     */
+    suspend fun markOpened(account: ActiveAccount, libraryId: String) {
+        newBooks.markOpened(account, libraryId)
+    }
+
     private suspend fun mirrorLibraryItems(
         account: ActiveAccount,
         libraryId: String,
@@ -473,6 +482,11 @@ class LibraryRepository @Inject constructor(
         var page = 0
         var synced = 0
         var total = Int.MAX_VALUE
+        // Read before the first page is written: after it, Room holds this pass's rows.
+        val hadRows = itemDao.countInLibrary(account.serverId, account.userId, libraryId) > 0
+        // A marker store that cannot be read costs the notification, never the mirror.
+        val newBookPass = runCatching { newBooks.startPass(account, libraryId, hadRows) }
+            .getOrElse { NewBookPass(LibraryKey.of(account, libraryId), since = null, armed = false) }
 
         while (synced < total) {
             val response = client.libraryItems(libraryId, page = page, limit = AbsClient.DEFAULT_PAGE_SIZE)
@@ -480,6 +494,7 @@ class LibraryRepository @Inject constructor(
             total = response.total.takeIf { it > 0 } ?: response.results.size
 
             val entities = response.results.map { it.toEntity(account, libraryId, startedAt) }
+            noteNewBooks(account, newBookPass, entities)
             itemDao.upsertAll(entities)
             ftsDao.replaceAll(account.serverId, account.userId, entities.map { it.toFtsRow() })
             writeParsedSeries(account, libraryId, response.results, startedAt)
@@ -501,7 +516,23 @@ class LibraryRepository @Inject constructor(
         // failure is not this one's: the mirror is already written, and the memberships
         // fall back to what the paged pass parsed. Hence the Result being dropped.
         syncSeries(account, libraryId)
+
+        // Only here, after a pass that reached the end. A pass that threw half way leaves
+        // the marker where it was, so the next one still finds what this one missed.
+        runCatching { newBooks.finish(account, newBookPass) }
         return synced
+    }
+
+    /** Feeds one page to the new-book pass, before the page is written to Room. */
+    private suspend fun noteNewBooks(
+        account: ActiveAccount,
+        pass: NewBookPass,
+        entities: List<LibraryItemEntity>,
+    ) {
+        pass.page(
+            items = entities.map { NewBookPass.Item(it.toNewBook(), isBook = it.mediaType == MediaType.BOOK.name) },
+            knownIds = { ids -> itemDao.existingIds(account.serverId, account.userId, ids) },
+        )
     }
 
     /**
@@ -816,6 +847,15 @@ private fun LibraryItemDto.toEntity(
         syncedAtMs = syncedAtMs,
     )
 }
+
+private fun LibraryItemEntity.toNewBook(): NewBook = NewBook(
+    libraryItemId = id,
+    libraryId = libraryId,
+    title = title,
+    authorName = authorName,
+    description = description,
+    addedAtMs = addedAtMs,
+)
 
 /**
  * What the search index holds for one item.

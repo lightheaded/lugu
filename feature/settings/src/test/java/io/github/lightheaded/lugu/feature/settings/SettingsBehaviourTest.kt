@@ -17,6 +17,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
+import io.github.lightheaded.lugu.core.sync.DownloadPrefs
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -99,6 +101,35 @@ class SettingsBehaviourTest {
             compose.onNodeWithText("Connection").assertExists("No Connection link for \"$query\"")
             compose.onAllNodesWithText("Nothing matches", substring = true).assertCountEquals(0)
         }
+    }
+
+    /** The words somebody looking for the new-book notification would type. */
+    @Test
+    fun `searching for new books finds the new-book switch`() {
+        show()
+        for (query in listOf("new books", "audiobook notification", "book added", "notify")) {
+            viewModel.onQueryChange(query)
+            compose.waitForIdle()
+
+            compose.onNodeWithText("Tell me about new books").assertExists("No new-book switch for \"$query\"")
+        }
+    }
+
+    @Test
+    fun `the new-book switch starts off and turns the setting on`() {
+        viewModel.onQueryChange("new books")
+        show()
+        awaitText("Tell me about new books")
+
+        compose.onNodeWithText("Tell me about new books").assertIsOff()
+        compose.onNodeWithText("Tell me about new books", useUnmergedTree = true).performClick()
+
+        // The setting goes through DataStore and back, on its own thread, before the row
+        // can show it.
+        compose.waitUntil(timeoutMillis = 5_000) {
+            runCatching { compose.onNodeWithText("Tell me about new books").assertIsOn() }.isSuccess
+        }
+        assertThat(runBlocking { DownloadPrefs(context).current().notifyNewBooks }).isTrue()
     }
 
     /**

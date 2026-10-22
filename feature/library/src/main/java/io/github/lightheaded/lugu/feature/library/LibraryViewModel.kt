@@ -591,6 +591,9 @@ class LibraryViewModel @Inject constructor(
                 val name = libraries.firstOrNull { it.id == id }?.name
                 val what = if (name.isNullOrBlank()) "your library" else name
                 syncNote.value = SyncNote("Syncing $what")
+                // The library in view is one the user has opened, which is the only kind
+                // that may later say a new book arrived in it.
+                runCatching { libraryRepository.markOpened(current, id) }
                 libraryRepository.syncLibraryItems(current, id) { synced, total ->
                     syncNote.value = SyncNote(
                         text = "Syncing $what — $synced of $total",

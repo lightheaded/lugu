@@ -19,7 +19,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The Play and Add to queue buttons on a new-episode notification.
+ * The Play and Add to queue buttons on a new-episode or new-book notification.
+ *
+ * A book's buttons carry no episode id, and both entry points read a null episode as "the
+ * item itself", so one receiver serves both kinds.
  *
  * Both go through the same entry points the app's own screens use: Play is
  * [PlaybackConnection.play] with the episode's two ids, exactly what a tap on an episode's

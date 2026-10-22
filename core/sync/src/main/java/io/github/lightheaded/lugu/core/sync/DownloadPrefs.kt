@@ -39,6 +39,8 @@ data class DownloadSettings(
     val autoDownloadLatestEpisodes: Int = 0,
     /** Say when a podcast being listened to has published something. */
     val notifyNewEpisodes: Boolean = false,
+    /** Say when a book arrives in a library that has been opened on this phone. */
+    val notifyNewBooks: Boolean = false,
 ) {
     val hasAutoDownloadRule: Boolean
         get() = autoDownloadQueue || autoDownloadNextInSeries > 0 || autoDownloadLatestEpisodes > 0
@@ -104,6 +106,10 @@ class DownloadPrefs @Inject constructor(
         store.edit { it[NOTIFY_NEW_EPISODES] = enabled }
     }
 
+    suspend fun setNotifyNewBooks(enabled: Boolean) {
+        store.edit { it[NOTIFY_NEW_BOOKS] = enabled }
+    }
+
     private fun Preferences.toSettings() = DownloadSettings(
         wifiOnly = this[WIFI_ONLY] ?: DEFAULTS.wifiOnly,
         requiresCharging = this[REQUIRES_CHARGING] ?: DEFAULTS.requiresCharging,
@@ -113,6 +119,7 @@ class DownloadPrefs @Inject constructor(
         autoDownloadNextInSeries = this[AUTO_DOWNLOAD_SERIES] ?: DEFAULTS.autoDownloadNextInSeries,
         autoDownloadLatestEpisodes = this[AUTO_DOWNLOAD_EPISODES] ?: DEFAULTS.autoDownloadLatestEpisodes,
         notifyNewEpisodes = this[NOTIFY_NEW_EPISODES] ?: DEFAULTS.notifyNewEpisodes,
+        notifyNewBooks = this[NOTIFY_NEW_BOOKS] ?: DEFAULTS.notifyNewBooks,
     )
 
     private companion object {
@@ -128,5 +135,6 @@ class DownloadPrefs @Inject constructor(
         val AUTO_DOWNLOAD_SERIES = intPreferencesKey("auto_download_next_in_series")
         val AUTO_DOWNLOAD_EPISODES = intPreferencesKey("auto_download_latest_episodes")
         val NOTIFY_NEW_EPISODES = booleanPreferencesKey("notify_new_episodes")
+        val NOTIFY_NEW_BOOKS = booleanPreferencesKey("notify_new_books")
     }
 }

@@ -226,6 +226,21 @@ interface LibraryItemDao {
     )
     suspend fun countInLibrary(serverId: String, userId: String, libraryId: String): Int
 
+    /**
+     * Which of [ids] this account already holds, in any library.
+     *
+     * The new-book check asks it for the few items of a page that are newer than what it
+     * has seen, never for a whole page, so the list stays far below SQLite's limit on
+     * bound arguments.
+     */
+    @Query(
+        """
+        SELECT id FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND id IN (:ids)
+        """,
+    )
+    suspend fun existingIds(serverId: String, userId: String, ids: List<String>): List<String>
+
     @Upsert
     suspend fun upsertAll(items: List<LibraryItemEntity>)
 
