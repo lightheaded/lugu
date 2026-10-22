@@ -88,6 +88,16 @@
         </receiver>
 
         <!--
+          The Play and Add to queue buttons on a new-episode notification. Not exported and
+          with no intent filter: the notifier addresses it by class name, so only a pending
+          intent lugu built itself reaches it. Adding to the queue changes the library, which
+          is why this is not part of the exported automation receiver below.
+        -->
+        <receiver
+            android:name=".notification.NewEpisodeActionReceiver"
+            android:exported="false" />
+
+        <!--
           The automation surface: Tasker, Automate, adb, or anything else that can send a
           broadcast. A receiver and not an activity, so a routine that pauses a book does
           not steal focus or flash a window over whatever is on screen.

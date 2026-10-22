@@ -2,12 +2,15 @@ package io.github.lightheaded.lugu
 
 import android.Manifest
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
+import io.github.lightheaded.lugu.core.download.NewEpisodeAction
 import io.github.lightheaded.lugu.core.download.NewEpisodeNotifier
+import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.NewEpisode
 import org.junit.Before
 import org.junit.Test
@@ -46,57 +49,42 @@ class NewEpisodeTapTest {
 
     @Test
     fun `one new episode opens that episode`() {
-        val target = episodeTargetOf(
-            tapIntentFor(
-                listOf(
-                    NewEpisode(
-                        libraryItemId = "li_pod",
-                        episodeId = "ep_14",
-                        podcastTitle = "Coastal Signal",
-                        episodeTitle = "A quiet hour on 500 kHz",
-                        publishedAtMs = 1_710_000_000_000L,
-                    ),
-                ),
-            ),
-        )
+        post(listOf(newest))
 
-        assertThat(target).isEqualTo(EpisodeTarget("li_pod", "ep_14"))
+        assertThat(episodeTargetOf(rowTapFor(newest))).isEqualTo(EpisodeTarget("li_pod", "ep_newest"))
     }
 
     @Test
-    fun `a batch opens the newest, which is the one its text names first`() {
-        val target = episodeTargetOf(
-            tapIntentFor(
-                listOf(
-                    newest,
-                    NewEpisode(
-                        libraryItemId = "li_pod_2",
-                        episodeId = "ep_older",
-                        podcastTitle = "Harbour Notes",
-                        episodeTitle = "Ferry timetables as numbers stations",
-                        publishedAtMs = 1_709_000_000_000L,
-                    ),
-                ),
-            ),
-        )
+    fun `each row of a batch opens its own episode`() {
+        post(listOf(newest, older))
 
-        assertThat(target).isEqualTo(EpisodeTarget("li_pod", "ep_newest"))
+        assertThat(episodeTargetOf(rowTapFor(newest))).isEqualTo(EpisodeTarget("li_pod", "ep_newest"))
+        assertThat(episodeTargetOf(rowTapFor(older))).isEqualTo(EpisodeTarget("li_pod_2", "ep_older"))
     }
 
     @Test
-    fun `a second batch replaces what the first one would have opened`() {
-        tapIntentFor(listOf(newest))
+    fun `the summary of a batch opens the newest, which is the one it names first`() {
+        post(listOf(newest, older))
 
-        val second = NewEpisode(
+        assertThat(episodeTargetOf(summaryTap())).isEqualTo(EpisodeTarget("li_pod", "ep_newest"))
+    }
+
+    @Test
+    fun `a second batch replaces what the summary would have opened`() {
+        post(listOf(newest, older))
+
+        val after = NewEpisode(
             libraryItemId = "li_pod_2",
             episodeId = "ep_after",
             podcastTitle = "Harbour Notes",
             episodeTitle = "A map of small harbours",
             publishedAtMs = 1_711_000_000_000L,
         )
+        post(listOf(after))
 
-        assertThat(episodeTargetOf(tapIntentFor(listOf(second))))
-            .isEqualTo(EpisodeTarget("li_pod_2", "ep_after"))
+        assertThat(episodeTargetOf(summaryTap())).isEqualTo(EpisodeTarget("li_pod_2", "ep_after"))
+        // The earlier rows keep opening their own episodes.
+        assertThat(episodeTargetOf(rowTapFor(older))).isEqualTo(EpisodeTarget("li_pod_2", "ep_older"))
     }
 
     @Test
@@ -113,11 +101,45 @@ class NewEpisodeTapTest {
         publishedAtMs = 1_710_000_000_000L,
     )
 
-    /** Posts the notification these episodes would produce, and returns what a tap sends. */
-    private fun tapIntentFor(episodes: List<NewEpisode>): Intent {
-        NewEpisodeNotifier(application).notify(episodes)
-        val manager = application.getSystemService(NotificationManager::class.java)
-        val posted = shadowOf(manager).allNotifications.last()
-        return shadowOf(posted.contentIntent).savedIntent
+    private val older = NewEpisode(
+        libraryItemId = "li_pod_2",
+        episodeId = "ep_older",
+        podcastTitle = "Harbour Notes",
+        episodeTitle = "Ferry timetables as numbers stations",
+        publishedAtMs = 1_709_000_000_000L,
+    )
+
+    private val account = ActiveAccount(
+        serverId = "srv_a",
+        baseUrl = "https://abs.example.invalid",
+        userId = "usr_a",
+        username = "listener",
+        defaultLibraryId = null,
+    )
+
+    private fun post(episodes: List<NewEpisode>) =
+        NewEpisodeNotifier(application).notify(account, episodes)
+
+    private val manager get() = application.getSystemService(NotificationManager::class.java)
+
+    /**
+     * What a tap on one episode's row sends. The row is found by the episode its Play
+     * button names, so this test does not depend on how row ids are worked out.
+     */
+    private fun rowTapFor(episode: NewEpisode): Intent {
+        val row = manager.activeNotifications.map { it.notification }.single { notification ->
+            notification.actions?.any {
+                NewEpisodeAction.from(shadowOf(it.actionIntent).savedIntent)?.episodeId ==
+                    episode.episodeId
+            } == true
+        }
+        return shadowOf(row.contentIntent).savedIntent
+    }
+
+    /** What a tap on the group summary sends. */
+    private fun summaryTap(): Intent {
+        val summary = manager.activeNotifications.map { it.notification }
+            .single { it.flags and Notification.FLAG_GROUP_SUMMARY != 0 }
+        return shadowOf(summary.contentIntent).savedIntent
     }
 }
