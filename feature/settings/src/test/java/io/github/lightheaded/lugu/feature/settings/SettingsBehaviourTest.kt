@@ -63,6 +63,7 @@ class SettingsBehaviourTest {
     fun `a tap on a switch row's title flips the switch`() {
         viewModel.onQueryChange("crash reports")
         show()
+        awaitText("Send crash reports")
 
         compose.onNodeWithText("Send crash reports").assertIsOff()
         compose.onNodeWithText("Send crash reports", useUnmergedTree = true).performClick()
@@ -76,6 +77,7 @@ class SettingsBehaviourTest {
     fun `a switch row is one control, not a title and a switch`() {
         viewModel.onQueryChange("crash reports")
         show()
+        awaitText("Send crash reports")
 
         compose.onNodeWithText("Send crash reports").assert(isToggleable())
         compose.onAllNodes(isToggleable()).assertCountEquals(1)
@@ -96,6 +98,23 @@ class SettingsBehaviourTest {
 
             compose.onNodeWithText("Connection").assertExists("No Connection link for \"$query\"")
             compose.onAllNodesWithText("Nothing matches", substring = true).assertCountEquals(0)
+        }
+    }
+
+    /**
+     * Waits until [text] is on screen.
+     *
+     * The screen state is a combine, and some of its sources emit from other threads: the
+     * account comes from a Room flow, and the web-client check reads its store on the IO
+     * dispatcher. The compose rule does not wait for those threads. Until all of them emit,
+     * the screen shows the initial state: no query, so the full
+     * list, with "Send crash reports" far below the fold of the lazy column. In the first test
+     * of a JVM that first read is slow, so a plain query found no node there and found it in
+     * every later test.
+     */
+    private fun awaitText(text: String) {
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
         }
     }
 
