@@ -30,6 +30,11 @@ data class StartingItem(
  * in [PlaybackStateHolder] untouched, because the service persists the position of the
  * loaded item from there, and writing a requested item into it early would record the old
  * item's position against the new one.
+ *
+ * One per process, held by [PlaybackStateHolder], because the service has to see it too.
+ * A play request from the app and a playback resumption in the service are two ways an
+ * item reaches the same player, and the resumption must lose to a request that is still on
+ * its way — see [ResumptionGate].
  */
 internal class PlayRequests {
     private val latest = AtomicLong(0)
@@ -43,6 +48,14 @@ internal class PlayRequests {
         _starting.value = StartingItem(libraryItemId, episodeId)
         return ticket
     }
+
+    /**
+     * The ticket of the newest request or [abandon], without making one.
+     *
+     * Read twice by something that is not a play request, to learn whether a request, or a
+     * pause, arrived in between.
+     */
+    fun generation(): Long = latest.get()
 
     /** True while no newer request, and no [abandon], has come after this ticket. */
     fun isLatest(ticket: Long): Boolean = latest.get() == ticket

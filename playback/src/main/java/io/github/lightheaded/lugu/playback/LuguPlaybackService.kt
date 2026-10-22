@@ -1346,6 +1346,7 @@ class LuguPlaybackService : MediaLibraryService() {
             return
         }
 
+        val requestsBefore = stateHolder.playRequests.generation()
         armingJob = scope.launch {
             val resolved = withContext(Dispatchers.IO) {
                 runCatching { resumptionResolver.resolveLastPlayed() }.getOrNull()
@@ -1356,8 +1357,12 @@ class LuguPlaybackService : MediaLibraryService() {
             }
             // Resolving takes a round trip, and a play request can arrive inside it. That
             // request wins: replacing a book somebody has just started with a different one
-            // would be the worst thing this feature could do.
-            if (player.mediaItemCount > 0 || player.playWhenReady) {
+            // would be the worst thing this feature could do. A request from the app that is
+            // still starting has not reached the player yet, so the player alone cannot say
+            // that one came; the request counter can.
+            val requested = stateHolder.playRequests.generation() != requestsBefore ||
+                stateHolder.playRequests.starting.value != null
+            if (player.mediaItemCount > 0 || player.playWhenReady || requested) {
                 diary.record(ARMED, "dropped, something else started first")
                 return@launch
             }
@@ -2637,21 +2642,41 @@ class LuguPlaybackService : MediaLibraryService() {
          * This is the failure mode the official app is most complained about (app
          * #1800, #41, #578): resumption has to work with no UI alive, which means
          * rebuilding the playlist from Room and a fresh play session here.
+         *
+         * Media3 loads whatever this answers and presses play, with no check of its own,
+         * so the answer must never replace something that reached the player, or is on its
+         * way, while the last item was resolving — see [ResumptionGate]. To leave the
+         * player alone the future fails. A failure is the one answer Media3 does not load:
+         * it only presses play on what the player already holds. An empty list is not the
+         * same, because Media3 loads it, and that empties the player.
          */
         override fun onPlaybackResumption(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
-            val resolved = resumptionResolver.resolveLastPlayed()
-                ?: return@future MediaSession.MediaItemsWithStartPosition(emptyList(), 0, C.TIME_UNSET)
-
-            stateHolder.set(resolved.nowPlaying)
-            applyRememberedSpeed(resolved.nowPlaying)
-            MediaSession.MediaItemsWithStartPosition(
-                resolved.mediaItems,
-                resolved.startTrackIndex,
-                resolved.startPositionMs,
+            val gate = ResumptionGate(
+                requests = stateHolder.playRequests,
+                playerHoldsItem = { player.currentMediaItem != null },
+                resolveLastPlayed = { resumptionResolver.resolveLastPlayed() },
             )
+            when (val outcome = gate.decide()) {
+                is ResumptionOutcome.Resume -> {
+                    val resolved = outcome.resumption
+                    stateHolder.set(resolved.nowPlaying)
+                    applyRememberedSpeed(resolved.nowPlaying)
+                    MediaSession.MediaItemsWithStartPosition(
+                        resolved.mediaItems,
+                        resolved.startTrackIndex,
+                        resolved.startPositionMs,
+                    )
+                }
+
+                ResumptionOutcome.NothingToResume ->
+                    MediaSession.MediaItemsWithStartPosition(emptyList(), 0, C.TIME_UNSET)
+
+                ResumptionOutcome.Superseded, ResumptionOutcome.AlreadyLoaded ->
+                    throw ResumptionDeclined(outcome)
+            }
         }
     }
 
@@ -2874,6 +2899,15 @@ data class Resumption(
     val startPositionMs: Long,
     val nowPlaying: NowPlaying,
 )
+
+/**
+ * Fails a resumption future on purpose, so that Media3 leaves the player as it is.
+ *
+ * Media3 writes the message to logcat as the reason the resumption failed, so it names
+ * the outcome.
+ */
+internal class ResumptionDeclined(outcome: ResumptionOutcome) :
+    IllegalStateException("lugu declined the resumption: $outcome")
 
 /** Used by callers that already know which account they act for. */
 internal typealias AccountProvider = suspend () -> ActiveAccount?

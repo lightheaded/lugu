@@ -262,8 +262,11 @@ class PlaybackConnection @Inject constructor(
      *
      * See [PlayRequests]. The short version: on a bad network an older request can answer
      * after a newer one, and before this existed it was loaded over the newer one.
+     *
+     * Held by [stateHolder] rather than here, so that the service sees the same requests: a
+     * playback resumption that answers while a request is still starting must lose to it.
      */
-    private val requests = PlayRequests()
+    private val requests get() = stateHolder.playRequests
 
     private val starter = PlayStarter(
         requests = requests,

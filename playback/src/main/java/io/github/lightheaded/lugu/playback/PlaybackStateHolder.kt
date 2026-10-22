@@ -38,6 +38,9 @@ data class ContinuationNotice(val reason: String?, val cued: Boolean)
  */
 @Singleton
 class PlaybackStateHolder @Inject constructor() {
+    /** The play request in flight, which the service's resumption must not overwrite. */
+    internal val playRequests = PlayRequests()
+
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
 
