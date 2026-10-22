@@ -257,43 +257,98 @@ class PlaybackConnection @Inject constructor(
         }
     }
 
-    /** Starts an item from wherever the sync engine says it should start. */
+    /**
+     * Which play request is the newest, and what it asked for.
+     *
+     * See [PlayRequests]. The short version: on a bad network an older request can answer
+     * after a newer one, and before this existed it was loaded over the newer one.
+     */
+    private val requests = PlayRequests()
+
+    private val starter = PlayStarter(
+        requests = requests,
+        prepare = ::prepareStart,
+        load = ::loadStart,
+    )
+
+    /**
+     * The item a play request is starting, from the press until it is loaded or has failed.
+     *
+     * [nowPlaying] keeps reporting what the player holds, which during that time is still the
+     * previous item. A screen that opens on the press reads this to show what is coming,
+     * rather than the item the listener has just chosen to leave.
+     */
+    val starting: StateFlow<StartingItem?> get() = requests.starting
+
+    /**
+     * Starts an item from wherever the sync engine says it should start.
+     *
+     * The newest request wins. An earlier one that is still resolving is dropped when its
+     * answer arrives, whether that answer is a session or a failure — see [PlayStarter].
+     */
     fun play(libraryItemId: String, episodeId: String? = null) {
         scope.launch {
             makeStartPromise()
             // Reported here rather than waiting for the next poll: the press that has to
             // be prevented is the one that arrives in the next half second.
             _state.value = _state.value.copy(isPlaying = true, isBuffering = true, error = null)
-            val account = authRepository.account() ?: run {
+            if (authRepository.account() == null) {
                 clearStartPromise()
                 pushState()
                 return@launch
             }
 
-            val resolved = withContext(Dispatchers.IO) {
-                mediaResolver.resolve(account, libraryItemId, episodeId)
-            }.getOrElse { failure ->
-                clearStartPromise()
-                _state.value = _state.value.copy(
-                    isBuffering = false,
-                    isPlaying = false,
-                    error = failure.message ?: "Could not start playback",
-                )
-                return@launch
+            when (val outcome = starter.start(libraryItemId, episodeId)) {
+                StartOutcome.Loaded -> pushState()
+                // A newer request owns the promise and the state now. Touching either here
+                // would undo what that request has just reported.
+                StartOutcome.Superseded -> Unit
+                is StartOutcome.Failed -> {
+                    clearStartPromise()
+                    _state.value = _state.value.copy(
+                        isBuffering = false,
+                        isPlaying = false,
+                        error = outcome.cause.message ?: "Could not start playback",
+                    )
+                    pushState()
+                }
             }
+        }
+    }
 
-            val chapters = withContext(Dispatchers.IO) {
-                runCatching {
-                    libraryRepository.chapters(account, libraryItemId)
-                        .map { Chapter(it.chapterIndex, it.startSec, it.endSec, it.title) }
-                }.getOrDefault(emptyList())
-            }
-            val coverUrl = withContext(Dispatchers.IO) {
-                runCatching { libraryRepository.coverUrl(libraryItemId, 600) }.getOrNull()
-            }
+    /**
+     * The slow half of a start: everything that may wait on the network or on the service.
+     *
+     * The controller is connected here, last, so that the load which follows does not
+     * suspend at all — see [PlayStarter].
+     */
+    private suspend fun prepareStart(libraryItemId: String, episodeId: String?): Result<PreparedStart> {
+        // Read again rather than passed in: a sign-out can land while an earlier request
+        // was resolving, and this is the read that the resolution acts for.
+        val account = authRepository.account()
+            ?: return Result.failure(IllegalStateException("Not signed in"))
 
-            stateHolder.set(
-                NowPlaying(
+        val resolved = withContext(Dispatchers.IO) {
+            mediaResolver.resolve(account, libraryItemId, episodeId)
+        }.getOrElse { return Result.failure(it) }
+
+        val chapters = withContext(Dispatchers.IO) {
+            runCatching {
+                libraryRepository.chapters(account, libraryItemId)
+                    .map { Chapter(it.chapterIndex, it.startSec, it.endSec, it.title) }
+            }.getOrDefault(emptyList())
+        }
+        val coverUrl = withContext(Dispatchers.IO) {
+            runCatching { libraryRepository.coverUrl(libraryItemId, 600) }.getOrNull()
+        }
+        val mediaType = if (episodeId != null) MediaType.PODCAST else MediaType.BOOK
+        val speed = withContext(Dispatchers.IO) { playbackPrefs.speedFor(libraryItemId, mediaType) }
+        val start = AbsoluteTiming.toTrack(resolved.session.tracks, resolved.startPositionSec)
+        controller()
+
+        return Result.success(
+            PreparedStart(
+                nowPlaying = NowPlaying(
                     libraryItemId = libraryItemId,
                     episodeId = episodeId,
                     title = resolved.session.title,
@@ -305,19 +360,30 @@ class PlaybackConnection @Inject constructor(
                     ledgerId = resolved.ledgerId,
                     isTranscoded = resolved.session.isTranscoded,
                 ),
-            )
-            stateHolder.setJump(resolved.jump)
+                jump = resolved.jump,
+                mediaItems = resolved.mediaItems,
+                startTrackIndex = start.trackIndex,
+                startPositionMs = start.positionMs,
+                speed = speed,
+            ),
+        )
+    }
 
-            val start = AbsoluteTiming.toTrack(resolved.session.tracks, resolved.startPositionSec)
-            val mediaType = if (episodeId != null) MediaType.PODCAST else MediaType.BOOK
-            val speed = withContext(Dispatchers.IO) { playbackPrefs.speedFor(libraryItemId, mediaType) }
-            val player = controller()
-            player.setMediaItems(resolved.mediaItems, start.trackIndex, start.positionMs)
-            player.setPlaybackSpeed(speed)
-            player.prepare()
-            player.play()
-            pushState()
-        }
+    /**
+     * The fast half: hands a prepared start to the player, with no suspension anywhere.
+     *
+     * The state holder and the player are told in one step, with nothing that suspends
+     * between them, so no other start can come in between and leave the two naming
+     * different items.
+     */
+    private fun loadStart(prepared: PreparedStart) {
+        val player = controller ?: return
+        stateHolder.set(prepared.nowPlaying)
+        stateHolder.setJump(prepared.jump)
+        player.setMediaItems(prepared.mediaItems, prepared.startTrackIndex, prepared.startPositionMs)
+        player.setPlaybackSpeed(prepared.speed)
+        player.prepare()
+        player.play()
     }
 
     /**
@@ -330,6 +396,7 @@ class PlaybackConnection @Inject constructor(
     fun togglePlayPause() = withController {
         if (it.isPlaying || startingPlayback) {
             clearStartPromise()
+            requests.abandon()
             it.pause()
         } else {
             it.play()
@@ -338,6 +405,7 @@ class PlaybackConnection @Inject constructor(
 
     fun pause() = withController {
         clearStartPromise()
+        requests.abandon()
         it.pause()
     }
 
