@@ -15,7 +15,8 @@
 #   scripts/seed-test-server.sh                       # localhost:13378, prints what it made
 #   ABS_URL=http://10.0.2.2:13378 scripts/... --github-output
 #
-# Requires: docker (unless ABS_NO_DOCKER=1), curl, python3, ffmpeg.
+# Requires: docker (unless ABS_NO_DOCKER=1), curl, python3. ffmpeg is used from the host
+# when it has one, and from the server image otherwise (see run_ffmpeg).
 set -euo pipefail
 
 ABS_PORT="${ABS_PORT:-13378}"
@@ -33,9 +34,13 @@ ABS_USER="${ABS_USER:-lugu-ci}"
 # first time, not a fresh one. It is kept beside the config it belongs to.
 ABS_PASS_SUPPLIED="${ABS_PASS:+yes}"
 ABS_PASS="${ABS_PASS:-$(head -c 18 /dev/urandom | base64 | tr -d '/+=' )}"
-ABS_IMAGE="${ABS_IMAGE:-ghcr.io/advplyr/audiobookshelf:latest}"
+# A fixed version, not `latest`. 2.37.1 is the version `latest` gave CI while the suite was
+# green, and a moving tag changes the server under the tests on a day nobody chose.
+ABS_IMAGE="${ABS_IMAGE:-ghcr.io/advplyr/audiobookshelf:2.37.1}"
 ABS_CONTAINER="${ABS_CONTAINER:-lugu-test-abs}"
 ROOT="${ABS_ROOT:-${RUNNER_TEMP:-/tmp}/lugu-abs}"
+# Absolute, because run_ffmpeg mounts it into a container at the same path.
+mkdir -p "$ROOT" && ROOT=$(cd "$ROOT" && pwd)
 
 # The title the playback tests are allowed to play. Kept as its own value because having a
 # server is not the same as agreeing that a test may play something on it.
@@ -52,6 +57,53 @@ SERIES_QUERY="Riverton"
 MEDIA_REVISION=2
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
+
+# Each stage prints a line with the time when it starts and when it ends. On 22 October
+# 2026 the CI step hit its time limit four times with no output at all, so the log could
+# not say which part stalled. Now the last "start:" line without its "done:" names it.
+STAGE=""
+STAGE_T0=0
+stage() { # stage NAME — ends the stage before it; an empty NAME ends the last one
+  local now; now=$(date +%s)
+  [ -z "$STAGE" ] || say "$(date -u +%H:%M:%S) done:  $STAGE ($((now - STAGE_T0))s)"
+  STAGE="$1"; STAGE_T0=$now
+  [ -z "$STAGE" ] || say "$(date -u +%H:%M:%S) start: $STAGE"
+}
+trap 'rc=$?; [ "$rc" = 0 ] || [ -z "$STAGE" ] || echo "Seeding failed in stage: $STAGE" >&2' EXIT
+
+# Bounded where `timeout` exists (it does on the CI runner, not on a stock Mac).
+with_timeout() { # with_timeout SECONDS CMD...
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"; else "$@"; fi
+}
+
+# The server image carries its own ffmpeg (Alpine's, with lavfi, AAC and LAME), so a host
+# without one borrows it from there. CI did `apt-get update && apt-get install ffmpeg` for
+# this before, and on 22 October that is where the step stalled: it took 8-13s on a good
+# run, 30-60s on a slow one, 189s once, and more than 240s on each run that timed out.
+run_ffmpeg() {
+  if command -v ffmpeg >/dev/null 2>&1; then ffmpeg "$@"; return; fi
+  if [ "${ABS_NO_DOCKER:-0}" = "1" ]; then
+    echo "ffmpeg is not installed, and ABS_NO_DOCKER=1 forbids using the server image's" >&2
+    exit 1
+  fi
+  docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:$ROOT" \
+    --entrypoint ffmpeg "$ABS_IMAGE" "$@"
+}
+
+# A healthy pull takes 5-10s on the runner. Three tries of up to a minute each, so one
+# stuck connection to the registry does not spend the whole step.
+pull_image() {
+  if docker image inspect "$ABS_IMAGE" >/dev/null 2>&1; then say "image already present"; return; fi
+  local i
+  for i in 1 2 3; do
+    with_timeout 60 docker pull "$ABS_IMAGE" && return
+    say "pull attempt $i of 3 failed"
+    sleep 5
+  done
+  echo "Could not pull $ABS_IMAGE" >&2
+  exit 1
+}
 
 # --------------------------------------------------------------------------------------
 # The library, invented from scratch
@@ -95,7 +147,7 @@ START=60000
 END=90000
 title=The Wreck
 META
-  ffmpeg -v error -f lavfi -i "sine=frequency=220:duration=90" -i "$ROOT/chapters.txt" \
+  run_ffmpeg -v error -f lavfi -i "sine=frequency=220:duration=90" -i "$ROOT/chapters.txt" \
     -map_metadata 1 -c:a aac -b:a 32k \
     "$ab/James T. R. Corven/Lighthouse Wakes/Lighthouse Wakes.m4b" -y
 
@@ -103,7 +155,7 @@ META
   # a boundary to cross. One file cannot fail that check.
   local i
   for i in 1 2; do
-    ffmpeg -v error -f lavfi -i "sine=frequency=$((180 + i * 40)):duration=30" \
+    run_ffmpeg -v error -f lavfi -i "sine=frequency=$((180 + i * 40)):duration=30" \
       -metadata title="Part $i" -metadata album="The Breakwater" \
       -metadata artist="Jefferson Vale" \
       -c:a libmp3lame -b:a 32k "$ab/Jefferson Vale/The Breakwater/0$i - Part $i.mp3" -y
@@ -128,7 +180,7 @@ META
   local vol title
   for vol in 1 2; do
     if [ "$vol" = 1 ]; then title="Riverton Dawn"; else title="Riverton Dusk"; fi
-    ffmpeg -v error -f lavfi -i "sine=frequency=$((330 + vol * 30)):duration=25" \
+    run_ffmpeg -v error -f lavfi -i "sine=frequency=$((330 + vol * 30)):duration=25" \
       -metadata title="$title" -metadata album="$title" -metadata artist="Nessa Cardrow" \
       -c:a libmp3lame -b:a 32k \
       "$ab/Nessa Cardrow/$SERIES_QUERY/Vol. $vol - $title/$title.mp3" -y
@@ -136,7 +188,7 @@ META
 
   # Episodes, so an episode can be shown to be tracked as itself rather than as the show.
   for i in 1 2 3; do
-    ffmpeg -v error -f lavfi -i "sine=frequency=$((300 + i * 25)):duration=20" \
+    run_ffmpeg -v error -f lavfi -i "sine=frequency=$((300 + i * 25)):duration=20" \
       -metadata title="Episode $i" -metadata album="The Tidelands" \
       -c:a libmp3lame -b:a 32k "$pc/The Tidelands/Episode $i.mp3" -y
   done
@@ -186,17 +238,17 @@ MSG
 api() { # api METHOD PATH [BODY]
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$body" ]; then
-    curl -sf -X "$method" "$ABS_URL$path" -H 'Content-Type: application/json' \
+    curl -sf --max-time 30 -X "$method" "$ABS_URL$path" -H 'Content-Type: application/json' \
       ${TOKEN:+-H "Authorization: Bearer $TOKEN"} -d "$body"
   else
-    curl -sf -X "$method" "$ABS_URL$path" ${TOKEN:+-H "Authorization: Bearer $TOKEN"}
+    curl -sf --max-time 30 -X "$method" "$ABS_URL$path" ${TOKEN:+-H "Authorization: Bearer $TOKEN"}
   fi
 }
 
 wait_for_server() {
   local i
   for i in $(seq 1 60); do
-    curl -sf "$ABS_URL/status" >/dev/null 2>&1 && { say "server answering"; return; }
+    curl -sf --max-time 5 "$ABS_URL/status" >/dev/null 2>&1 && { say "server answering"; return; }
     sleep 2
   done
   echo "Server never answered at $ABS_URL/status" >&2
@@ -212,7 +264,7 @@ TOKEN=""
 CRED_FILE="$ROOT/.abs-password"
 
 initialise() {
-  if python3 -c "import sys,json,urllib.request as u; sys.exit(0 if json.load(u.urlopen('$ABS_URL/status'))['isInit'] else 1)"; then
+  if python3 -c "import sys,json,urllib.request as u; sys.exit(0 if json.load(u.urlopen('$ABS_URL/status', timeout=30))['isInit'] else 1)"; then
     # A second run against a config volume that survived the first. `POST /init` refuses
     # once a root user exists, so the only way in is the password that made it.
     if [ -z "$ABS_PASS_SUPPLIED" ] && [ -f "$CRED_FILE" ]; then
@@ -283,17 +335,20 @@ scan_and_wait() { # scan_and_wait LIBRARY_ID EXPECTED
 # --------------------------------------------------------------------------------------
 
 main() {
-  mkdir -p "$ROOT"
-  generate_media
-  start_server
-  wait_for_server
-  initialise
+  # First, because generate_media can need the image's ffmpeg.
+  if [ "${ABS_NO_DOCKER:-0}" != "1" ]; then stage "pull $ABS_IMAGE"; pull_image; fi
+  stage "generate the media"; generate_media
+  stage "start the server"; start_server
+  stage "wait for the server to answer"; wait_for_server
+  stage "create the user and sign in"; initialise
 
+  stage "create and scan the libraries"
   books=$(make_library Audiobooks /audiobooks book audiobookshelf)
   casts=$(make_library Podcasts /podcasts podcast itunes)
   # Four books now: the chaptered one, the two-file one, and the two Riverton volumes.
   scan_and_wait "$books" 4
   scan_and_wait "$casts" 1
+  stage ""
 
   if [ "${1:-}" = "--github-output" ]; then
     # Consumed by the workflow. The password is masked before it is ever echoed: it is

@@ -469,6 +469,9 @@ The seed step now carries `timeout-minutes: 4` of its own, so a stall fails ther
 names itself instead of spending the tests' time. If that timeout starts firing, the fix
 is in what the script fetches, not in the cap.
 
+Inside the step, the script prints a timed `start:` and `done:` line for each stage. After a
+timeout, the last `start:` line that has no `done:` line names the stage that stalled.
+
 ### A red job with a real failing test
 
 A named test with a real assertion is the app's problem until a control says otherwise.

@@ -189,14 +189,17 @@ jobs:
       # and were cut off mid-suite at the 20 minute cap with nothing failed. Four minutes
       # is about six times the normal cost, so a step that reaches it has stalled on
       # something it fetches rather than merely run slowly. Failing here names the step.
+      #
+      # The script prints a timed "start:" and "done:" line for each stage, so a timeout
+      # also names the stage. There is no `apt-get` here any more. On 22 October 2026 the
+      # step timed out five times with no output, and the passing runs showed why: the apt
+      # install took 8-13s on a good run, 30-60s on a slow one and 189s once, while all of
+      # the rest took 20-25s. The script now uses the ffmpeg in the server image instead.
+      # Runs with a fast apt took 33-54s, so the limit stays at 4 minutes.
       - name: Seed a test server
         id: abs
         timeout-minutes: 4
-        run: |
-          command -v ffmpeg >/dev/null 2>&1 || {
-            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          }
-          scripts/seed-test-server.sh --github-output
+        run: scripts/seed-test-server.sh --github-output
 
       - name: Run the instrumented tests
         uses: reactivecircus/android-emulator-runner@v2
