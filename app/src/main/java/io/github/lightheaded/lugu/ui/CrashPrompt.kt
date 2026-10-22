@@ -106,8 +106,11 @@ fun CrashPrompt(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // One voice: lugu names itself, and the button is the reader's own action.
+                // An earlier wording said "me" for the app in the line and "me" for the
+                // reader on the button.
                 Text(
-                    text = "lugu crashed last time. Want me to look into it?",
+                    text = "lugu crashed last time.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Row(
@@ -121,7 +124,7 @@ fun CrashPrompt(
                             onOpenFeedback()
                         },
                     ) {
-                        Text("Tell me what happened")
+                        Text("Describe what happened")
                     }
                 }
             }

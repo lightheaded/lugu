@@ -61,6 +61,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -601,7 +602,11 @@ internal fun EpisodeRowView(
         // The per-row controls stand down in selection mode: a bar that acts on eight
         // episodes and a button that acts on one, side by side, is a trap.
         if (!selectionActive) {
-            IconButton(onClick = onPlay, modifier = Modifier.size(40.dp)) {
+            // Each control draws at 40 dp but takes a 48 dp slot, so the three of them
+            // no longer share edges: a tap that lands between two of them goes to the
+            // nearer one, not to the row behind it, which opens the episode.
+            val target = Modifier.minimumInteractiveComponentSize()
+            IconButton(onClick = onPlay, modifier = target.size(40.dp)) {
                 Icon(
                     Icons.Default.PlayArrow,
                     // Named after the episode rather than left as "Play". A screen reader
@@ -614,11 +619,13 @@ internal fun EpisodeRowView(
                 download = row.download,
                 onDownload = onDownload,
                 onRemove = onRemoveDownload,
+                modifier = target,
                 compact = true,
             )
             RowActionsMenu(
                 onPlayNext = onPlayNext,
                 onAddToQueue = onAddToQueue,
+                modifier = target,
                 compact = true,
                 isFinished = row.isFinished,
                 onSetFinished = onSetFinished,

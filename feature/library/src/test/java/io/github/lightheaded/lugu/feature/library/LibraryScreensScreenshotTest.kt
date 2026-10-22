@@ -745,15 +745,11 @@ private fun PodcastPagePreview() {
 private fun EpisodePagePreview() {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(NOTES_STATE.showTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                navigationIcon = {
-                    IconButton(onClick = {}) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            EpisodeTopBar(
+                showTitle = NOTES_STATE.showTitle,
+                showItemId = NOTES_EPISODE.libraryItemId,
+                onBack = {},
+                onOpenShow = {},
             )
         },
     ) { padding ->

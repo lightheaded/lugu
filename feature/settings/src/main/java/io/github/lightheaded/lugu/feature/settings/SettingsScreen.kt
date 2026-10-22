@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -38,6 +39,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -1089,8 +1092,12 @@ private fun settingEntries(
                 id = "account",
                 category = "Account",
                 title = "Account",
+                // The Connection link lives in this entry, so its words are here too: people
+                // arrive at it with "proxy", "header" or "certificate", not "account".
                 keywords = "server sign out log out user session address web client browser " +
-                    "website open in browser audiobookshelf",
+                    "website open in browser audiobookshelf connection network local home " +
+                    "wifi second address proxy header headers custom cloudflare access " +
+                    "certificate client certificate mtls tls",
             ) {
                 state.account?.let { account ->
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
@@ -1296,10 +1303,20 @@ private fun SectionHeader(title: String) {
     }
 }
 
+/**
+ * A setting that is on or off.
+ *
+ * The whole row is the switch, for the reason [LinkRow] gives: the switch alone is a small
+ * target at the far edge. The switch has no handler of its own, so the row is one control
+ * and TalkBack reads the title, the subtitle and the state together, once.
+ */
 @Composable
 private fun SwitchRow(title: String, subtitle: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -1312,7 +1329,13 @@ private fun SwitchRow(title: String, subtitle: String?, checked: Boolean, onChan
                 )
             }
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        // A switch with no handler drops its 48 dp minimum, which would make every
+        // one-line row shorter. The modifier keeps the size, so nothing on screen moves.
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        )
     }
 }
 

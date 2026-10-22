@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import io.github.lightheaded.lugu.core.sync.DiaryEntry
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
+import java.util.Locale
 import org.junit.Test
 
 /**
@@ -151,6 +152,30 @@ class PlaybackRecordTest {
         assertThat(PlaybackRecord.note(entries, 1)).contains("without warning")
         assertThat(PlaybackRecord.note(entries, 2)).contains("took the audio")
         assertThat(PlaybackRecord.note(entries, 3)).isNull()
+    }
+
+    @Test
+    fun `an older day is written the way the phone's language writes a date`() {
+        val older = today - 5 * DAY_MS
+        val now = today + 12 * 3_600_000L
+
+        val british = PlaybackRecord.dayLabel(older, now, Locale.UK)
+        val american = PlaybackRecord.dayLabel(older, now, Locale.US)
+
+        // The same day in two languages: day first in one, month first in the other.
+        assertThat(british).matches("\\d{1,2} \\p{L}+ \\d{4}")
+        assertThat(american).matches("\\p{L}+ \\d{1,2}, \\d{4}")
+    }
+
+    @Test
+    fun `a line's time follows the phone's clock style`() {
+        val evening = at(21, 5)
+
+        assertThat(PlaybackRecord.timeOfDay(evening, Locale.UK)).isEqualTo("21:05:00")
+        // A 12-hour language gets a 12-hour clock with its marker, never "21".
+        val american = PlaybackRecord.timeOfDay(evening, Locale.US)
+        assertThat(american).startsWith("9:05:00")
+        assertThat(american).contains("PM")
     }
 
     private companion object {

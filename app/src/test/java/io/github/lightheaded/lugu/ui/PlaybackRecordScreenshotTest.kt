@@ -39,8 +39,6 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import io.github.lightheaded.lugu.core.sync.DiaryEntry
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -80,20 +78,25 @@ class PlaybackRecordScreenshotTest {
     val compose = createComposeRule()
 
     private lateinit var originalZone: TimeZone
+    private lateinit var originalLocale: Locale
 
     /**
-     * Every label on this screen is a clock reading, so the picture depends on the time
-     * zone the machine taking it happens to be in unless it is pinned.
+     * Every label on this screen is a clock reading or a date in the phone's own language,
+     * so the picture depends on the time zone and the locale of the machine taking it
+     * unless both are pinned.
      */
     @Before
-    fun pinTimeZone() {
+    fun pinTimeZoneAndLocale() {
         originalZone = TimeZone.getDefault()
+        originalLocale = Locale.getDefault()
         TimeZone.setDefault(TimeZone.getTimeZone("Europe/London"))
+        Locale.setDefault(Locale.UK)
     }
 
     @After
-    fun restoreTimeZone() {
+    fun restoreTimeZoneAndLocale() {
         TimeZone.setDefault(originalZone)
+        Locale.setDefault(originalLocale)
     }
 
     @Test
@@ -252,7 +255,7 @@ private fun SummaryCardPreview(summary: PlaybackRecordSummary, isEmpty: Boolean)
 private fun RecordRowPreview(line: RecordLine) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            TIME_FORMAT.format(Date(line.entry.atMs)),
+            PlaybackRecord.timeOfDay(line.entry.atMs),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -272,12 +275,4 @@ private fun RecordRowPreview(line: RecordLine) {
             }
         }
     }
-}
-
-/**
- * The zone is set on the formatter rather than inherited from the default, which is
- * captured when a [SimpleDateFormat] is constructed — here, before the rule that pins it.
- */
-private val TIME_FORMAT = SimpleDateFormat("HH:mm:ss", Locale.UK).apply {
-    timeZone = TimeZone.getTimeZone("Europe/London")
 }

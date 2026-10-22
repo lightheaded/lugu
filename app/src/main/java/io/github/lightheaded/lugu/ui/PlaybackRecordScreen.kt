@@ -46,9 +46,6 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.sync.Clock
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -273,7 +270,7 @@ private fun RecordRow(line: RecordLine, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = TIME_FORMAT.format(Date(line.entry.atMs)),
+            text = PlaybackRecord.timeOfDay(line.entry.atMs),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -300,6 +297,3 @@ private fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
     clipboard.setPrimaryClip(ClipData.newPlainText("lugu playback record", text))
 }
-
-/** The day is already in the heading, so a line only needs its time. */
-private val TIME_FORMAT = SimpleDateFormat("HH:mm:ss", Locale.UK)

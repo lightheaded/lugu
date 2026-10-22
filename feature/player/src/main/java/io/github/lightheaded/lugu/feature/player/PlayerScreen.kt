@@ -832,7 +832,10 @@ private fun TransportRow(
  */
 private fun playerStatus(error: String?, transcoded: Boolean, noticeGone: Boolean): Status? = when {
     error != null -> Status.Problem(error)
-    transcoded && !noticeGone -> Status.Note("Transcoding — seeking is less precise")
+    // The consequence, not the mechanism: a listener acts on where a jump lands, and
+    // "transcoding" names server work they cannot change.
+    transcoded && !noticeGone ->
+        Status.Note("Converted for streaming — jumps may land a few seconds off")
     else -> null
 }
 

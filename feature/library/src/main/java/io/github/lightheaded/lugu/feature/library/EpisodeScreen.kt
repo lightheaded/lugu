@@ -1,5 +1,6 @@
 package io.github.lightheaded.lugu.feature.library
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -68,6 +70,8 @@ fun EpisodeScreen(
     onBack: () -> Unit,
     onPlay: (itemId: String, episodeId: String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Opens the show's own page, from the show's name in the bar. */
+    onOpenShow: (itemId: String) -> Unit = {},
     viewModel: EpisodeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -83,16 +87,11 @@ fun EpisodeScreen(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                // The show, not the episode. The episode's own title is the first line of
-                // the page underneath and is far too long for a bar; what a reader needs
-                // from the bar is which feed this arrived in.
-                title = { Text(state.showTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            EpisodeTopBar(
+                showTitle = state.showTitle,
+                showItemId = state.episode?.libraryItemId,
+                onBack = onBack,
+                onOpenShow = onOpenShow,
             )
         },
     ) { padding ->
@@ -130,6 +129,50 @@ fun EpisodeScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         )
     }
+}
+
+/**
+ * The bar: back, and the show's name.
+ *
+ * The show, not the episode. The episode's own title is the first line of the page
+ * underneath and is far too long for a bar; what a reader needs from the bar is which feed
+ * this arrived in. The name is also the way to the show: a reader who came from a
+ * notification has no show page under this one, and the name is where they look for it.
+ * It looks the same as before, so the bar does not change, and TalkBack says what it does.
+ *
+ * [showItemId] is null until the episode has loaded, and stays null when the feed no
+ * longer has it. The name is then plain text.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun EpisodeTopBar(
+    showTitle: String,
+    showItemId: String?,
+    onBack: () -> Unit,
+    onOpenShow: (itemId: String) -> Unit,
+) {
+    TopAppBar(
+        title = {
+            Text(
+                showTitle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (showItemId != null) {
+                    Modifier.clickable(
+                        onClickLabel = "Open the show",
+                        role = Role.Button,
+                    ) { onOpenShow(showItemId) }
+                } else {
+                    Modifier
+                },
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+        },
+    )
 }
 
 /**

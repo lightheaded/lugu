@@ -3,7 +3,7 @@ package io.github.lightheaded.lugu.ui
 import io.github.lightheaded.lugu.core.sync.DiaryEntry
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
-import java.text.SimpleDateFormat
+import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -188,14 +188,18 @@ object PlaybackRecord {
         return calendar.timeInMillis
     }
 
-    /** "Today" and "Yesterday" are what someone recalls; anything older wants its date. */
-    fun dayLabel(dayStartMs: Long, nowMs: Long): String {
+    /**
+     * "Today" and "Yesterday" are what someone recalls; anything older wants its date, in
+     * the form the phone's own language writes one. [locale] is a parameter only so that a
+     * test can pin it.
+     */
+    fun dayLabel(dayStartMs: Long, nowMs: Long, locale: Locale = Locale.getDefault()): String {
         val today = startOfDay(nowMs)
         val yesterday = startOfDay(today - 1)
         return when (dayStartMs) {
             today -> "Today"
             yesterday -> "Yesterday"
-            else -> DAY_FORMAT.format(Date(dayStartMs))
+            else -> DateFormat.getDateInstance(DateFormat.LONG, locale).format(Date(dayStartMs))
         }
     }
 
@@ -209,5 +213,14 @@ object PlaybackRecord {
         PlaybackEvent.BUFFERING,
     )
 
-    private val DAY_FORMAT = SimpleDateFormat("d MMMM yyyy", Locale.UK)
+    /**
+     * The clock reading for one line, to the second, in the phone's own language and zone.
+     * The day is already in the heading, so a line only needs its time. A reader holds
+     * these against their own memory of the evening, so a reader whose language writes a
+     * 12-hour clock gets one.
+     * The formatter is made on each call: it captures the default zone when it is made, and
+     * the zone can change while the app runs.
+     */
+    fun timeOfDay(atMs: Long, locale: Locale = Locale.getDefault()): String =
+        DateFormat.getTimeInstance(DateFormat.MEDIUM, locale).format(Date(atMs))
 }
