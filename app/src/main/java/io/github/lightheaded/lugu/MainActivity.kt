@@ -541,6 +541,7 @@ private fun LuguApp(
                         playerViewModel.play(itemId, episodeId)
                         navController.navigate(Routes.PLAYER)
                     },
+                    onOpenShow = { navController.navigate(Routes.item(it)) },
                 )
             }
 

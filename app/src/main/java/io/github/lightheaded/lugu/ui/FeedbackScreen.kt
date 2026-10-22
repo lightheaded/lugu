@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -349,25 +352,10 @@ fun FeedbackScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Attach the playback record", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            text = "The most useful thing here, and the most detailed. It is " +
-                                "shown in full below before anything is sent.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = state.attachPlaybackRecord,
-                        onCheckedChange = viewModel::setAttachPlaybackRecord,
-                    )
-                }
+                AttachRecordRow(
+                    checked = state.attachPlaybackRecord,
+                    onChange = viewModel::setAttachPlaybackRecord,
+                )
 
                 PayloadDisclosure(
                     payload = state.payload,
@@ -417,6 +405,44 @@ fun FeedbackScreen(
  * wants to — the value is in it being available and complete, not in it being unavoidable.
  * Selectable, so it can be copied and checked elsewhere.
  */
+/**
+ * The switch that decides whether the playback record goes with the report.
+ *
+ * One tap target for the whole row, as in the Settings switch rows: the title and the
+ * subtitle flip the switch too, and TalkBack reads one switch with its label.
+ */
+@Composable
+internal fun AttachRecordRow(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onChange,
+            ),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Attach the playback record", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = "The most useful thing here, and the most detailed. It is " +
+                    "shown in full below before anything is sent.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // A switch with no handler drops its 48 dp minimum. The modifier keeps
+        // the size, so the row keeps its height.
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        )
+    }
+}
+
 @Composable
 private fun PayloadDisclosure(
     payload: String,
