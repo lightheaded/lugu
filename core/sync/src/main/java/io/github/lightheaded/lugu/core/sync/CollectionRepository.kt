@@ -4,6 +4,7 @@ import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.AbsHttpException
 import io.github.lightheaded.lugu.core.api.AuthExpiredException
 import io.github.lightheaded.lugu.core.api.CollectionDto
+import io.github.lightheaded.lugu.core.api.addAllToCollection
 import io.github.lightheaded.lugu.core.api.addToCollection
 import io.github.lightheaded.lugu.core.api.collection
 import io.github.lightheaded.lugu.core.api.collections
@@ -133,6 +134,30 @@ class CollectionRepository @Inject constructor(
 
     suspend fun remove(account: ActiveAccount, collectionId: String, itemId: String): Result<Unit> =
         edit(account) { client.removeFromCollection(collectionId, itemId) }
+
+    /**
+     * Adds several items in one request, and says how many of them the collection now holds.
+     *
+     * The count comes from the collection the server sends back, not from the request. The
+     * batch route drops an item that is not a book or not in the collection's library and
+     * still answers with a success, so "the server said yes" is not proof that every item
+     * went in. An item that was already in the collection counts, because the result the
+     * caller wanted — the item is in the collection — is true for it.
+     *
+     * Offline, it fails at once with the same reason as [add]. Nothing is queued: see the
+     * class KDoc.
+     */
+    suspend fun addAll(account: ActiveAccount, collectionId: String, itemIds: List<String>): Result<Int> {
+        val wanted = itemIds.distinct()
+        if (wanted.isEmpty()) return Result.success(0)
+        var held = 0
+        return edit(account) {
+            client.addAllToCollection(collectionId, wanted).also { dto ->
+                val inCollection = dto.books.mapTo(HashSet()) { it.id }
+                held = wanted.count { it in inCollection }
+            }
+        }.map { held }
+    }
 
     /**
      * One library's collections, or null when the server would not say.

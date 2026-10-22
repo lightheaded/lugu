@@ -14,6 +14,7 @@ import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
+import io.github.lightheaded.lugu.core.sync.CollectionRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.LibrarySettings
@@ -104,6 +105,14 @@ data class LibraryUiState(
     val selectedIds: Set<String> = emptySet(),
     /** What a batch action just did, since none of them change the grid visibly. */
     val message: String? = null,
+    /**
+     * The collections of the library in view, for the selection bar's picker.
+     *
+     * Scoped to that library because the server will not put a book into a collection of
+     * another one. The `contains` mark is always false here: it answers a question about
+     * one item, and a selection is many.
+     */
+    val collections: List<CollectionChoice> = emptyList(),
 )
 
 /**
@@ -123,6 +132,7 @@ class LibraryViewModel @Inject constructor(
     private val downloadRepository: DownloadRepository,
     private val queueRepository: QueueRepository,
     private val libraryPrefs: LibraryPrefs,
+    private val collectionRepository: CollectionRepository,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -197,6 +207,22 @@ class LibraryViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /**
+     * Read from Room only. Opening the picker is what asks the server, through
+     * [refreshCollections], because the listing is the heaviest request the app makes.
+     */
+    private val collections: StateFlow<List<CollectionChoice>> =
+        combine(account, selectedLibraryId) { current, libraryId -> current to libraryId }
+            .flatMapLatest { (current, libraryId) ->
+                if (current == null || libraryId == null) {
+                    flowOf(emptyList())
+                } else {
+                    collectionRepository.observeCollections(current, libraryId)
+                        .map { collectionChoices(it, membership = emptySet()) }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val items: StateFlow<List<LibraryItem>> =
         combine(account, selectedLibraryId, query) { current, libraryId, text ->
             Triple(current, libraryId, text)
@@ -223,7 +249,8 @@ class LibraryViewModel @Inject constructor(
         },
         message,
         selection,
-    ) { base, note, picked -> base.copy(note = note, selection = picked) }
+        collections,
+    ) { base, note, picked, choices -> base.copy(note = note, selection = picked, collections = choices) }
 
     val state: StateFlow<LibraryUiState> = combine(
         libraries,
@@ -276,6 +303,7 @@ class LibraryViewModel @Inject constructor(
             selectionActive = onScreen.active,
             selectedIds = onScreen.ids,
             message = extras.note,
+            collections = extras.collections,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
@@ -302,6 +330,7 @@ class LibraryViewModel @Inject constructor(
         val error: String?,
         val note: String? = null,
         val selection: Selection = Selection(),
+        val collections: List<CollectionChoice> = emptyList(),
     )
 
     init {
@@ -451,6 +480,50 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Re-mirrors the collections behind the picker.
+     *
+     * Called when the picker opens, as on the item page, and rate-limited by the repository
+     * to one pass in five minutes. A failure says nothing: the picker still renders from
+     * Room, and an add that the server refuses reports its own reason.
+     */
+    fun refreshCollections() {
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            collectionRepository.sync(current)
+        }
+    }
+
+    /**
+     * Puts the selected books into one collection, in one request.
+     *
+     * Nothing is shown before the server answers, for the reason the item page gives: a
+     * collection is shared, and a change that appeared here and then failed would be a lie
+     * about a list other people read. Offline, the repository refuses at once with a reason,
+     * and nothing is queued.
+     *
+     * The selection stays when the add fails, so the same books can be sent again once the
+     * server is back. It clears on success, like every other action on the bar.
+     */
+    fun addSelectedToCollection(collectionId: String) {
+        val plan = collectionAddPlan(selectedRows())
+        if (plan.bookIds.isEmpty()) {
+            if (plan.skippedPodcasts > 0) message.value = COLLECTIONS_HOLD_BOOKS
+            return
+        }
+        val name = state.value.collections.firstOrNull { it.id == collectionId }?.name
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            collectionRepository.addAll(current, collectionId, plan.bookIds).fold(
+                onSuccess = { held ->
+                    message.value = collectionBatchLine(name, plan, held)
+                    clearSelection()
+                },
+                onFailure = { message.value = it.message ?: "Could not change the collection" },
+            )
+        }
+    }
+
     /** Read from the visible list, so a filtered-out row can never be acted on unseen. */
     private fun selectedRows(): List<LibraryRow> =
         state.value.items.filter { it.item.id in state.value.selectedIds }
@@ -570,3 +643,47 @@ private fun LibraryRow.facts(
     isDownloaded = isDownloaded,
     lastPlayedAtMs = lastPlayedAtMs,
 )
+
+/**
+ * Which of the selected rows can go into a collection.
+ *
+ * A collection holds books only: the server refuses any other kind of item, and its batch
+ * route drops one without a word. So the podcasts are taken out here and counted, and the
+ * line that reports the result names them. In practice the grid shows one library at a
+ * time, and a podcast library has no collections to pick, so the bar disables the action
+ * there and this split finds nothing to skip. It is still made, because a skipped podcast
+ * that nobody mentions reads as a failed add.
+ */
+internal data class CollectionAddPlan(val bookIds: List<String>, val skippedPodcasts: Int)
+
+internal fun collectionAddPlan(rows: List<LibraryRow>): CollectionAddPlan {
+    val (books, others) = rows.partition { it.item.mediaType == MediaType.BOOK }
+    return CollectionAddPlan(bookIds = books.map { it.item.id }, skippedPodcasts = others.size)
+}
+
+/**
+ * What a batch add did, in words.
+ *
+ * The collection is named, because nothing on the grid changes and the line is the only
+ * receipt. [held] is the number of the sent books that the collection holds after the
+ * request. When it is less than the number sent, the server dropped some, and the line
+ * gives both numbers rather than a count that claims all of them.
+ */
+internal fun collectionBatchLine(name: String?, plan: CollectionAddPlan, held: Int): String {
+    val target = name?.takeIf { it.isNotBlank() } ?: "the collection"
+    val sent = plan.bookIds.size
+    val added = if (held >= sent) {
+        "Added ${booksOf(sent)} to $target"
+    } else {
+        "Added $held of ${booksOf(sent)} to $target"
+    }
+    val skipped = plan.skippedPodcasts
+    if (skipped == 0) return added
+    val podcasts = if (skipped == 1) "1 podcast" else "$skipped podcasts"
+    return "$added. Collections hold books only, so $podcasts stayed out"
+}
+
+private fun booksOf(count: Int): String = if (count == 1) "1 book" else "$count books"
+
+/** What the bar says when the selection has nothing a collection can hold. */
+internal const val COLLECTIONS_HOLD_BOOKS = "Collections hold books only"

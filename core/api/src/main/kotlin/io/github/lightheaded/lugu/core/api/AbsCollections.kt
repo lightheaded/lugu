@@ -101,6 +101,37 @@ suspend fun AbsClient.addToCollection(collectionId: String, libraryItemId: Strin
     }
 
 /**
+ * The batch endpoints' body: library item ids, under the key the server calls `books`.
+ *
+ * Plain strings rather than [CollectionBookRequest] objects — the handler filters the list
+ * down to non-empty strings and drops anything else without a word.
+ */
+@Serializable
+data class CollectionBatchRequest(val books: List<String>)
+
+/**
+ * Adds several items in one request, and answers with the collection as it now stands.
+ *
+ * `POST /api/collections/:id/batch/add`, `CollectionController.addBatch` in the 2.36.0
+ * server. It is more forgiving than the one-item route in two ways the caller has to know:
+ *
+ * - An item that is not a book, or that belongs to another library, is dropped silently.
+ *   Only when *nothing* is left does the server answer 400.
+ * - An item that is already in the collection is skipped, not refused. The one-item route
+ *   answers 400 for the same thing.
+ *
+ * So a success does not prove that every id went in. The collection in the reply does,
+ * which is why it is returned whole.
+ */
+suspend fun AbsClient.addAllToCollection(
+    collectionId: String,
+    libraryItemIds: List<String>,
+): CollectionDto = read("/api/collections/$collectionId/batch/add", HttpMethod.Post) {
+    contentType(ContentType.Application.Json)
+    setBody(CollectionBatchRequest(libraryItemIds))
+}
+
+/**
  * Removes one item, and answers with the collection as it now stands.
  *
  * The last path segment is a *library item* id despite the server calling it `bookId`;

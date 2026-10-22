@@ -54,4 +54,9 @@ dependencies {
     testImplementation(libs.truth)
     testImplementation(libs.turbine)
     testImplementation(libs.kotlinx.coroutines.test)
+    // A real AbsClient over a mock engine, for the repositories whose answer depends on
+    // what the server sends back.
+    testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.ktor.client.content.negotiation)
+    testImplementation(libs.ktor.serialization.json)
 }

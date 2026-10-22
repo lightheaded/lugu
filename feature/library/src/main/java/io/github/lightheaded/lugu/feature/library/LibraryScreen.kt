@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.TaskAlt
@@ -49,8 +50,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -131,6 +134,8 @@ fun LibraryScreen(
             onDownload = viewModel::downloadSelected,
             onAddToQueue = viewModel::addSelectedToQueue,
             onSetFinished = viewModel::setSelectedFinished,
+            onAddToCollection = viewModel::addSelectedToCollection,
+            onCollectionPickerOpened = viewModel::refreshCollections,
         ),
         onOpenItem = onOpenItem,
         onBrowse = onBrowse,
@@ -169,6 +174,10 @@ internal data class LibrarySelectionActions(
     val onDownload: () -> Unit,
     val onAddToQueue: () -> Unit,
     val onSetFinished: (Boolean) -> Unit,
+    /** Puts the selection into the collection with this id. */
+    val onAddToCollection: (collectionId: String) -> Unit = {},
+    /** The picker has opened, which is the moment to ask the server for its collections. */
+    val onCollectionPickerOpened: () -> Unit = {},
 )
 
 /**
@@ -203,6 +212,19 @@ internal fun LibraryContent(
 ) {
     val scope = rememberCoroutineScope()
 
+    // Not saveable, like the item page's collections dialog: it lists what Room holds now,
+    // and a rotation that closes it loses nothing but a tap.
+    var showCollectionPicker by remember { mutableStateOf(false) }
+    // The collections pull is the heaviest request the app makes, so it is tied to opening
+    // the picker rather than to entering selection mode.
+    LaunchedEffect(showCollectionPicker) {
+        if (showCollectionPicker) selection.onCollectionPickerOpened()
+    }
+    // A picker left open after the selection has gone would add nothing to somewhere.
+    LaunchedEffect(state.selectionActive) {
+        if (!state.selectionActive) showCollectionPicker = false
+    }
+
     // The rail indexes whatever the grid is ordered by, so the letters come from the field
     // that did the ordering rather than always from the title.
     val letterKeys = remember(state.items, state.sort) {
@@ -235,7 +257,15 @@ internal fun LibraryContent(
         }
 
         if (state.selectionActive) {
-            LibrarySelectionBar(selectedCount = state.selectedIds.size, actions = selection)
+            LibrarySelectionBar(
+                selected = state.items.filter { it.item.id in state.selectedIds },
+                // A podcast library never has collections: the server holds books only in
+                // them. The button greys out there instead of going away, so the bar does
+                // not change shape between libraries.
+                canAddToCollection = !state.isPodcastLibrary,
+                onOpenCollectionPicker = { showCollectionPicker = true },
+                actions = selection,
+            )
         } else {
             BrowseLinks(
                 onBrowse = onBrowse,
@@ -356,6 +386,20 @@ internal fun LibraryContent(
                 )
             }
         }
+    }
+
+    if (showCollectionPicker) {
+        CollectionPickerDialog(
+            collections = state.collections,
+            title = "Add to collection",
+            showTicks = false,
+            dismissLabel = "Cancel",
+            onPick = { choice ->
+                showCollectionPicker = false
+                selection.onAddToCollection(choice.id)
+            },
+            onDismiss = { showCollectionPicker = false },
+        )
     }
 }
 
@@ -479,16 +523,27 @@ private fun BrowseLinks(
 /**
  * What is worth doing to a handful of books at once.
  *
- * Both directions of the finished mark are offered rather than one toggle: a selection can
- * hold books in either state, so a single button would have to guess which way the whole
- * batch is meant to go, and would guess wrong half the time.
+ * Marking is one button rather than two, as on the episode list, and for the same reason:
+ * the bar holds a close button, select-all and four actions, and a fifth action leaves the
+ * count no room on a narrow phone. Which way the button marks is decided by
+ * [markBooksFinishedTarget], so it is never a button that does nothing.
+ *
+ * "Add to collection" opens a picker rather than acting at once, because it needs a target.
+ * It asks for no confirmation: it removes nothing, and a book added by mistake comes out
+ * again from the item page.
  */
 @Composable
-private fun LibrarySelectionBar(selectedCount: Int, actions: LibrarySelectionActions) {
-    val any = selectedCount > 0
+private fun LibrarySelectionBar(
+    selected: List<LibraryRow>,
+    canAddToCollection: Boolean,
+    onOpenCollectionPicker: () -> Unit,
+    actions: LibrarySelectionActions,
+) {
+    val any = selected.isNotEmpty()
+    val finishing = markBooksFinishedTarget(selected)
 
     SelectionBar(
-        selectedCount = selectedCount,
+        selectedCount = selected.size,
         onClear = actions.onClear,
         onSelectAll = actions.onSelectAll,
         actions = listOf(
@@ -500,20 +555,32 @@ private fun LibrarySelectionBar(selectedCount: Int, actions: LibrarySelectionAct
                 any,
             ),
             SelectionAction(
-                "Mark as finished",
-                Icons.Default.TaskAlt,
-                { actions.onSetFinished(true) },
-                any,
+                "Add to collection",
+                Icons.Default.LibraryAdd,
+                onOpenCollectionPicker,
+                any && canAddToCollection,
             ),
             SelectionAction(
-                "Mark as not finished",
-                Icons.Default.RemoveDone,
-                { actions.onSetFinished(false) },
+                if (finishing) "Mark as finished" else "Mark as not finished",
+                if (finishing) Icons.Default.TaskAlt else Icons.Default.RemoveDone,
+                { actions.onSetFinished(finishing) },
                 any,
             ),
         ),
     )
 }
+
+/**
+ * Whether the bar's one marking action should finish the picked books or un-finish them.
+ *
+ * The rule of the episode list's [markFinishedTarget]: finishing is the offer unless every
+ * book picked is already finished, the only selection where it would do nothing. An empty
+ * selection reads as finishing too, because the button is disabled there, and a disabled
+ * "Mark as not finished" invites the wrong guess. A podcast row is never finished (see
+ * [LibraryRow.isFinished]), so a selection with one in it offers finishing.
+ */
+internal fun markBooksFinishedTarget(rows: List<LibraryRow>): Boolean =
+    rows.isEmpty() || rows.any { !it.isFinished }
 
 /**
  * The text the rail indexes this row by.
