@@ -144,7 +144,7 @@ object AutoPlay {
      * One device as a single line, for a store that holds strings.
      *
      * The separator is the ASCII unit separator, which cannot occur in a key and is stripped
-     * out of a name on the way in — so a device called "Tom's — Buds" round-trips, and a
+     * out of a name on the way in — so a device called "Kitchen — Buds" round-trips, and a
      * device whose name somehow contains a control character cannot corrupt the record next
      * to it.
      */

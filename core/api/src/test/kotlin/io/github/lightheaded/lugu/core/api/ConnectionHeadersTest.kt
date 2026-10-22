@@ -82,7 +82,7 @@ class ConnectionHeadersTest {
             seen += request.headers["CF-Access-Client-Id"]
             respond(
                 """{"app":"audiobookshelf","serverVersion":"2.36.0",
-                   "user":{"id":"u1","username":"tom","accessToken":"a","refreshToken":"r"}}""",
+                   "user":{"id":"u1","username":"listener","accessToken":"a","refreshToken":"r"}}""",
                 HttpStatusCode.OK,
                 jsonHeaders,
             )
@@ -90,7 +90,7 @@ class ConnectionHeadersTest {
         val absClient = client(engine, InMemoryTokenStore())
 
         absClient.status(SERVER)
-        absClient.login(SERVER, "tom", "pw")
+        absClient.login(SERVER, "listener", "pw")
 
         assertThat(seen).containsExactly("id-abc123", "id-abc123")
     }
@@ -104,7 +104,7 @@ class ConnectionHeadersTest {
                     refreshHeader = request.headers["CF-Access-Client-Secret"]
                 }
                 respond(
-                    """{"user":{"id":"u1","username":"tom","accessToken":"new","refreshToken":"r2"}}""",
+                    """{"user":{"id":"u1","username":"listener","accessToken":"new","refreshToken":"r2"}}""",
                     HttpStatusCode.OK,
                     jsonHeaders,
                 )

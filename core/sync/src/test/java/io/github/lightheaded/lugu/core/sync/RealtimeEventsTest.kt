@@ -103,7 +103,7 @@ class RealtimeEventsTest {
     fun `user_updated says only that progress may have moved`() {
         val event = RealtimeEvents.parse(
             RealtimeNames.USER_UPDATED,
-            """{"id":"u_1","username":"tom","mediaProgress":[{"libraryItemId":"li_a"}]}""",
+            """{"id":"u_1","username":"listener","mediaProgress":[{"libraryItemId":"li_a"}]}""",
         )
         assertThat(event).isEqualTo(RealtimeEvent.UserChanged)
     }

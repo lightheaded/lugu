@@ -44,7 +44,7 @@ class AbsClientAuthTest {
     )
 
     private fun refreshResponse(access: String, refresh: String) =
-        """{"user":{"id":"u1","username":"tom","accessToken":"$access","refreshToken":"$refresh"}}"""
+        """{"user":{"id":"u1","username":"listener","accessToken":"$access","refreshToken":"$refresh"}}"""
 
     @Test
     fun `an expiring token is refreshed once even under parallel load`() = runTest {
@@ -176,14 +176,14 @@ class AbsClientAuthTest {
         val engine = MockEngine { request ->
             sawHeader = request.headers["x-return-tokens"] == "true"
             respond(
-                """{"user":{"id":"u1","username":"tom","accessToken":"a","refreshToken":"r"},
+                """{"user":{"id":"u1","username":"listener","accessToken":"a","refreshToken":"r"},
                    "userDefaultLibraryId":"lib1"}""",
                 HttpStatusCode.OK,
                 jsonHeaders,
             )
         }
 
-        val result = client(store, handler = engine).login("https://books.example", "tom", "pw")
+        val result = client(store, handler = engine).login("https://books.example", "listener", "pw")
 
         assertThat(sawHeader).isTrue()
         assertThat(result.tokens.refreshToken).isEqualTo("r")
@@ -201,7 +201,7 @@ class AbsClientAuthTest {
         val engine = MockEngine { respond("404 page not found", HttpStatusCode.NotFound) }
 
         val failure = runCatching {
-            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "tom", "pw")
+            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "listener", "pw")
         }.exceptionOrNull()
 
         assertThat(failure).isInstanceOf(AbsHttpException::class.java)
@@ -270,7 +270,7 @@ class AbsClientAuthTest {
         val engine = MockEngine { respond("""{"error":"Invalid"}""", HttpStatusCode.Unauthorized, jsonHeaders) }
 
         val failure = runCatching {
-            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "tom", "pw")
+            client(InMemoryTokenStore(), handler = engine).login("https://books.example", "listener", "pw")
         }.exceptionOrNull()
 
         assertThat(failure).isInstanceOf(AuthExpiredException::class.java)
