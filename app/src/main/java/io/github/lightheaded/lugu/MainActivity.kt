@@ -168,8 +168,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** One episode, named by the two ids a route needs. */
-internal data class EpisodeTarget(val itemId: String, val episodeId: String)
+/** One episode, named by the two ids a route needs, or a book when [episodeId] is null. */
+internal data class EpisodeTarget(val itemId: String, val episodeId: String?)
 
 /**
  * What a notification's intent asks for, or null when it asks for nothing.
@@ -181,7 +181,7 @@ internal fun episodeTargetOf(intent: Intent?): EpisodeTarget? {
     val itemId = intent?.getStringExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID)
         ?.takeIf { it.isNotBlank() } ?: return null
     val episodeId = intent.getStringExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
-        ?.takeIf { it.isNotBlank() } ?: return null
+        ?.takeIf { it.isNotBlank() }
     return EpisodeTarget(itemId, episodeId)
 }
 
@@ -688,7 +688,9 @@ private fun LuguApp(
     LaunchedEffect(episodeTarget, start) {
         val target = episodeTarget ?: return@LaunchedEffect
         if (start == Routes.HOME) {
-            navController.navigate(Routes.episode(target.itemId, target.episodeId)) {
+            val route = target.episodeId?.let { Routes.episode(target.itemId, it) }
+                ?: Routes.item(target.itemId)
+            navController.navigate(route) {
                 launchSingleTop = true
             }
         }

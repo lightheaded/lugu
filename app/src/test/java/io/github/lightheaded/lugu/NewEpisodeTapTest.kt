@@ -5,6 +5,7 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
+import io.github.lightheaded.lugu.core.download.NewEpisodeIntent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
@@ -85,6 +86,14 @@ class NewEpisodeTapTest {
         assertThat(episodeTargetOf(summaryTap())).isEqualTo(EpisodeTarget("li_pod_2", "ep_after"))
         // The earlier rows keep opening their own episodes.
         assertThat(episodeTargetOf(rowTapFor(older))).isEqualTo(EpisodeTarget("li_pod_2", "ep_older"))
+    }
+
+    /** A new-book notification names the item and no episode, and opens the book page. */
+    @Test
+    fun `a tap with no episode asks for the item itself`() {
+        val bookTap = Intent(Intent.ACTION_MAIN)
+            .putExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID, "li_book")
+        assertThat(episodeTargetOf(bookTap)).isEqualTo(EpisodeTarget("li_book", null))
     }
 
     @Test
