@@ -143,6 +143,32 @@ class AbsClientAuthTest {
     }
 
     @Test
+    fun `a refresh that ends after a sign-out writes nothing`() = runTest {
+        val store = InMemoryTokenStore(
+            AuthTokens("old", "refresh-1", accessTokenExpiresAtMs = 1_000_000L + 60_000L),
+        )
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine {
+            started.complete(Unit)
+            release.await()
+            respond(refreshResponse("new", "refresh-2"), HttpStatusCode.OK, jsonHeaders)
+        }
+        val absClient = client(store, handler = engine)
+
+        val failure = withContext(Dispatchers.Default) {
+            val refresh = async { runCatching { absClient.validAccessToken() } }
+            started.await()
+            store.clear()
+            release.complete(Unit)
+            refresh.await().exceptionOrNull()
+        }
+
+        assertThat(failure).isInstanceOf(AuthExpiredException::class.java)
+        assertThat(store.tokens()).isNull()
+    }
+
+    @Test
     fun `login asks for the refresh token in the body rather than a cookie`() = runTest {
         val store = InMemoryTokenStore()
         var sawHeader = false

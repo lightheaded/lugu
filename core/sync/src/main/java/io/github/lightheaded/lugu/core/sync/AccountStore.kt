@@ -6,6 +6,7 @@ import io.github.lightheaded.lugu.core.api.ConnectionProfile
 import io.github.lightheaded.lugu.core.api.ConnectionProfileSource
 import io.github.lightheaded.lugu.core.api.ConnectionRace
 import io.github.lightheaded.lugu.core.api.ServerUrlProvider
+import io.github.lightheaded.lugu.core.api.StoredTokens
 import io.github.lightheaded.lugu.core.api.TokenStore
 import io.github.lightheaded.lugu.core.db.ServerDao
 import io.github.lightheaded.lugu.core.model.AuthTokens
@@ -83,8 +84,9 @@ import kotlinx.coroutines.sync.withLock
 /**
  * A [TokenStore] that can name the account a sign-in belongs to.
  *
- * `:core:api` deliberately knows nothing about servers, so [TokenStore] has no account in
- * its contract and its three methods mean "the active account". Everything that has to
+ * `:core:api` deliberately knows nothing about servers, so [TokenStore] names no account.
+ * Its `tokens`, `save` and `clear` mean "the active account", and the slot that `read`
+ * returns is the server id, which the client hands back without reading. Everything that has to
  * reach a *particular* account — sign-in, which stores tokens before that account is
  * active, and the accounts screen, which asks whether each stored account can still reach
  * its server — needs this instead.
@@ -108,7 +110,7 @@ interface AccountTokenStore : TokenStore {
      * Bumped after every write and every removal.
      *
      * The count means nothing. It is there so that a screen can notice a sign-in that ended
-     * while the app was running: a rejected refresh calls `clear()` from deep inside the
+     * while the app was running: a rejected refresh calls `discard` from deep inside the
      * HTTP client, and before this nothing watched for it. See
      * `AuthRepository.observeLapsedAccount`.
      */
@@ -118,12 +120,16 @@ interface AccountTokenStore : TokenStore {
 /**
  * [AccountTokenStore] in memory, for tests and for screens photographed without a device.
  *
- * It keeps the same shape as the real one — `save` and `clear` act on whichever account
- * the caller last named — but it holds nothing at rest and encrypts nothing.
+ * It keeps the same shape as the real one — `save` and `clear` act on [activeServerId],
+ * and `replace` and `discard` act on the slot that `read` named — but it holds nothing at
+ * rest and encrypts nothing. [activeServerId] can change, so a test can switch accounts
+ * while a refresh is in flight.
  */
-class InMemoryAccountTokens(private val activeServerId: String? = null) : AccountTokenStore {
+class InMemoryAccountTokens(@Volatile var activeServerId: String? = null) : AccountTokenStore {
 
     private val slots = mutableMapOf<String, AuthTokens>()
+
+    private val lock = Any()
 
     private val _revision = MutableStateFlow(0)
     override val revision: StateFlow<Int> = _revision.asStateFlow()
@@ -148,6 +154,33 @@ class InMemoryAccountTokens(private val activeServerId: String? = null) : Accoun
     override suspend fun clearFor(serverId: String) {
         slots.remove(serverId)
         _revision.update { it + 1 }
+    }
+
+    override suspend fun read(): StoredTokens? {
+        val serverId = activeServerId ?: return null
+        return slots[serverId]?.let { StoredTokens(it, slot = serverId) }
+    }
+
+    override suspend fun replace(previous: StoredTokens, tokens: AuthTokens): Boolean {
+        val serverId = previous.slot ?: return false
+        val written = synchronized(lock) {
+            if (slots[serverId] != previous.tokens) return false
+            slots[serverId] = tokens
+            true
+        }
+        if (written) _revision.update { it + 1 }
+        return written
+    }
+
+    override suspend fun discard(previous: StoredTokens): Boolean {
+        val serverId = previous.slot ?: return false
+        val removed = synchronized(lock) {
+            if (slots[serverId] != previous.tokens) return false
+            slots.remove(serverId)
+            true
+        }
+        if (removed) _revision.update { it + 1 }
+        return removed
     }
 }
 
@@ -191,18 +224,10 @@ class EncryptedTokenStore @Inject constructor(
     /**
      * Writes the active account's tokens.
      *
-     * **A refresh that lands during an account switch writes to the wrong account.** The
-     * active account is resolved here, at write time, and a token refresh is a read
-     * followed by a write. If the switch happens between the two, account A's tokens go
-     * into account B's slot. The cost is bounded: B asks for a password again, A keeps
-     * working, and nothing crosses between them in Room, where every row is keyed by
-     * server id. Nothing is lost and nothing leaks.
-     *
-     * It is not fixed here because the fix is not here. The request would have to carry
-     * the account it belongs to, which is a `:core:api` change — [TokenStore] has no
-     * account in its contract, by design, because `:core:api` knows nothing about servers.
-     * Sign-in uses [saveFor] and never this, so the only writer that can race is the
-     * refresh, and only in the instant a person taps a different account.
+     * The active account is resolved here, at write time. That is why nothing that reads
+     * first and writes later may use this: an account switch between the read and the
+     * write would put account A's tokens into account B's slot. The token refresh is such
+     * a writer, and it uses [read] and [replace]. Sign-in uses [saveFor].
      */
     override suspend fun save(tokens: AuthTokens) {
         val serverId = serverDao.active()?.serverId ?: return
@@ -217,12 +242,51 @@ class EncryptedTokenStore @Inject constructor(
      * its tokens the active account is still the previous one.
      */
     override suspend fun saveFor(serverId: String, tokens: AuthTokens) = mutex.withLock {
-        prefs.write {
-            putString(serverId.key(KEY_ACCESS), tokens.accessToken)
-            putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
-            putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
-        }
+        writeWhileLocked(serverId, tokens)
         _revision.update { it + 1 }
+    }
+
+    /**
+     * The active account's tokens, with its server id as the slot.
+     *
+     * The token refresh reads through this, so that its write goes back to the account it
+     * read from. See [replace].
+     */
+    override suspend fun read(): StoredTokens? {
+        val serverId = serverDao.active()?.serverId ?: return null
+        return tokensFor(serverId)?.let { StoredTokens(it, slot = serverId) }
+    }
+
+    /**
+     * Writes refreshed tokens into the account that [previous] came from, whichever account
+     * is active now.
+     *
+     * The write happens only while that account still holds [previous]. An account that
+     * signed out while the refresh was in flight has an empty slot, and a write would sign
+     * it back in. An account that signed in again holds newer tokens than these. The
+     * comparison and the write share one lock, so no sign-in or sign-out can fall between
+     * them.
+     */
+    override suspend fun replace(previous: StoredTokens, tokens: AuthTokens): Boolean {
+        val serverId = previous.slot ?: return false
+        val written = mutex.withLock {
+            if (readWhileLocked(serverId) != previous.tokens) return@withLock false
+            writeWhileLocked(serverId, tokens)
+        }
+        if (written) _revision.update { it + 1 }
+        return written
+    }
+
+    /** Ends the sign-in that [previous] came from, if that account still holds it. */
+    override suspend fun discard(previous: StoredTokens): Boolean {
+        val serverId = previous.slot ?: return false
+        val removed = mutex.withLock {
+            if (readWhileLocked(serverId) != previous.tokens) return@withLock false
+            removeWhileLocked(serverId)
+            true
+        }
+        if (removed) _revision.update { it + 1 }
+        return removed
     }
 
     override suspend fun clear() {
@@ -248,12 +312,24 @@ class EncryptedTokenStore @Inject constructor(
      * the device owner's real session with it.
      */
     override suspend fun clearFor(serverId: String) = mutex.withLock {
+        removeWhileLocked(serverId)
+        _revision.update { it + 1 }
+    }
+
+    /** False when the write did not land. See [SecurePrefs.write]. */
+    private fun writeWhileLocked(serverId: String, tokens: AuthTokens): Boolean =
+        prefs.write {
+            putString(serverId.key(KEY_ACCESS), tokens.accessToken)
+            putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
+            putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
+        }
+
+    private fun removeWhileLocked(serverId: String) {
         prefs.write {
             remove(serverId.key(KEY_ACCESS))
             remove(serverId.key(KEY_REFRESH))
             remove(serverId.key(KEY_EXPIRES))
         }
-        _revision.update { it + 1 }
     }
 
     private fun readWhileLocked(serverId: String): AuthTokens? =
@@ -286,13 +362,7 @@ class EncryptedTokenStore @Inject constructor(
                 accessTokenExpiresAtMs = store.getLong(KEY_EXPIRES, 0L),
             )
         },
-        write = { tokens ->
-            prefs.write {
-                putString(serverId.key(KEY_ACCESS), tokens.accessToken)
-                putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
-                putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
-            }
-        },
+        write = { tokens -> writeWhileLocked(serverId, tokens) },
         removeLegacy = {
             prefs.write {
                 remove(KEY_ACCESS)

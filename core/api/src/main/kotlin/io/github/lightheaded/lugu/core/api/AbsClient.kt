@@ -266,9 +266,13 @@ class AbsClient(
      * Exchanges the refresh token for a new pair. The server reads the refresh token
      * from `x-refresh-token` when present, which also makes it return the rotated
      * refresh token in the body rather than as a cookie.
+     *
+     * Every write goes back to the slot that [current] was read from, never to "the active
+     * account". Somebody can switch accounts while the request is in flight, and the new
+     * tokens belong to the account that sent the old ones. See [TokenStore.replace].
      */
-    private suspend fun refreshLocked(current: AuthTokens): AuthTokens {
-        val refresh = current.refreshToken ?: throw AuthExpiredException("No refresh token stored")
+    private suspend fun refreshLocked(current: StoredTokens): AuthTokens {
+        val refresh = current.tokens.refreshToken ?: throw AuthExpiredException("No refresh token stored")
         val base = requireBaseUrl()
         val response = http.request("$base/auth/refresh") {
             method = HttpMethod.Post
@@ -276,12 +280,12 @@ class AbsClient(
             header("x-refresh-token", refresh)
         }
         if (!response.status.isSuccess()) {
-            tokenStore.clear()
+            tokenStore.discard(current)
             throw AuthExpiredException("Refresh rejected (${response.status.value})")
         }
         val user = response.body<RefreshResponse>().user
         val access = user?.accessToken ?: run {
-            tokenStore.clear()
+            tokenStore.discard(current)
             throw AuthExpiredException("Refresh response had no access token")
         }
         val tokens = AuthTokens(
@@ -290,25 +294,30 @@ class AbsClient(
             refreshToken = user.refreshToken ?: refresh,
             accessTokenExpiresAtMs = Jwt.expiresAtMs(access) ?: (nowMs() + DEFAULT_ACCESS_TTL_MS),
         )
-        tokenStore.save(tokens)
+        // False means the slot changed while the request was in flight: the account signed
+        // out, or signed in again with newer tokens. Either way these tokens must not land,
+        // and a sign-out must not be undone by a refresh that started before it.
+        if (!tokenStore.replace(current, tokens)) {
+            throw AuthExpiredException("The sign-in changed during the refresh")
+        }
         return tokens
     }
 
     /** Current access token, refreshed first if it is close to expiry. */
     suspend fun validAccessToken(): String {
-        val current = tokenStore.tokens() ?: throw AuthExpiredException("Not signed in")
-        if (!current.needsRefresh(nowMs())) return current.accessToken
+        val current = tokenStore.read() ?: throw AuthExpiredException("Not signed in")
+        if (!current.tokens.needsRefresh(nowMs())) return current.tokens.accessToken
 
         return refreshMutex.withLock {
             // Re-read inside the lock: a request that queued behind the refresh must
             // use the new token rather than trigger a second refresh.
-            val latest = tokenStore.tokens() ?: throw AuthExpiredException("Not signed in")
-            if (!latest.needsRefresh(nowMs())) latest.accessToken else refreshLocked(latest).accessToken
+            val latest = tokenStore.read() ?: throw AuthExpiredException("Not signed in")
+            if (!latest.tokens.needsRefresh(nowMs())) latest.tokens.accessToken else refreshLocked(latest).accessToken
         }
     }
 
     private suspend fun forceRefresh(): String = refreshMutex.withLock {
-        val latest = tokenStore.tokens() ?: throw AuthExpiredException("Not signed in")
+        val latest = tokenStore.read() ?: throw AuthExpiredException("Not signed in")
         refreshLocked(latest).accessToken
     }
 
