@@ -4,20 +4,26 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.model.Bookmark
+import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.BookmarkRepository
+import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.playback.NowPlaying
 import io.github.lightheaded.lugu.playback.PlaybackConnection
+import io.github.lightheaded.lugu.playback.StartingItem
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -41,6 +47,7 @@ class PlayerViewModel @Inject constructor(
     private val connection: PlaybackConnection,
     private val authRepository: AuthRepository,
     private val bookmarkRepository: BookmarkRepository,
+    private val libraryRepository: LibraryRepository,
     private val transcodingDismissals: TranscodingNoticeDismissals,
 ) : ViewModel() {
 
@@ -52,6 +59,9 @@ class PlayerViewModel @Inject constructor(
     val sleepTimer = connection.sleepTimer
     val positionHistory = connection.observePositionHistory()
     val settings = connection.settings
+
+    /** The item a play request is starting, until it has loaded or failed. */
+    val starting = connection.starting
 
     /**
      * Whether the listener has put away the transcoding note for the loaded item.
@@ -92,6 +102,49 @@ class PlayerViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Title, cover and length of the item that [starting] names, from Room.
+     *
+     * Null while nothing is starting, or while the request is for the item already loaded:
+     * then the loaded item is what the screen shows. See [playerHeader] for the choice.
+     */
+    val startingDetails: StateFlow<StartingDetails?> =
+        combine(account, starting, nowPlaying) { active, request, now ->
+            active to request?.takeIf { startsSomethingElse(now, it) }
+        }
+            .distinctUntilChanged()
+            .flatMapLatest { (active, request) ->
+                when {
+                    request == null -> flowOf(null)
+                    active == null -> flowOf(StartingDetails(request.libraryItemId, request.episodeId, null, null, 0.0))
+                    else -> observeStartingDetails(active, request)
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private fun observeStartingDetails(active: ActiveAccount, request: StartingItem): Flow<StartingDetails> {
+        val itemId = request.libraryItemId
+        val episodeId = request.episodeId
+        val episode: Flow<PodcastEpisode?> = if (episodeId == null) {
+            flowOf(null)
+        } else {
+            libraryRepository.observeEpisodes(active, itemId).map { list -> list.firstOrNull { it.id == episodeId } }
+        }
+        // The same width the connection asks for, so the cover is the one Coil already
+        // holds once the item has loaded, and the image does not flicker at that moment.
+        val cover = flow { emit(runCatching { libraryRepository.coverUrl(itemId, 600) }.getOrNull()) }
+            .flowOn(Dispatchers.IO)
+        return combine(libraryRepository.observeItem(active, itemId), episode, cover) { item, row, coverUrl ->
+            StartingDetails(
+                libraryItemId = itemId,
+                episodeId = episodeId,
+                title = row?.title ?: item?.title,
+                coverUrl = coverUrl,
+                durationSec = row?.durationSec ?: item?.durationSec ?: 0.0,
+            )
+        }
+    }
 
     init {
         /*

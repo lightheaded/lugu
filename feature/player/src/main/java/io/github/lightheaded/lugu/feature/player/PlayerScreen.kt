@@ -56,6 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -91,7 +93,6 @@ import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
-import io.github.lightheaded.lugu.playback.NowPlaying
 import io.github.lightheaded.lugu.playback.PlayerUiState
 import io.github.lightheaded.lugu.playback.PositionJump
 
@@ -106,6 +107,10 @@ fun PlayerScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
+    val starting by viewModel.starting.collectAsStateWithLifecycle()
+    val startingDetails by viewModel.startingDetails.collectAsStateWithLifecycle()
+    // The item that was asked for, not the one the player still holds while it loads.
+    val header = playerHeader(nowPlaying, starting, startingDetails)
     val rewindNotice by viewModel.rewindNotice.collectAsStateWithLifecycle()
     val continuation by viewModel.continuation.collectAsStateWithLifecycle()
     val sleep by viewModel.sleepTimer.collectAsStateWithLifecycle()
@@ -292,7 +297,7 @@ fun PlayerScreen(
             if (isLandscape) {
                 LandscapePlayerContent(
                     padding = padding,
-                    nowPlaying = nowPlaying,
+                    header = header,
                     state = state,
                     settings = settings,
                     sleep = sleep,
@@ -316,7 +321,7 @@ fun PlayerScreen(
             } else {
                 PortraitPlayerContent(
                     padding = padding,
-                    nowPlaying = nowPlaying,
+                    header = header,
                     state = state,
                     settings = settings,
                     sleep = sleep,
@@ -342,7 +347,9 @@ fun PlayerScreen(
             StatusStrip(
                 status = playerStatus(
                     error = state.error,
-                    transcoded = nowPlaying?.isTranscoded == true,
+                    // The note is about the stream the player holds, so it waits until the
+                    // requested item has replaced it.
+                    transcoded = !header.isStarting && nowPlaying?.isTranscoded == true,
                     noticeGone = transcodingNoticeGone,
                 ),
                 onDismiss = {
@@ -368,7 +375,7 @@ fun PlayerScreen(
 @Composable
 private fun PortraitPlayerContent(
     padding: PaddingValues,
-    nowPlaying: NowPlaying?,
+    header: PlayerHeader,
     state: PlayerUiState,
     settings: PlayerSettings,
     sleep: SleepTimerState,
@@ -395,20 +402,20 @@ private fun PortraitPlayerContent(
     ) {
         Spacer(Modifier.height(16.dp))
         CoverArt(
-            coverUrl = nowPlaying?.coverUrl,
-            title = nowPlaying?.title,
-            enabled = nowPlaying != null,
-            onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
+            coverUrl = header.coverUrl,
+            title = header.title,
+            enabled = header.titleLink != null,
+            onOpen = { header.titleLink?.let(onOpenLink) },
             modifier = Modifier.fillMaxWidth(0.8f).aspectRatio(1f),
         )
 
         Spacer(Modifier.height(24.dp))
         TitleAndAuthor(
-            title = nowPlaying?.title ?: "Nothing playing",
-            author = nowPlaying?.author,
-            enabled = nowPlaying != null,
-            onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
-            onOpenAuthor = nowPlaying?.authorLink?.let { link -> { onOpenLink(link) } },
+            title = header.title,
+            author = header.credit,
+            enabled = header.titleLink != null,
+            onOpen = { header.titleLink?.let(onOpenLink) },
+            onOpenAuthor = header.authorLink?.let { link -> { onOpenLink(link) } },
         )
 
         state.chapter?.let { chapter ->
@@ -427,16 +434,18 @@ private fun PortraitPlayerContent(
                 chapterPositionSec = state.chapterPositionSec,
                 chapterDurationSec = state.chapterDurationSec,
                 onOpen = onOpenChapters,
+                hidden = header.isStarting,
             )
         }
 
         Spacer(Modifier.height(24.dp))
         SeekBar(
             scrubbing = scrubbing,
-            positionSec = state.positionSec,
-            durationSec = state.durationSec,
+            positionSec = if (header.isStarting) 0.0 else state.positionSec,
+            durationSec = if (header.isStarting) header.startingDurationSec else state.durationSec,
             onScrub = onScrub,
             onScrubFinished = onScrubFinished,
+            enabled = !header.isStarting,
         )
 
         Spacer(Modifier.height(24.dp))
@@ -497,7 +506,7 @@ private fun PortraitPlayerContent(
 @Composable
 private fun LandscapePlayerContent(
     padding: PaddingValues,
-    nowPlaying: NowPlaying?,
+    header: PlayerHeader,
     state: PlayerUiState,
     settings: PlayerSettings,
     sleep: SleepTimerState,
@@ -528,10 +537,10 @@ private fun LandscapePlayerContent(
             verticalArrangement = Arrangement.Center,
         ) {
             CoverArt(
-                coverUrl = nowPlaying?.coverUrl,
-                title = nowPlaying?.title,
-                enabled = nowPlaying != null,
-                onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
+                coverUrl = header.coverUrl,
+                title = header.title,
+                enabled = header.titleLink != null,
+                onOpen = { header.titleLink?.let(onOpenLink) },
                 // Bounded by the row's height rather than by width, because width is the
                 // scarce dimension in landscape and height is what a phone on its side
                 // still has plenty of.
@@ -539,11 +548,11 @@ private fun LandscapePlayerContent(
             )
             Spacer(Modifier.height(8.dp))
             TitleAndAuthor(
-                title = nowPlaying?.title ?: "Nothing playing",
-                author = nowPlaying?.author,
-                enabled = nowPlaying != null,
-                onOpen = { nowPlaying?.titleLink?.let(onOpenLink) },
-                onOpenAuthor = nowPlaying?.authorLink?.let { link -> { onOpenLink(link) } },
+                title = header.title,
+                author = header.credit,
+                enabled = header.titleLink != null,
+                onOpen = { header.titleLink?.let(onOpenLink) },
+                onOpenAuthor = header.authorLink?.let { link -> { onOpenLink(link) } },
             )
         }
 
@@ -563,16 +572,18 @@ private fun LandscapePlayerContent(
                     chapterPositionSec = state.chapterPositionSec,
                     chapterDurationSec = state.chapterDurationSec,
                     onOpen = onOpenChapters,
+                    hidden = header.isStarting,
                 )
                 Spacer(Modifier.height(4.dp))
             }
 
             SeekBar(
                 scrubbing = scrubbing,
-                positionSec = state.positionSec,
-                durationSec = state.durationSec,
+                positionSec = if (header.isStarting) 0.0 else state.positionSec,
+                durationSec = if (header.isStarting) header.startingDurationSec else state.durationSec,
                 onScrub = onScrub,
                 onScrubFinished = onScrubFinished,
+                enabled = !header.isStarting,
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -675,12 +686,16 @@ private fun ChapterReadout(
     chapterPositionSec: Double,
     chapterDurationSec: Double,
     onOpen: () -> Unit,
+    hidden: Boolean = false,
 ) {
+    // Hidden, not removed, while another item starts: the chapter is the old item's, but
+    // the space it takes stays, so the seek bar and the transport do not move.
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+            .then(if (hidden) Modifier.alpha(0f).clearAndSetSemantics {} else Modifier)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = hasChapterList, onClick = onOpen)
+            .clickable(enabled = hasChapterList && !hidden, onClick = onOpen)
             .padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
         Text(
@@ -711,11 +726,14 @@ private fun SeekBar(
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
     modifier: Modifier = Modifier,
+    // Off while an item is starting: a drag then would seek the item the listener left.
+    enabled: Boolean = true,
 ) {
     Slider(
         value = scrubbing ?: positionSec.toFloat(),
         onValueChange = onScrub,
         onValueChangeFinished = onScrubFinished,
+        enabled = enabled,
         valueRange = 0f..(durationSec.toFloat().coerceAtLeast(1f)),
         modifier = modifier.semantics {
             contentDescription = "Playback position"
@@ -893,22 +911,32 @@ fun MiniPlayer(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
+    val starting by viewModel.starting.collectAsStateWithLifecycle()
+    val startingDetails by viewModel.startingDetails.collectAsStateWithLifecycle()
 
     // Nothing playing and no floor to draw: emit no node at all, so a Scaffold measures no
     // bottom bar here and gives its content the system bar inset instead.
     val current = nowPlaying
-    if (current == null && floor == null) return
+    val isStarting = startsSomethingElse(current, starting)
+    if (current == null && !isStarting && floor == null) return
 
     Column(modifier) {
-        if (current != null) {
+        if (current != null || isStarting) {
+            // The same slots as a loaded item: the title of the requested item, and
+            // "Starting…" where the chapter or the author goes. See [playerHeader].
+            val header = playerHeader(current, starting, startingDetails)
             MiniPlayerBar(
-                title = current.title,
-                subtitle = state.chapter?.title ?: current.author.orEmpty(),
-                coverUrl = current.coverUrl,
-                progress = if (state.durationSec > 0) {
-                    (state.positionSec / state.durationSec).toFloat()
+                title = header.title,
+                subtitle = if (header.isStarting) {
+                    STARTING_LABEL
                 } else {
-                    0f
+                    state.chapter?.title ?: current?.author.orEmpty()
+                },
+                coverUrl = header.coverUrl,
+                progress = when {
+                    header.isStarting -> 0f
+                    state.durationSec > 0 -> (state.positionSec / state.durationSec).toFloat()
+                    else -> 0f
                 },
                 isPlaying = state.isPlaying,
                 onOpen = onOpen,
