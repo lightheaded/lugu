@@ -19,6 +19,29 @@ internal sealed interface ResumptionOutcome {
 }
 
 /**
+ * One line for each outcome, for logcat and the diary.
+ *
+ * A media button that played nothing has two causes that look the same from outside: the
+ * resumption never ran, or it ran and declined. This line is what tells them apart. It
+ * names no item and no account, only what was decided and what reached the player.
+ */
+internal fun ResumptionOutcome.describe(): String = when (this) {
+    is ResumptionOutcome.Resume ->
+        "resumed the last item: ${resumption.mediaItems.size} tracks, " +
+            "track ${resumption.startTrackIndex} at ${resumption.startPositionMs} ms"
+    ResumptionOutcome.NothingToResume ->
+        "nothing to resume: no account, no progress, or the last item did not resolve"
+    ResumptionOutcome.Superseded ->
+        "declined: a play request or a pause came from the app, and it wins"
+    ResumptionOutcome.AlreadyLoaded ->
+        "declined: the player got an item from somewhere else, and it stays"
+}
+
+/** The line for a resolution that threw. The class only: a message can hold a server address. */
+internal fun describeResumptionFailure(cause: Throwable): String =
+    "failed: resolving the last item threw ${cause.javaClass.simpleName}"
+
+/**
  * Decides whether a playback resumption may load the last item played.
  *
  * Media3 asks for a resumption when a play command reaches a player that holds nothing: a

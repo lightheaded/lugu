@@ -14,6 +14,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationChannelCompat
@@ -75,6 +76,7 @@ import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -2659,7 +2661,16 @@ class LuguPlaybackService : MediaLibraryService() {
                 playerHoldsItem = { player.currentMediaItem != null },
                 resolveLastPlayed = { resumptionResolver.resolveLastPlayed() },
             )
-            when (val outcome = gate.decide()) {
+            val outcome = try {
+                gate.decide()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                reportResumption(controller, describeResumptionFailure(failure))
+                throw failure
+            }
+            reportResumption(controller, outcome.describe())
+            when (outcome) {
                 is ResumptionOutcome.Resume -> {
                     val resolved = outcome.resumption
                     stateHolder.set(resolved.nowPlaying)
@@ -2678,6 +2689,20 @@ class LuguPlaybackService : MediaLibraryService() {
                     throw ResumptionDeclined(outcome)
             }
         }
+    }
+
+    /**
+     * One line for each outcome of a playback resumption, in logcat and in the diary.
+     *
+     * Logcat as well as the diary, because logcat is what an instrumented run in CI keeps
+     * for each test, and the diary is a file on a device that has gone by the time anybody
+     * reads the report. The controller's package says which surface asked: the system UI,
+     * a car, a headset through the media button receiver, or lugu itself.
+     */
+    private fun reportResumption(controller: MediaSession.ControllerInfo, line: String) {
+        val detail = "$line (asked by ${controller.packageName})"
+        Log.i(LOG_TAG, "playback resumption $detail")
+        diary.record(RESUMPTION, detail)
     }
 
     /**
@@ -2863,6 +2888,16 @@ class LuguPlaybackService : MediaLibraryService() {
          * record that a book in the shade was put there by the app rather than by a press.
          */
         const val ARMED = "armed the last thing played"
+
+        /**
+         * A play command reached an empty player, and Media3 asked for the last item. Every
+         * outcome is written, because "the headset button played nothing" is otherwise
+         * the same silence whether the resumption ran or not.
+         */
+        const val RESUMPTION = "playback resumption"
+
+        /** The logcat tag for the service's own lines. */
+        const val LOG_TAG = "LuguPlayback"
 
         /**
          * A stretch the listener's trim settings asked to be jumped over.

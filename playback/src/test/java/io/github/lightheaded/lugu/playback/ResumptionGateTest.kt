@@ -162,6 +162,45 @@ class ResumptionGateTest {
         assertThat(loaded).isEmpty()
     }
 
+    /**
+     * A media button that played nothing, in CI, left no evidence of whether the resumption
+     * ran. Each outcome now has its own line, and the lines must stay told apart.
+     */
+    @Test
+    fun `each outcome has its own log line`() {
+        val lines = listOf(
+            ResumptionOutcome.Resume(resumed("item-last")),
+            ResumptionOutcome.NothingToResume,
+            ResumptionOutcome.Superseded,
+            ResumptionOutcome.AlreadyLoaded,
+        ).map { it.describe() } + describeResumptionFailure(IllegalStateException("x"))
+
+        assertThat(lines.toSet()).hasSize(lines.size)
+    }
+
+    @Test
+    fun `the log line names what reached the player and no item`() {
+        val line = Resumption(
+            mediaItems = emptyList(),
+            startTrackIndex = 2,
+            startPositionMs = 45_000L,
+            nowPlaying = nowPlaying("item-secret"),
+        ).let { ResumptionOutcome.Resume(it).describe() }
+
+        assertThat(line).contains("track 2 at 45000 ms")
+        assertThat(line).doesNotContain("item-secret")
+        assertThat(line).doesNotContain("Invented title")
+    }
+
+    /** An exception message can carry a server address, and the log line must not. */
+    @Test
+    fun `a failure is logged by its class, never its message`() {
+        val line = describeResumptionFailure(java.io.IOException("Unable to resolve host example.invalid"))
+
+        assertThat(line).contains("IOException")
+        assertThat(line).doesNotContain("example.invalid")
+    }
+
     private fun nowPlaying(itemId: String) = NowPlaying(
         libraryItemId = itemId,
         episodeId = null,
