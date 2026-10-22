@@ -121,11 +121,9 @@ fun PlayerScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    // The transcoding notice is true for as long as the stream is, so it does not take
-    // itself away — but a fact that has been read once does not need to keep the top of
-    // the screen. Keyed on the item, because the next book is a different fact and the
-    // person who put this one away has not been asked about it.
-    var transcodingNoticeGone by remember(nowPlaying?.libraryItemId) { mutableStateOf(false) }
+    // The transcoding notice does not take itself away. Its dismissal lives outside this
+    // screen (see TranscodingNoticeDismissals), so it stays put away on the next visit.
+    val transcodingNoticeGone by viewModel.transcodingNoticeGone.collectAsStateWithLifecycle()
 
     /*
      * The rewind notice is an overlay and never inline content, so announcing a
@@ -351,7 +349,7 @@ fun PlayerScreen(
                     if (state.error != null) {
                         viewModel.dismissError()
                     } else {
-                        transcodingNoticeGone = true
+                        viewModel.dismissTranscodingNotice()
                     }
                 },
                 modifier = Modifier

@@ -7,6 +7,7 @@ import io.github.lightheaded.lugu.core.model.Bookmark
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.BookmarkRepository
+import io.github.lightheaded.lugu.playback.NowPlaying
 import io.github.lightheaded.lugu.playback.PlaybackConnection
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,7 @@ class PlayerViewModel @Inject constructor(
     private val connection: PlaybackConnection,
     private val authRepository: AuthRepository,
     private val bookmarkRepository: BookmarkRepository,
+    private val transcodingDismissals: TranscodingNoticeDismissals,
 ) : ViewModel() {
 
     val state = connection.state
@@ -50,6 +52,20 @@ class PlayerViewModel @Inject constructor(
     val sleepTimer = connection.sleepTimer
     val positionHistory = connection.observePositionHistory()
     val settings = connection.settings
+
+    /**
+     * Whether the listener has put away the transcoding note for the loaded item.
+     *
+     * Read from [TranscodingNoticeDismissals] and not held here, because this view model
+     * ends with each visit to the player, and the note must not come back on the next one.
+     */
+    val transcodingNoticeGone: StateFlow<Boolean> =
+        combine(nowPlaying, transcodingDismissals.keys) { now, keys -> transcodingNoticeGone(now, keys) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                transcodingNoticeGone(nowPlaying.value, transcodingDismissals.keys.value),
+            )
 
     private val account: StateFlow<ActiveAccount?> =
         authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -157,6 +173,11 @@ class PlayerViewModel @Inject constructor(
 
     fun dismissError() = connection.dismissError()
 
+    fun dismissTranscodingNotice() {
+        val now = nowPlaying.value ?: return
+        transcodingDismissals.dismiss(now.libraryItemId, now.episodeId)
+    }
+
     private fun withBookmarkableItem(block: suspend (ActiveAccount, String) -> Unit) {
         viewModelScope.launch {
             val now = nowPlaying.value ?: return@launch
@@ -166,3 +187,9 @@ class PlayerViewModel @Inject constructor(
         }
     }
 }
+
+/** Whether the transcoding note of [now] is one the listener has put away. */
+internal fun transcodingNoticeGone(
+    now: NowPlaying?,
+    dismissed: Set<TranscodingNoticeDismissals.Key>,
+): Boolean = now != null && TranscodingNoticeDismissals.Key(now.libraryItemId, now.episodeId) in dismissed
