@@ -41,6 +41,9 @@ class PlaybackStateHolder @Inject constructor() {
     /** The play request in flight, which the service's resumption must not overwrite. */
     internal val playRequests = PlayRequests()
 
+    /** Why the next seek happens, so the position history can say more than "seek". */
+    internal val seekReasons = SeekReasons()
+
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
 

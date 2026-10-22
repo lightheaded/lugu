@@ -642,14 +642,19 @@ class LuguPlaybackService : MediaLibraryService() {
     private fun seekChapter(forward: Boolean) {
         val context = stateHolder.nowPlaying.value ?: return
         val position = currentAbsoluteSec() ?: return
-        val target = if (forward) {
+        val chapterStart = if (forward) {
             Chapters.nextChapterStart(context.chapters, position)
-                ?: (position + currentSettings.skipForwardSec)
         } else {
             Chapters.previousChapterStart(context.chapters, position)
-                ?: (position - currentSettings.skipBackSec)
         }
-        seekToAbsolute(target)
+        when {
+            chapterStart != null -> seekToAbsolute(
+                chapterStart,
+                if (forward) SeekReasons.CHAPTER_NEXT else SeekReasons.CHAPTER_PREVIOUS,
+            )
+            forward -> seekRelative(currentSettings.skipForwardSec.toDouble())
+            else -> seekRelative(-currentSettings.skipBackSec.toDouble())
+        }
     }
 
     /**
@@ -661,9 +666,10 @@ class LuguPlaybackService : MediaLibraryService() {
      * zero on a forty-hour book is the fault all of this exists to prevent, and it must not
      * be reachable through a rounding case.
      */
-    private fun seekToAbsolute(absoluteSec: Double) {
+    private fun seekToAbsolute(absoluteSec: Double, reason: String) {
         val tracks = stateHolder.nowPlaying.value?.tracks.orEmpty()
         val safe = absoluteSec.coerceAtLeast(0.0)
+        stateHolder.seekReasons.expect(reason, safe)
         if (tracks.size <= 1) {
             player.seekTo((safe * 1000).toLong())
         } else {
@@ -675,7 +681,10 @@ class LuguPlaybackService : MediaLibraryService() {
     /** Moves by a signed number of seconds from wherever the book currently is. */
     private fun seekRelative(deltaSec: Double) {
         val position = currentAbsoluteSec() ?: return
-        seekToAbsolute(position + deltaSec)
+        seekToAbsolute(
+            position + deltaSec,
+            if (deltaSec < 0) SeekReasons.SKIP_BACK else SeekReasons.SKIP_FORWARD,
+        )
     }
 
     /**
@@ -1600,6 +1609,7 @@ class LuguPlaybackService : MediaLibraryService() {
      */
     private fun seekToAbsolute(context: NowPlaying, absoluteSec: Double) {
         val safe = absoluteSec.coerceAtLeast(0.0)
+        stateHolder.seekReasons.expect(SeekReasons.SKIPPED_REGION, safe)
         // An item that arrived without a track list would otherwise map every position to
         // track 0 offset 0, which is a seek to the beginning wearing a skip's clothes.
         if (context.tracks.isEmpty()) {
@@ -1892,6 +1902,7 @@ class LuguPlaybackService : MediaLibraryService() {
         val target = (absolute - rewindSec).coerceAtLeast(0.0)
 
         val position = AbsoluteTiming.toTrack(context.tracks, target)
+        stateHolder.seekReasons.expect(SeekReasons.REWIND_ON_RESUME, target)
         player.seekTo(position.trackIndex, position.positionMs)
         // Announce it: an automatic correction the listener cannot see is a bug to them.
         val notice = if (sleepRewindSec != null && sleepRewindSec >= smartRewindSec) {
@@ -1946,6 +1957,9 @@ class LuguPlaybackService : MediaLibraryService() {
 
             // Record before persisting, so the position we are leaving is recoverable
             // even if the seek came from a notification button we do not control.
+            //
+            // The reason is read here, at once, and not in the coroutine below: the next
+            // seek can write its own note before that coroutine runs.
             val context = stateHolder.nowPlaying.value
             if (context != null) {
                 val from = AbsoluteTiming.toAbsoluteSec(
@@ -1965,6 +1979,7 @@ class LuguPlaybackService : MediaLibraryService() {
                 // it is also what makes the Undo on a skip notice work rather than be
                 // undone again half a second later.
                 skipEnforcer.onSeek(skipPlan, to)
+                val why = stateHolder.seekReasons.reasonFor(to)
 
                 scope.launch {
                     val account = authRepository.account() ?: return@launch
@@ -1975,7 +1990,7 @@ class LuguPlaybackService : MediaLibraryService() {
                             episodeId = context.episodeId,
                             fromSec = from,
                             toSec = to,
-                            reason = "seek",
+                            reason = why,
                         )
                     }
                     if (kotlin.math.abs(to - from) >= UNDO_PROMPT_SEC) {

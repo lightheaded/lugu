@@ -63,6 +63,9 @@ class ChapterAwarePlayerTest {
         }
     }
 
+    /** The state holder of the newest [playerAt], to read the seek reason it noted. */
+    private lateinit var lastStateHolder: PlaybackStateHolder
+
     private fun playerAt(
         positionSec: Double,
         chapters: List<Chapter>,
@@ -73,6 +76,7 @@ class ChapterAwarePlayerTest {
         val inner = RecordingPlayer(durationSec = 40 * 3600.0, positionMs = (positionSec * 1000).toLong())
 
         val stateHolder = PlaybackStateHolder()
+        lastStateHolder = stateHolder
         stateHolder.set(
             NowPlaying(
                 libraryItemId = "li_1",
@@ -190,6 +194,39 @@ class ChapterAwarePlayerTest {
         val (forward, forwardInner) = playerAt(1000.0, syntheticChapters(), seekOnly)
         forward.seekForward()
         assertThat(forwardInner.seekedToMs).isEqualTo(1030_000L)
+    }
+
+    /**
+     * Every seek reached the position history as "seek", so a skip that ate a chapter could
+     * not be told from a drag of the scrubber. Each transport command now says what it was.
+     */
+    @Test
+    fun `each transport command notes why it seeks`() {
+        playerAt(3900.0, syntheticChapters(), seekOnly).first.seekToPrevious()
+        assertThat(lastStateHolder.seekReasons.reasonFor(3885.0)).isEqualTo(SeekReasons.SKIP_BACK)
+
+        playerAt(3900.0, syntheticChapters(), seekOnly).first.seekToNext()
+        assertThat(lastStateHolder.seekReasons.reasonFor(3930.0)).isEqualTo(SeekReasons.SKIP_FORWARD)
+
+        playerAt(3900.0, syntheticChapters(), withChapters).first.seekToNext()
+        assertThat(lastStateHolder.seekReasons.reasonFor(4200.0)).isEqualTo(SeekReasons.CHAPTER_NEXT)
+
+        playerAt(3900.0, syntheticChapters(), withChapters).first.seekToPrevious()
+        assertThat(lastStateHolder.seekReasons.reasonFor(3600.0)).isEqualTo(SeekReasons.CHAPTER_PREVIOUS)
+
+        playerAt(1000.0, syntheticChapters(), withChapters).first.seekBack()
+        assertThat(lastStateHolder.seekReasons.reasonFor(985.0)).isEqualTo(SeekReasons.SKIP_BACK)
+
+        playerAt(1000.0, syntheticChapters(), withChapters).first.seekForward()
+        assertThat(lastStateHolder.seekReasons.reasonFor(1030.0)).isEqualTo(SeekReasons.SKIP_FORWARD)
+    }
+
+    /** Chapter buttons were asked for, but the book has none: the press is a skip, and says so. */
+    @Test
+    fun `a chapter button on a book with no chapters notes a skip`() {
+        playerAt(1000.0, chapters = emptyList(), settings = withChapters).first.seekToPrevious()
+
+        assertThat(lastStateHolder.seekReasons.reasonFor(985.0)).isEqualTo(SeekReasons.SKIP_BACK)
     }
 
     @Test

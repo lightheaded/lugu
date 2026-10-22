@@ -464,7 +464,10 @@ class PlaybackConnection @Inject constructor(
 
     private suspend fun commitPendingSeek() {
         val target = pendingSeekMutex.withLock { pendingSeekTargetSec } ?: return
-        applySeek(target)
+        // The direction of the whole flurry of presses, from where the player still is:
+        // three backs and a forward is a skip back.
+        val reason = if (target < playerAbsoluteSec()) SeekReasons.SKIP_BACK else SeekReasons.SKIP_FORWARD
+        applySeek(target, reason)
         // Clear only after the seek is issued, so state keeps reporting the target
         // rather than briefly snapping back to where the player still is.
         pendingSeekMutex.withLock {
@@ -473,9 +476,25 @@ class PlaybackConnection @Inject constructor(
         pushState()
     }
 
-    private suspend fun applySeek(absoluteSec: Double) {
+    /** Where the player is now, whole-item seconds, before any pending seek is applied. */
+    private suspend fun playerAbsoluteSec(): Double {
+        val player = controller()
+        val tracks = stateHolder.nowPlaying.value?.tracks.orEmpty()
+        return AbsoluteTiming.toAbsoluteSec(
+            tracks,
+            player.currentMediaItemIndex,
+            player.currentPosition.coerceAtLeast(0),
+        )
+    }
+
+    /**
+     * Seeks, and first tells the service why — see [SeekReasons]. The note is written
+     * before the command, which reaches the service through the controller afterwards.
+     */
+    private suspend fun applySeek(absoluteSec: Double, reason: String) {
         val player = controller()
         val context = stateHolder.nowPlaying.value
+        stateHolder.seekReasons.expect(reason, absoluteSec)
         if (context == null || context.tracks.size <= 1) {
             player.seekTo((absoluteSec * 1000).toLong())
         } else {
@@ -485,10 +504,14 @@ class PlaybackConnection @Inject constructor(
     }
 
     fun seekTo(absoluteSec: Double) {
+        seekFor(absoluteSec, SeekReasons.SEEK)
+    }
+
+    private fun seekFor(absoluteSec: Double, reason: String) {
         scope.launch {
             seekJob?.cancel()
             pendingSeekMutex.withLock { pendingSeekTargetSec = null }
-            applySeek(absoluteSec)
+            applySeek(absoluteSec, reason)
             pushState()
         }
     }
@@ -498,14 +521,14 @@ class PlaybackConnection @Inject constructor(
         val chapters = stateHolder.nowPlaying.value?.chapters.orEmpty()
         val target = Chapters.previousChapterStart(chapters, _state.value.positionSec)
             ?: return seekBy(-SKIP_BACK_FALLBACK_SEC)
-        seekTo(target)
+        seekFor(target, SeekReasons.CHAPTER_PREVIOUS)
     }
 
     fun nextChapter() {
         val chapters = stateHolder.nowPlaying.value?.chapters.orEmpty()
         val target = Chapters.nextChapterStart(chapters, _state.value.positionSec)
             ?: return seekBy(SKIP_FORWARD_FALLBACK_SEC)
-        seekTo(target)
+        seekFor(target, SeekReasons.CHAPTER_NEXT)
     }
 
     fun hasChapters(): Boolean = (stateHolder.nowPlaying.value?.chapters?.size ?: 0) > 1
@@ -545,7 +568,7 @@ class PlaybackConnection @Inject constructor(
                     force = true,
                 )
             }
-            seekTo(toSec)
+            seekFor(toSec, SeekReasons.RESTORE)
             stateHolder.clearJump()
         }
     }
@@ -627,7 +650,7 @@ class PlaybackConnection @Inject constructor(
             val stillLoaded = loaded != null &&
                 loaded.libraryItemId == jump.libraryItemId &&
                 loaded.episodeId == jump.episodeId
-            if (stillLoaded) seekTo(jump.fromSec)
+            if (stillLoaded) seekFor(jump.fromSec, SeekReasons.RESTORE)
             stateHolder.clearJump()
         }
     }

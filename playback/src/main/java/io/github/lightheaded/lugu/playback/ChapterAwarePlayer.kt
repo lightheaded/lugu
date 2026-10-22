@@ -45,9 +45,10 @@ class ChapterAwarePlayer(
     private fun absolutePositionSec(): Double =
         AbsoluteTiming.toAbsoluteSec(tracks(), currentMediaItemIndex, currentPosition.coerceAtLeast(0))
 
-    private fun seekToAbsolute(targetSec: Double) {
+    private fun seekToAbsolute(targetSec: Double, reason: String) {
         val tracks = tracks()
         val safe = targetSec.coerceAtLeast(0.0)
+        stateHolder.seekReasons.expect(reason, safe)
         if (tracks.size <= 1) {
             super.seekTo((safe * 1000).toLong())
         } else {
@@ -76,22 +77,22 @@ class ChapterAwarePlayer(
      */
     private fun systemPrevious() {
         val position = absolutePositionSec()
-        val target = if (usesChapterTransport()) {
-            Chapters.previousChapterStart(chapters(), position) ?: (position - skipBackSec)
+        val chapterStart = if (usesChapterTransport()) Chapters.previousChapterStart(chapters(), position) else null
+        if (chapterStart != null) {
+            seekToAbsolute(chapterStart, SeekReasons.CHAPTER_PREVIOUS)
         } else {
-            position - skipBackSec
+            seekToAbsolute(position - skipBackSec, SeekReasons.SKIP_BACK)
         }
-        seekToAbsolute(target)
     }
 
     private fun systemNext() {
         val position = absolutePositionSec()
-        val target = if (usesChapterTransport()) {
-            Chapters.nextChapterStart(chapters(), position) ?: (position + skipForwardSec)
+        val chapterStart = if (usesChapterTransport()) Chapters.nextChapterStart(chapters(), position) else null
+        if (chapterStart != null) {
+            seekToAbsolute(chapterStart, SeekReasons.CHAPTER_NEXT)
         } else {
-            position + skipForwardSec
+            seekToAbsolute(position + skipForwardSec, SeekReasons.SKIP_FORWARD)
         }
-        seekToAbsolute(target)
     }
 
     private fun usesChapterTransport(): Boolean = settings().showsChapterButtonsInNotification
@@ -140,9 +141,9 @@ class ChapterAwarePlayer(
     }
 
     /** Seek back/forward honour the configured durations rather than Media3 defaults. */
-    override fun seekBack() = seekToAbsolute(absolutePositionSec() - skipBackSec)
+    override fun seekBack() = seekToAbsolute(absolutePositionSec() - skipBackSec, SeekReasons.SKIP_BACK)
 
-    override fun seekForward() = seekToAbsolute(absolutePositionSec() + skipForwardSec)
+    override fun seekForward() = seekToAbsolute(absolutePositionSec() + skipForwardSec, SeekReasons.SKIP_FORWARD)
 
     override fun getSeekBackIncrement(): Long = (skipBackSec * 1000).toLong()
 
