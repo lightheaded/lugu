@@ -5,23 +5,20 @@ work items. Each item gives the desired end state, the approach, the files it ow
 the risk to watch. The plan exists to make parallel work safe: the *ownership* section
 of each item is the contract that keeps two workers out of one file.
 
-**Status on 24 August 2026: four of the twelve are done.** Items 3, 8, 9 and 10 are
-implemented and on `main`. The other eight are open.
+**Status: all twelve items are built and on `main`.** Each item below names the commit
+that built it. Two items have one part open, and [docs/BACKLOG.md](BACKLOG.md) holds
+that part: item 2 (the glyph of a completed download) and item 6 (the undo in the
+notification). Each of those items says so.
 
-Two agent runs on 21 and 24 August stopped before either wrote code, so the four that
-landed were written directly. The eight that remain are open for the same reason they
-were listed: nothing about them changed.
-
-**What blocks the visible ones.** Items 5, 7 and 12 change what a screen looks like, so
-they invalidate committed Roborazzi baselines. A baseline must be recorded on a Linux
+**Visible items need a baseline record.** Items 5, 7 and 12 change what a screen looks
+like, so they invalidate committed Roborazzi baselines. A baseline must be recorded on a Linux
 host that matches the CI runner, and the machine this work ran on is an arm64 Mac, where
 even an emulated amd64 container is the wrong host. `.github/workflows/record-baselines.yml`
 now covers this: a manual, `workflow_dispatch`-only job that records on `ubuntu-latest`
 and hands the images back as a downloadable artifact — see
 docs/qa/screenshots.md#re-recording-after-an-intentional-change for the exact commands.
-So the code for a visible change can be finished here; only the recording step needs
-that dispatched run. Do those items, and record the baselines through the workflow (or
-a matching local Linux host) in the same pass.
+So the code for a visible change can be finished on any host. Only the recording step
+needs that dispatched run, or a matching local Linux host.
 
 Read [docs/FEEDBACK.md](FEEDBACK.md) before you start any item. It holds the design
 laws these fixes must obey, and it records ideas the project rejected with reasons.
@@ -78,6 +75,8 @@ Run the items in three waves. A wave starts after the previous wave merges.
 
 ## 1. Show the mini player on every screen
 
+**Done (65f7abf, and 0d2da5b made one mini player for every screen).**
+
 **Current.** `MainActivity.kt:246` composes the mini player as the Home screen's bottom
 content. Seven other screens show no playback state. The KDoc of the component promises
 that playback is always one tap away.
@@ -94,6 +93,10 @@ that mechanism, so no feature screen needs an edit.
 **Risk.** Content behind the bar. Verify the inset path before you change routes.
 
 ## 2. Make a deleted download undoable
+
+**Done (c7de6fc), except the glyph.** The delete is deferred and offers Undo, and the
+content description says "Delete download". The completed-download control still draws
+the "downloaded" tick. The open part is in docs/BACKLOG.md.
 
 **Current.** `ItemDetailScreen.kt:983-1003`. One tap on the tick beside Play deletes the
 download at once, with no undo. While a download runs, one tap cancels it, even at 95%.
@@ -131,6 +134,8 @@ Removing a selection offers the same undo. No selection mode was added, because
 
 ## 4. Give the player a landscape layout
 
+**Done (d18ced2).**
+
 **Current.** `PlayerScreen.kt:275-298` lays out one portrait column. In landscape the
 transport clips off the bottom of the screen.
 
@@ -143,6 +148,8 @@ orientation with the pattern the codebase already uses, or with `LocalConfigurat
 reachable in both orientations.
 
 ## 5. Draw one number on a skip button
+
+**Done (a5cee5a).**
 
 **Current.** `PlayerScreen.kt:679-691` uses `Icons.Replay10` and `Icons.Forward30`. The
 digits 10 and 30 are part of those glyphs, and the configured seconds are drawn as text
@@ -158,6 +165,10 @@ the real seconds.
 
 ## 6. Show the trim-skip undo everywhere
 
+**Done (0bbd875), except the notification.** The undo shows on the mini player and on
+every screen. A media notification has no place for it. The open part is in
+docs/BACKLOG.md.
+
 **Current.** `PlayerScreen.kt:147-166` with `SkipRegionEnforcer.kt:48-62`. A trim skip
 announces itself and offers undo only inside the full player. The README promises that
 every skip can be undone.
@@ -169,6 +180,8 @@ another screen, or the notification.
 Keep the undo window identical in every surface. Do this item after item 1.
 
 ## 7. Give the Library grid three empty states
+
+**Done (3a46f3f).** The search placeholder fix is c61f901.
 
 **Current.** `LibraryScreen.kt:173-217` renders blank space for an empty grid. A first
 sync, a search that matched nothing and a filter that excludes everything look the same.
@@ -244,6 +257,8 @@ revealed password must not come back revealed after the process is recreated.
 
 ## 11. Remove the dark flash at cold start
 
+**Done (65f7abf).**
+
 **Current.** `themes.xml:3` extends the platform dark theme with no DayNight variant, so
 a light-mode start flashes dark. `MainActivity.kt:207-211` then renders nothing during
 the auth check. The SplashScreen API is absent.
@@ -255,6 +270,8 @@ glyph, and hold it with `setKeepOnScreenCondition` until the auth check ends. Gi
 launch theme a DayNight window background.
 
 ## 12. Give a podcast page a primary play action
+
+**Done (49428d1).**
 
 **Current.** `ItemDetailScreen.kt:230-255` gates the hero play row on
 `mediaType == BOOK`. A podcast page offers no primary play action, so the listener must
