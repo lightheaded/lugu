@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
@@ -41,9 +42,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentDataType
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDataType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.liveRegion
@@ -67,6 +72,13 @@ import io.github.lightheaded.lugu.core.ui.reservedSpace
  * signed in offers them to nobody who needs them. The same goes for a client certificate:
  * the handshake fails before there is a password prompt to reach.
  */
+/**
+ * The autofill hint on the address field. Android has no standard hint for a server
+ * address, and a hint of its own still tells an autofill service that this is not the
+ * username.
+ */
+internal val SERVER_ADDRESS_CONTENT_TYPE = ContentType("serverAddress")
+
 @Composable
 fun LoginScreen(
     onSignedIn: () -> Unit,
@@ -116,9 +128,11 @@ fun LoginScreen(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> viewModel.onCertificatePicked(uri) }
 
-    LaunchedEffect(devServerUrl, devUsername) {
-        if (devServerUrl.isNotBlank()) viewModel.prefill(devServerUrl, devUsername, devPassword)
+    // After the remembered prefill, so the development values only fill what it left empty.
+    LaunchedEffect(state.ready, devServerUrl, devUsername) {
+        if (state.ready && devServerUrl.isNotBlank()) viewModel.prefill(devServerUrl, devUsername, devPassword)
     }
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(state.signedIn) {
         if (state.signedIn) onSignedIn()
     }
@@ -139,9 +153,11 @@ fun LoginScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // Why this screen appeared, when a lost key is the reason and not a sign-out. It
-        // sits above the first field, because the question it answers — "why is it asking
-        // me again?" — comes before the answer a person types.
+        // Nothing below until the prefill is known. See [LoginUiState.ready].
+        if (!state.ready) return@Column
+        // Why this screen appeared, when a lost key or an ended session is the reason and
+        // not a sign-out. It sits above the first field, because the question it answers —
+        // "why is it asking me again?" — comes before the answer a person types.
         //
         // Added and removed rather than held in reserved space, and that is allowed here
         // where it is not allowed elsewhere. The value is read once when the screen is
@@ -179,10 +195,33 @@ fun LoginScreen(
                 autoCorrectEnabled = false,
                 imeAction = ImeAction.Next,
             ),
-            keyboardActions = KeyboardActions(onNext = { viewModel.checkServer() }),
+            // Moves on to the username as well. Overriding `onNext` drops the default move,
+            // and without it Next left the focus on the address.
+            keyboardActions = KeyboardActions(onNext = {
+                viewModel.checkServer()
+                focusManager.moveFocus(FocusDirection.Down)
+            }),
+            // Offered only while the address came from memory. An icon in the field rather
+            // than a button under it, so it can come and go without moving anything.
+            trailingIcon = if (state.remembered) {
+                {
+                    IconButton(onClick = viewModel::forgetServer) {
+                        Icon(Icons.Default.Close, contentDescription = "Forget this server")
+                    }
+                }
+            } else {
+                null
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .semantics { contentDescription = "Server address" },
+                .semantics {
+                    contentDescription = "Server address"
+                    // Kept out of autofill. With no type of its own, the first text field on
+                    // the screen reads as the username to a password manager, and 1Password
+                    // left the real username field empty (issue #12).
+                    contentType = SERVER_ADDRESS_CONTENT_TYPE
+                    contentDataType = ContentDataType.None
+                },
         )
 
         Spacer(Modifier.height(8.dp))

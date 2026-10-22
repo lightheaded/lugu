@@ -2,6 +2,8 @@ package io.github.lightheaded.lugu.feature.settings
 
 import android.content.Context
 import android.net.Uri
+import android.util.Base64
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,15 +14,40 @@ import io.github.lightheaded.lugu.core.api.ConnectionHeaders
 import io.github.lightheaded.lugu.core.api.ServerUrl
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
+import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.CredentialLossReport
+import io.github.lightheaded.lugu.core.sync.SignInMemory
 import io.github.lightheaded.lugu.core.sync.credentialLossMessage
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/**
+ * The sign-in screen's one argument: the account to sign in to again, when there is one.
+ *
+ * A server id reads `<address>#<user id>`, so it carries a colon, slashes and a hash. It
+ * travels as URL-safe base64 for the reason `Routes.browseGroup` gives in the app module.
+ */
+object LoginArgs {
+    const val ACCOUNT = "account"
+
+    fun encode(serverId: String): String = Base64.encodeToString(
+        serverId.toByteArray(Charsets.UTF_8),
+        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+    )
+
+    fun decode(argument: String?): String? = argument?.takeIf { it.isNotBlank() }?.let {
+        runCatching { String(Base64.decode(it, Base64.URL_SAFE), Charsets.UTF_8) }.getOrNull()
+    }
+}
+
+/** Said on the sign-in screen when it opened because a sign-in ended on its own. */
+const val SESSION_ENDED_NOTICE = "Your session ended — sign in again."
 
 data class LoginUiState(
     val serverUrl: String = "",
@@ -45,7 +72,18 @@ data class LoginUiState(
     val certificatePassword: String = "",
     val certificateProblem: String? = null,
     /**
-     * Why this screen appeared, when the reason is not an ordinary sign-out.
+     * False until the prefill is known. The screen draws no fields before that, so the
+     * address does not fill in, and a notice does not appear, a frame after the fields do.
+     */
+    val ready: Boolean = false,
+    /**
+     * The address and username came from the last sign-in rather than from typing, so the
+     * address field offers to forget them.
+     */
+    val remembered: Boolean = false,
+    /**
+     * Why this screen appeared, when the reason is not an ordinary sign-out: a lost key,
+     * or a sign-in that ended on its own while the account and its downloads stayed.
      *
      * Read once, when the screen is built, and never changed while it is on view. A
      * message that arrives later would move the fields under a thumb that already
@@ -94,17 +132,55 @@ class LoginViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val connectionPrefs: ConnectionPrefs,
     private val credentialLosses: CredentialLossReport,
+    private val signInMemory: SignInMemory,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = _state.asStateFlow()
 
     init {
+        _state.update { it.copy(certificate = connectionPrefs.certificate()) }
+        val requested = LoginArgs.decode(savedStateHandle.get<String>(LoginArgs.ACCOUNT))
+        // Off the main thread: it reads the database and a preference file. The state flow
+        // takes the update from any thread.
+        viewModelScope.launch(Dispatchers.IO) { loadPrefill(requested) }
+    }
+
+    /**
+     * Fills the address and the username before the fields are drawn.
+     *
+     * In order, the first that answers wins:
+     * 1. The account named in the route. The Accounts screen's "Sign in again" names one.
+     * 2. The active account, when its sign-in has ended. A rejected refresh leaves exactly
+     *    that, and so does a launch after the refresh token expired with the app closed.
+     * 3. The last sign-in that worked, which a sign-out does not forget.
+     *
+     * The first two keep the account row, its mirror and its downloads. Signing in again
+     * updates the row in place, so nothing has to be downloaded again.
+     */
+    private suspend fun loadPrefill(requested: String?) {
+        // Every read is guarded, and the screen is ready whatever they answer. The fields
+        // stay hidden until it is, so a throw here would leave a sign-in screen with nothing
+        // to sign in with — the one screen that must always work. Empty fields are the
+        // answer to a read that fails.
+        val lapsed: ActiveAccount? = runCatching {
+            requested?.let { authRepository.storedAccount(it) } ?: authRepository.lapsedAccount()
+        }.getOrNull()
+        val last = if (lapsed == null) runCatching { signInMemory.last() }.getOrNull() else null
+        val address = lapsed?.baseUrl ?: last?.baseUrl
+        val headers = address?.let { runCatching { connectionPrefs.headers(it) }.getOrNull() }
+        // A snapshot, not a subscription. See [LoginUiState.lossNotice].
+        val lossNotice = credentialLossMessage(credentialLosses.lost.value)
+            ?: SESSION_ENDED_NOTICE.takeIf { lapsed != null }
         _state.update {
             it.copy(
-                certificate = connectionPrefs.certificate(),
-                // A snapshot, not a subscription. See [LoginUiState.lossNotice].
-                lossNotice = credentialLossMessage(credentialLosses.lost.value),
+                serverUrl = address ?: it.serverUrl,
+                username = lapsed?.username ?: last?.username ?: it.username,
+                headers = headers ?: it.headers,
+                remembered = lapsed == null && last != null,
+                lossNotice = lossNotice,
+                ready = true,
             )
         }
     }
@@ -112,14 +188,30 @@ class LoginViewModel @Inject constructor(
     /**
      * Debug builds can prefill from a gitignored local.properties so signing in during
      * development is not a chore. Nothing here ever reaches a release build.
+     *
+     * Each field only when it is still empty. The remembered address and username come
+     * first, and the password is never remembered, so this is what fills it.
      */
     fun prefill(serverUrl: String, username: String, password: String) {
         _state.update {
-            if (it.serverUrl.isNotBlank()) {
-                it
-            } else {
-                it.copy(serverUrl = serverUrl, username = username, password = password)
-            }
+            it.copy(
+                serverUrl = it.serverUrl.ifBlank { serverUrl },
+                username = it.username.ifBlank { username },
+                password = it.password.ifBlank { password },
+            )
+        }
+    }
+
+    /**
+     * Forgets the remembered server and empties the fields it filled.
+     *
+     * The custom headers for that address stay. They are deleted on the connection screen,
+     * where deleting them is the decision rather than a side effect.
+     */
+    fun forgetServer() {
+        signInMemory.forget()
+        _state.update {
+            it.copy(serverUrl = "", username = "", headers = emptyList(), remembered = false, error = null)
         }
     }
 
@@ -133,7 +225,7 @@ class LoginViewModel @Inject constructor(
         val stored = ServerUrl.normalise(value)
             ?.takeIf { current.headers.isEmpty() }
             ?.let(connectionPrefs::headers)
-        current.copy(serverUrl = value, error = null, headers = stored ?: current.headers)
+        current.copy(serverUrl = value, error = null, headers = stored ?: current.headers, remembered = false)
     }
 
     fun onUsernameChange(value: String) = _state.update { it.copy(username = value, error = null) }
@@ -168,7 +260,8 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isBusy = true, error = null) }
             authRepository.login(current.serverUrl, current.username, current.password)
-                .onSuccess {
+                .onSuccess { account ->
+                    signInMemory.remember(account.baseUrl, account.username)
                     // Signing in is the moment the mirror should fill, and nothing else was
                     // going to do it: the only on-demand sync belongs to the Library tab,
                     // and this screen hands over to Home.
@@ -231,7 +324,8 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isBusy = true, error = null) }
             authRepository.completeOidcSignIn(uri)
-                .onSuccess {
+                .onSuccess { account ->
+                    signInMemory.remember(account.baseUrl, account.username)
                     SyncScheduler.syncNow(context)
                     credentialLosses.acknowledge()
                     _state.update { LoginUiState(signedIn = true) }

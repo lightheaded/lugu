@@ -129,6 +129,7 @@ class AccountsViewModel @Inject constructor(
 fun AccountsScreen(
     onBack: () -> Unit,
     onAddAccount: () -> Unit,
+    onSignInAgain: (serverId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: AccountsViewModel = hiltViewModel(),
 ) {
@@ -137,6 +138,7 @@ fun AccountsScreen(
         state = state,
         onBack = onBack,
         onAddAccount = onAddAccount,
+        onSignInAgain = onSignInAgain,
         onSwitchTo = viewModel::switchTo,
         onSignOutOf = viewModel::signOutOf,
         onDismissError = viewModel::dismissError,
@@ -150,6 +152,7 @@ fun AccountsContent(
     state: AccountsUiState,
     onBack: () -> Unit,
     onAddAccount: () -> Unit,
+    onSignInAgain: (String) -> Unit,
     onSwitchTo: (String) -> Unit,
     onSignOutOf: (String) -> Unit,
     onDismissError: () -> Unit,
@@ -183,6 +186,7 @@ fun AccountsContent(
                         account = account,
                         enabled = !state.busy,
                         onSwitchTo = { onSwitchTo(account.account.serverId) },
+                        onSignInAgain = { onSignInAgain(account.account.serverId) },
                         onSignOut = { confirming = account },
                     )
                 }
@@ -236,6 +240,7 @@ private fun AccountCard(
     account: StoredAccount,
     enabled: Boolean,
     onSwitchTo: () -> Unit,
+    onSignInAgain: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     Card(
@@ -281,7 +286,12 @@ private fun AccountCard(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!account.isActive) {
+                // The way back that keeps everything. Without it, the only action on a lapsed
+                // row was a sign-out, which deletes the account's downloads (issue #12).
+                if (!account.isSignedIn) {
+                    TextButton(onClick = onSignInAgain, enabled = enabled) { Text("Sign in again") }
+                }
+                if (!account.isActive && account.isSignedIn) {
                     TextButton(onClick = onSwitchTo, enabled = enabled) { Text("Use this one") }
                 }
                 TextButton(onClick = onSignOut, enabled = enabled) { Text("Sign out") }

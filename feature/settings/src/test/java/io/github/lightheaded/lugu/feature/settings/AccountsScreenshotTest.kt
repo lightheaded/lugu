@@ -110,6 +110,7 @@ private fun AccountsPreview(accounts: List<StoredAccount>, error: String? = null
         state = AccountsUiState(accounts = accounts, error = error),
         onBack = {},
         onAddAccount = {},
+        onSignInAgain = {},
         onSwitchTo = {},
         onSignOutOf = {},
         onDismissError = {},

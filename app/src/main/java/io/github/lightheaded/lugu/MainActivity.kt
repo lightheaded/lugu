@@ -19,7 +19,10 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -49,6 +52,7 @@ import io.github.lightheaded.lugu.feature.player.PlayerScreen
 import io.github.lightheaded.lugu.feature.player.PlayerViewModel
 import io.github.lightheaded.lugu.feature.settings.AccountsScreen
 import io.github.lightheaded.lugu.feature.settings.ConnectionScreen
+import io.github.lightheaded.lugu.feature.settings.LoginArgs
 import io.github.lightheaded.lugu.feature.settings.LoginScreen
 import io.github.lightheaded.lugu.feature.settings.SettingsScreen
 import io.github.lightheaded.lugu.playback.PlaybackConnection
@@ -181,7 +185,11 @@ internal fun episodeTargetOf(intent: Intent?): EpisodeTarget? {
 }
 
 private object Routes {
-    const val LOGIN = "login"
+    /** The sign-in screen, with an optional account to sign in to again. See [LoginArgs]. */
+    const val LOGIN = "login?${LoginArgs.ACCOUNT}={${LoginArgs.ACCOUNT}}"
+
+    fun login(serverId: String? = null): String =
+        if (serverId == null) "login" else "login?${LoginArgs.ACCOUNT}=${LoginArgs.encode(serverId)}"
 
     /**
      * The signed-in destination. It hosts both Home — the computed shelves, answering
@@ -271,6 +279,36 @@ private fun LuguApp(
         StartupState.Checking -> return
         StartupState.SignedIn -> Routes.HOME
         StartupState.SignedOut -> Routes.LOGIN
+    }
+
+    /*
+     * A sign-in that ends while the app runs. A rejected refresh token clears the tokens
+     * deep inside a request, and before this nothing answered it: the library stayed on
+     * screen, unable to load, and the only way out was Sign out, which deletes the
+     * downloads (issue #12).
+     *
+     * Opened once per lapse, on top of whatever is on screen, rather than in place of it.
+     * Back returns to the library, where the downloads still play and the Accounts screen
+     * can switch to another account. The account that lapsed is remembered across a
+     * rotation, so turning the phone does not push the screen a second time.
+     */
+    val lapsed by startViewModel.lapsedAccount.collectAsStateWithLifecycle()
+    var answeredLapse by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(lapsed?.serverId) {
+        val serverId = lapsed?.serverId
+        if (serverId == null) {
+            answeredLapse = null
+            return@LaunchedEffect
+        }
+        if (serverId == answeredLapse) return@LaunchedEffect
+        answeredLapse = serverId
+        // No destination yet means the graph is still being set up, and then the start
+        // destination already answered: a lapse at launch reads as signed out and starts
+        // on the sign-in screen.
+        val route = navController.currentDestination?.route ?: return@LaunchedEffect
+        if (route != Routes.LOGIN) {
+            navController.navigate(Routes.login()) { launchSingleTop = true }
+        }
     }
 
     // Offered once per crash, above whatever is on screen: the moment someone can say
@@ -377,15 +415,26 @@ private fun LuguApp(
                     .consumeWindowInsets(shellPadding)
             },
         ) {
-            composable(Routes.LOGIN) {
+            composable(
+                route = Routes.LOGIN,
+                arguments = listOf(
+                    navArgument(LoginArgs.ACCOUNT) {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) {
                 // The redirect is handed to this screen's own view model, because the
                 // attempt it has to be matched against belongs to the sign-in in progress.
                 // Read here rather than in the activity so it reaches the same view model
                 // instance that started the sign-in.
                 LoginScreen(
+                    // The whole stack goes. A sign-in from the Accounts screen or after a
+                    // lapse has the old library under it, and Back must not return there.
                     onSignedIn = {
                         navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
+                            popUpTo(0) { inclusive = true }
                         }
                     },
                     providerRedirect = oidcRedirect,
@@ -538,7 +587,7 @@ private fun LuguApp(
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
                     onSignedOut = {
-                        navController.navigate(Routes.LOGIN) {
+                        navController.navigate(Routes.login()) {
                             popUpTo(0) { inclusive = true }
                         }
                     },
@@ -585,7 +634,10 @@ private fun LuguApp(
                     // Adding an account reuses the sign-in screen. On success it lands on
                     // Home with the new account active and the stack cleared, which is
                     // exactly what adding an account should do.
-                    onAddAccount = { navController.navigate(Routes.LOGIN) },
+                    onAddAccount = { navController.navigate(Routes.login()) },
+                    // The same screen, filled in for that account, with its row, mirror and
+                    // downloads left in place.
+                    onSignInAgain = { serverId -> navController.navigate(Routes.login(serverId)) },
                 )
             }
 

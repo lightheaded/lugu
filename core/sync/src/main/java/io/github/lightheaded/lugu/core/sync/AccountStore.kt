@@ -12,6 +12,10 @@ import io.github.lightheaded.lugu.core.model.AuthTokens
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -99,6 +103,16 @@ interface AccountTokenStore : TokenStore {
 
     /** Forgets one account's sign-in and leaves every other account signed in. */
     suspend fun clearFor(serverId: String)
+
+    /**
+     * Bumped after every write and every removal.
+     *
+     * The count means nothing. It is there so that a screen can notice a sign-in that ended
+     * while the app was running: a rejected refresh calls `clear()` from deep inside the
+     * HTTP client, and before this nothing watched for it. See
+     * `AuthRepository.observeLapsedAccount`.
+     */
+    val revision: StateFlow<Int>
 }
 
 /**
@@ -111,24 +125,29 @@ class InMemoryAccountTokens(private val activeServerId: String? = null) : Accoun
 
     private val slots = mutableMapOf<String, AuthTokens>()
 
+    private val _revision = MutableStateFlow(0)
+    override val revision: StateFlow<Int> = _revision.asStateFlow()
+
     override suspend fun tokens(): AuthTokens? = activeServerId?.let { slots[it] }
 
     override suspend fun tokensFor(serverId: String): AuthTokens? = slots[serverId]
 
     override suspend fun save(tokens: AuthTokens) {
-        activeServerId?.let { slots[it] = tokens }
+        activeServerId?.let { saveFor(it, tokens) }
     }
 
     override suspend fun saveFor(serverId: String, tokens: AuthTokens) {
         slots[serverId] = tokens
+        _revision.update { it + 1 }
     }
 
     override suspend fun clear() {
-        activeServerId?.let { slots.remove(it) }
+        activeServerId?.let { clearFor(it) }
     }
 
     override suspend fun clearFor(serverId: String) {
         slots.remove(serverId)
+        _revision.update { it + 1 }
     }
 }
 
@@ -142,6 +161,9 @@ class EncryptedTokenStore @Inject constructor(
     private val mutex = Mutex()
 
     private val prefs = SecurePrefs(context, FILE_NAME, CredentialKind.Tokens, losses)
+
+    private val _revision = MutableStateFlow(0)
+    override val revision: StateFlow<Int> = _revision.asStateFlow()
 
     /**
      * The active account's tokens, or null.
@@ -200,7 +222,7 @@ class EncryptedTokenStore @Inject constructor(
             putString(serverId.key(KEY_REFRESH), tokens.refreshToken)
             putLong(serverId.key(KEY_EXPIRES), tokens.accessTokenExpiresAtMs)
         }
-        Unit
+        _revision.update { it + 1 }
     }
 
     override suspend fun clear() {
@@ -231,7 +253,7 @@ class EncryptedTokenStore @Inject constructor(
             remove(serverId.key(KEY_REFRESH))
             remove(serverId.key(KEY_EXPIRES))
         }
-        Unit
+        _revision.update { it + 1 }
     }
 
     private fun readWhileLocked(serverId: String): AuthTokens? =

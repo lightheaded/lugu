@@ -11,6 +11,8 @@ import io.github.lightheaded.lugu.core.db.ServerEntity
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
 /** The signed-in account, or null. The whole UI hangs off this. */
@@ -201,9 +203,13 @@ class AuthRepository @Inject constructor(
         val active = serverDao.active()
         runCatching { client.send("/logout", io.ktor.http.HttpMethod.Post) }
         active?.let {
+            // The row goes first. While an active row has no tokens, the app reads it as a
+            // session that ended on its own and opens the sign-in screen for it — see
+            // [observeLapsedAccount]. A sign-out that cleared the tokens first would show
+            // that state for an instant, and the screen would answer it.
+            serverDao.delete(it.serverId)
             tokenStore.clearFor(it.serverId)
             accountDataDao.purge(it.serverId)
-            serverDao.delete(it.serverId)
         }
         // The custom headers deliberately survive a sign-out. They are a property of the
         // address rather than of the account, and behind an identity-aware proxy they are
@@ -222,7 +228,11 @@ class AuthRepository @Inject constructor(
      * going anywhere. An accounts list that showed such a row as signed in would send
      * somebody to a library that cannot load.
      */
-    fun observeAccounts(): Flow<List<StoredAccount>> = serverDao.observeAll().map { rows ->
+    fun observeAccounts(): Flow<List<StoredAccount>> = combine(
+        serverDao.observeAll(),
+        // Also redrawn when a sign-in ends, so the row says so while the screen is open.
+        tokenStore.revision,
+    ) { rows, _ -> rows }.map { rows ->
         rows.map { server ->
             StoredAccount(
                 account = server.toAccount(),
@@ -269,11 +279,40 @@ class AuthRepository @Inject constructor(
         if (server.isActive) {
             runCatching { client.send("/logout", io.ktor.http.HttpMethod.Post) }
         }
+        // Row first, for the reason given in [logout].
+        serverDao.delete(serverId)
         tokenStore.clearFor(serverId)
         accountDataDao.purge(serverId)
-        serverDao.delete(serverId)
         if (server.isActive) serverUrlProvider.forgetAddressDecision()
     }
+
+    /**
+     * The active account when its sign-in has ended, and null otherwise.
+     *
+     * "Ended" means the row is there and the tokens are not. That is what a rejected
+     * refresh leaves behind: `AbsClient` clears the tokens and throws, and the throw lands
+     * in whatever request happened to need a fresh token — a sync worker, a cover, the
+     * outbox. None of those can show a sign-in screen, so the shell watches this instead.
+     *
+     * The row and everything keyed by it stay. Signing in again goes through [login],
+     * which finds the row by id and updates it in place, so the downloads and the mirror
+     * are still there afterwards.
+     */
+    fun observeLapsedAccount(): Flow<ActiveAccount?> =
+        // The two flows only say when to look again. The answer comes from a fresh read,
+        // because a Room flow delivers its row a moment after the write: a sign-out deletes
+        // the row and then clears the tokens, and a combine of the two flows would still
+        // hold the deleted row when the token change arrived. That reads as a lapse.
+        combine(serverDao.observeActive(), tokenStore.revision) { _, _ -> }
+            .map { lapsedAccount() }
+            .distinctUntilChanged()
+
+    /** One read of [observeLapsedAccount], for the sign-in screen to prefill from. */
+    suspend fun lapsedAccount(): ActiveAccount? =
+        serverDao.active()?.takeIf { tokenStore.tokensFor(it.serverId) == null }?.toAccount()
+
+    /** Any stored account by id, active or not. The sign-in screen prefills from it. */
+    suspend fun storedAccount(serverId: String): ActiveAccount? = serverDao.byId(serverId)?.toAccount()
 
     /** True when we hold credentials that still stand a chance of working. */
     suspend fun isSignedIn(): Boolean = serverDao.active() != null && tokenStore.tokens() != null
