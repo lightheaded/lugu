@@ -18,15 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -54,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import io.github.lightheaded.lugu.core.db.BrowseGroup
 import io.github.lightheaded.lugu.core.db.DownloadState
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.EpisodeSort
@@ -66,7 +64,9 @@ import io.github.lightheaded.lugu.core.model.MediaType
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
 import io.github.lightheaded.lugu.core.model.PodcastTrim
 import io.github.lightheaded.lugu.core.model.formatLengthCompact
+import io.github.lightheaded.lugu.core.sync.EpisodeHit
 import io.github.lightheaded.lugu.core.sync.QueueItem
+import io.github.lightheaded.lugu.core.sync.SearchResults
 import io.github.lightheaded.lugu.core.sync.ShelfEntry
 import io.github.lightheaded.lugu.core.sync.ShelfKind
 import org.junit.Rule
@@ -118,6 +118,16 @@ class LibraryScreensScreenshotTest {
     @Test
     fun `the home tab reads correctly in the dark`() {
         capture("home_tab_dark", dark = true) { HomeShellPreview(libraryTab = false) }
+    }
+
+    @Test
+    fun `a search lists each kind of result in its own section`() {
+        capture("search_light", dark = false) { SearchPreview() }
+    }
+
+    @Test
+    fun `a search reads correctly in the dark`() {
+        capture("search_dark", dark = true) { SearchPreview() }
     }
 
     @Test
@@ -426,15 +436,7 @@ private fun HomeShellPreview(libraryTab: Boolean) {
             TopAppBar(
                 title = { Text("lugu") },
                 actions = {
-                    IconButton(onClick = {}) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Up next")
-                    }
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.Download, contentDescription = "Downloads")
-                    }
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
+                    HomeTopBarActions(onOpenSearch = {}, onOpenQueue = {}, onOpenDownloads = {}, onOpenSettings = {})
                 },
             )
         },
@@ -459,6 +461,46 @@ private fun HomeShellPreview(libraryTab: Boolean) {
             if (libraryTab) LibraryTabPreview() else HomeTabPreview()
         }
     }
+}
+
+/**
+ * The real search screen, through [SearchContent], with one result of each kind and an
+ * episode section long enough to need "Show all".
+ */
+@Composable
+private fun SearchPreview() {
+    val state = SearchUiState(
+        query = "vale",
+        results = SearchResults(
+            query = "vale",
+            items = listOf(
+                book("li_9", "Vale of Lanterns", "Ada Merriweather", series = "The Breakwater #3"),
+                LIGHTHOUSE,
+            ),
+            episodes = (1..6).map { n ->
+                EpisodeHit(
+                    itemId = "pod_1",
+                    episodeId = "ep_$n",
+                    title = "Down in the vale, part $n",
+                    podcastTitle = "Night Shift Radio",
+                    publishedAtMs = 0L,
+                    durationSec = 1800.0,
+                )
+            },
+            narrators = listOf(BrowseGroup("Jefferson Vale", 4)),
+            series = listOf(BrowseGroup("Valewood Chronicles", 2)),
+        ),
+    )
+    SearchContent(
+        state = state,
+        coverUrlFor = { null },
+        onQueryChange = {},
+        onOpenItem = {},
+        onOpenEpisode = { _, _ -> },
+        onOpenGroup = { _, _ -> },
+        onOpenCollection = {},
+        modifier = Modifier.fillMaxSize(),
+    )
 }
 
 @Composable

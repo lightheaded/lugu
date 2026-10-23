@@ -32,8 +32,11 @@ import io.github.lightheaded.lugu.core.model.SeriesRef
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -314,6 +317,48 @@ class LibraryRepository @Inject constructor(
             BrowseKind.SERIES -> itemDao.observeBySeries(account.serverId, account.userId, name)
         }
         return rows.map { list -> list.distinctBy { it.id }.map { it.toDomain() } }
+    }
+
+    /**
+     * One search across everything the phone shows: items, episodes, authors, narrators
+     * and series. See [SearchEverything] for how each kind is matched.
+     *
+     * Items and episodes come only from the libraries that [observeLibraries] shows, so a
+     * hidden library type stays hidden here too. Authors, narrators and series span every
+     * library, because the page each one opens spans every library as well.
+     *
+     * Episodes come from the mirror, which holds only the podcasts somebody opened or that
+     * [fillEpisodeDates] fetched. The search screen runs that pass when it opens.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun searchEverything(account: ActiveAccount, query: String): Flow<SearchResults> {
+        val text = query.trim()
+        if (text.isEmpty()) return flowOf(SearchResults())
+        val match = FtsQuery.toMatchExpression(text)
+        return observeLibraries(account)
+            .map { libraries -> libraries.map { it.id } }
+            .distinctUntilChanged()
+            .flatMapLatest { libraryIds ->
+                val indexed = if (match == null) {
+                    flowOf(emptyList())
+                } else {
+                    itemDao.searchInFts(account.serverId, account.userId, libraryIds, match)
+                        .map { rows -> rows.map { it.toDomain() } }
+                }
+                val names = combine(
+                    itemDao.observeAuthors(account.serverId, account.userId),
+                    itemDao.observeNarrators(account.serverId, account.userId),
+                    itemDao.observeSeries(account.serverId, account.userId),
+                ) { authors, narrators, series -> Triple(authors, narrators, series) }
+                combine(
+                    itemDao.observeSearchable(account.serverId, account.userId, libraryIds),
+                    indexed,
+                    episodeDao.observeSearchable(account.serverId, account.userId, libraryIds),
+                    names,
+                ) { named, found, episodes, (authors, narrators, series) ->
+                    SearchEverything.assemble(text, named, found, episodes, authors, narrators, series)
+                }
+            }
     }
 
     fun observeContinueListening(account: ActiveAccount): Flow<List<LibraryItem>> =

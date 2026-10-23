@@ -437,6 +437,49 @@ interface LibraryItemDao {
     ): List<LibraryItemEntity>
 
     /**
+     * The index across the libraries the phone shows, for the search on Home.
+     *
+     * The car's [searchEverywhere] looks in every library. The phone leaves out a library
+     * whose type the settings hide, so this one is told which libraries it may look in.
+     */
+    @Query(
+        """
+        SELECT i.* FROM library_item_fts f
+        INNER JOIN library_item i
+            ON i.serverId = f.serverId AND i.userId = f.userId AND i.id = f.itemId
+        WHERE f.serverId = :serverId AND f.userId = :userId
+          AND i.libraryId IN (:libraryIds)
+          AND library_item_fts MATCH :match
+        ORDER BY i.title COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    fun searchInFts(
+        serverId: String,
+        userId: String,
+        libraryIds: List<String>,
+        match: String,
+        limit: Int = 200,
+    ): Flow<List<LibraryItemEntity>>
+
+    /**
+     * The names of every item in the libraries the phone shows, for Home's search to match.
+     *
+     * The match runs in Kotlin, not in SQLite. The index matches a word from its start
+     * only, so "house" does not find "Lighthouse", and SQLite folds case for ASCII letters
+     * only, so "õnne" does not find "Õnne". Six short columns per item stay small even for
+     * a library of thousands, where whole rows would carry each item's raw JSON.
+     */
+    @Query(
+        """
+        SELECT id, libraryId, mediaType, title, authorName, narratorName, seriesName
+        FROM library_item
+        WHERE serverId = :serverId AND userId = :userId AND libraryId IN (:libraryIds)
+        """,
+    )
+    fun observeSearchable(serverId: String, userId: String, libraryIds: List<String>): Flow<List<ItemSearchRow>>
+
+    /**
      * Almost finished: past the threshold but not marked done. These are the ones worth
      * an hour on a commute to clear, and the ones easiest to forget about.
      */
@@ -1237,6 +1280,27 @@ interface EpisodeDao {
     )
     fun observeForLibrary(serverId: String, userId: String, libraryId: String): Flow<List<LibraryEpisodeRow>>
 
+    /**
+     * The episodes a search on Home can find, newest first, without their descriptions.
+     *
+     * The match itself runs in Kotlin, because SQLite folds case for ASCII letters only and
+     * a title that starts with "Ö" must be found by "ö". So this hands back every episode of
+     * the libraries in view, and leaves out the one column that is large.
+     */
+    @Query(
+        """
+        SELECT e.id AS id, e.libraryItemId AS libraryItemId, e.title AS title,
+               e.subtitle AS subtitle, e.publishedAtMs AS publishedAtMs,
+               e.durationSec AS durationSec, i.title AS podcastTitle
+        FROM episode e
+        JOIN library_item i
+          ON i.serverId = e.serverId AND i.userId = e.userId AND i.id = e.libraryItemId
+        WHERE e.serverId = :serverId AND e.userId = :userId AND i.libraryId IN (:libraryIds)
+        ORDER BY e.publishedAtMs DESC
+        """,
+    )
+    fun observeSearchable(serverId: String, userId: String, libraryIds: List<String>): Flow<List<EpisodeSearchRow>>
+
     @Upsert
     suspend fun upsertAll(episodes: List<EpisodeEntity>)
 
@@ -1449,6 +1513,28 @@ interface SessionLedgerDao {
 /** One episode, and the title of the podcast it belongs to. */
 data class LibraryEpisodeRow(
     @Embedded val episode: EpisodeEntity,
+    val podcastTitle: String,
+)
+
+/** One item as a search result: its names, and no description or raw JSON. */
+data class ItemSearchRow(
+    val id: String,
+    val libraryId: String,
+    val mediaType: String,
+    val title: String,
+    val authorName: String?,
+    val narratorName: String?,
+    val seriesName: String?,
+)
+
+/** One episode as a search result: enough to name it and open it, and no description. */
+data class EpisodeSearchRow(
+    val id: String,
+    val libraryItemId: String,
+    val title: String,
+    val subtitle: String?,
+    val publishedAtMs: Long,
+    val durationSec: Double,
     val podcastTitle: String,
 )
 

@@ -34,6 +34,7 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | `LaunchSmokeTest` | No |
 | `AutoBrowseTreeTest` | No |
 | `LibraryGridTest` | No |
+| `SearchEverythingTest` | No |
 | `RememberedListControlsTest` | No |
 | `RotationTest` | No |
 | `CoverCacheTest` | No |
@@ -57,7 +58,7 @@ a migration that fails there is an app that will not open after an update.
 
 ### Driving screens with no server behind them
 
-`AutoBrowseTreeTest` established the pattern and three more tests now use it: seed Room
+`AutoBrowseTreeTest` established the pattern, and the other "No" rows above use it too: seed Room
 directly under a `serverId` no real account can have, point the account at `books.example`
 so nothing can resolve, and assert against what the app draws. It is what lets a check about
 the library grid run on a bare CI emulator, and it is honest — a tile that shows a progress

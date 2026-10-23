@@ -47,6 +47,7 @@ import io.github.lightheaded.lugu.feature.library.EpisodeScreen
 import io.github.lightheaded.lugu.feature.library.HomeScreen
 import io.github.lightheaded.lugu.feature.library.ItemDetailScreen
 import io.github.lightheaded.lugu.feature.library.QueueScreen
+import io.github.lightheaded.lugu.feature.library.SearchScreen
 import io.github.lightheaded.lugu.feature.player.MiniPlayer
 import io.github.lightheaded.lugu.feature.player.PlayerLink
 import io.github.lightheaded.lugu.feature.player.PlayerScreen
@@ -225,6 +226,9 @@ internal object Routes {
 
     /** The episodes of every podcast in the library in view, in one list. */
     const val ALL_EPISODES = "episodes"
+
+    /** One search across books, podcasts, episodes, authors, narrators, series and collections. */
+    const val SEARCH = "search"
 
     /** Authors, series or narrators — the three groupings the item page links to. */
     const val BROWSE = "browse/{kind}"
@@ -457,6 +461,7 @@ private fun LuguApp(
                 val playerViewModel: PlayerViewModel = hiltViewModel()
                 HomeScreen(
                     onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                     onOpenQueue = { navController.navigate(Routes.QUEUE) },
@@ -567,6 +572,18 @@ private fun LuguApp(
                 BrowseGroupScreen(
                     onBack = { navController.popBackStack() },
                     onOpenItem = { navController.navigate(Routes.item(it)) },
+                )
+            }
+
+            composable(Routes.SEARCH) {
+                SearchScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenEpisode = { itemId, episodeId ->
+                        navController.navigate(Routes.episode(itemId, episodeId))
+                    },
+                    onOpenGroup = { kind, name -> navController.navigate(Routes.browseGroup(kind, name)) },
+                    onOpenCollection = { navController.navigate(Routes.collection(it)) },
                 )
             }
 

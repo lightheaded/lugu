@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,6 +63,39 @@ import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
 
+/**
+ * The buttons at the end of Home's top bar, in one place so that the screenshot test
+ * draws these and not a copy of them.
+ *
+ * Nothing conditional belongs in here. A top bar's actions are a right-aligned row, so a
+ * spinner that came and went at the end of it slid these buttons sideways and back every
+ * time a sync started and finished — including the sync that runs by itself on launch, so
+ * the app twitched before anyone had touched it. What it was trying to say is now said
+ * under the bar, where saying it moves nothing.
+ *
+ * Search comes first: it is the one way to anything in the library from here.
+ */
+@Composable
+internal fun HomeTopBarActions(
+    onOpenSearch: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenDownloads: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    IconButton(onClick = onOpenSearch) {
+        Icon(Icons.Default.Search, contentDescription = "Search")
+    }
+    IconButton(onClick = onOpenQueue) {
+        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Up next")
+    }
+    IconButton(onClick = onOpenDownloads) {
+        Icon(Icons.Default.Download, contentDescription = "Downloads")
+    }
+    IconButton(onClick = onOpenSettings) {
+        Icon(Icons.Default.Settings, contentDescription = "Settings")
+    }
+}
+
 /** The two jobs the signed-in app does, in the order they are wanted. */
 private enum class HomeTab(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Default.Home),
@@ -83,6 +117,7 @@ private enum class HomeTab(val label: String, val icon: ImageVector) {
 @Composable
 fun HomeScreen(
     onOpenItem: (String) -> Unit,
+    onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -138,21 +173,12 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("lugu") },
                 actions = {
-                    IconButton(onClick = onOpenQueue) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Up next")
-                    }
-                    IconButton(onClick = onOpenDownloads) {
-                        Icon(Icons.Default.Download, contentDescription = "Downloads")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                    // Nothing conditional belongs in here. A top bar's actions are a
-                    // right-aligned row, so a spinner that came and went at the end of it
-                    // slid these three buttons sideways and back every time a sync started
-                    // and finished — including the sync that runs by itself on launch, so
-                    // the app twitched before anyone had touched it. What it was trying to
-                    // say is now said under the bar, where saying it moves nothing.
+                    HomeTopBarActions(
+                        onOpenSearch = onOpenSearch,
+                        onOpenQueue = onOpenQueue,
+                        onOpenDownloads = onOpenDownloads,
+                        onOpenSettings = onOpenSettings,
+                    )
                 },
             )
         },
