@@ -73,17 +73,29 @@ class SettingsScreenshotTest {
 
     @Test
     fun `searching narrows to the matching rows and keeps their headings`() {
-        viewModel.onQueryChange("sleep")
-        capture("settings_search_light", dark = false)
+        capture("settings_search_light", dark = false, query = "sleep")
     }
 
     @Test
     fun `a search that matches nothing says so`() {
-        viewModel.onQueryChange("aardvark")
-        capture("settings_search_empty_light", dark = false)
+        capture("settings_search_empty_light", dark = false, query = "aardvark")
     }
 
-    private fun capture(name: String, dark: Boolean) {
+    /**
+     * Captures the screen once its state carries the query the test typed.
+     *
+     * The state is a combine that starts from an empty [SettingsUiState], and one of its
+     * sources reads its store on the IO dispatcher. The compose rule does not wait for that
+     * thread. On a slow run the capture came first, and showed the start state: no query, so
+     * the full list. That failed `settings_search_light` on `main` on 2 November, on a commit
+     * whose PR run had passed. `SettingsBehaviourTest.awaitText` waits for the same thing.
+     *
+     * The query is the condition because it is the field the start state gets wrong here.
+     * Identity cannot be: `stateIn` drops a value equal to the one it holds, so a loaded state
+     * that equals the start state never replaces it.
+     */
+    private fun capture(name: String, dark: Boolean, query: String = "") {
+        viewModel.onQueryChange(query)
         compose.setContent {
             ScreenshotTheme(dark = dark) {
                 SettingsScreen(
@@ -94,6 +106,7 @@ class SettingsScreenshotTest {
                 )
             }
         }
+        compose.waitUntil(timeoutMillis = 5_000) { viewModel.state.value.query == query }
         compose.onRoot().captureRoboImage("screenshots/$name.png")
     }
 }
