@@ -108,6 +108,32 @@ class ProgressRepository @Inject constructor(
         )
     }
 
+    /**
+     * Records a play or a pause at [atSec], so the history shows when listening started
+     * and stopped, and not only where the position jumped. Every one is kept: a pause is
+     * the position somebody wants back after they fell asleep.
+     */
+    suspend fun recordPlayback(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        atSec: Double,
+        reason: String,
+    ) {
+        positionHistoryDao.insert(
+            PositionHistoryEntity(
+                serverId = account.serverId,
+                userId = account.userId,
+                libraryItemId = itemId,
+                episodeKey = episodeKeyOf(episodeId),
+                fromSec = atSec,
+                toSec = atSec,
+                atMs = clock.nowMs(),
+                reason = reason,
+            ),
+        )
+    }
+
     fun observeHistory(account: ActiveAccount, itemId: String) =
         positionHistoryDao.observeForItem(account.serverId, account.userId, itemId)
 

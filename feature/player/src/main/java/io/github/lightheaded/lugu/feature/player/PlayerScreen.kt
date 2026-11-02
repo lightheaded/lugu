@@ -94,7 +94,6 @@ import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
 import io.github.lightheaded.lugu.playback.PlayerUiState
-import io.github.lightheaded.lugu.playback.PositionJump
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1041,52 +1040,6 @@ internal fun MiniPlayerBar(
             }
         }
         HorizontalDivider(thickness = Dp.Hairline, color = MaterialTheme.colorScheme.outlineVariant)
-    }
-}
-
-/**
- * Recovery for a position that moved unexpectedly.
- *
- * Exists because a notification button once seeked a book to zero and there was no way
- * back: the database holds only *current* progress, so an accidental jump was
- * permanent. Every large move is now recorded and restorable.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PositionHistorySheet(
-    history: List<PositionJump>,
-    onRestore: (Double) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Text("Where you were", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Tap a position to go back to it",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            history.take(20).forEach { jump ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onRestore(jump.fromSec) }
-                        .padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(formatClock(jump.fromSec), style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "jumped to ${formatClock(jump.toSec)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    TextButton(onClick = { onRestore(jump.fromSec) }) { Text("Restore") }
-                }
-            }
-        }
     }
 }
 

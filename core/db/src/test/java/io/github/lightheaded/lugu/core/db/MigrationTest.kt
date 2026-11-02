@@ -540,6 +540,11 @@ class MigrationTest {
         assertThat(rows).hasSize(2)
         assertThat(rows.first().atMs).isEqualTo(200)
         assertThat(dao.mostRecentForItem("s", "u", "li_1")?.toSec).isEqualTo(500.0)
+
+        // A pause stays where it is. It shows in the history, but it is not a jump.
+        dao.insert(entry(to = 1_000.0, at = 300).copy(reason = "pause"))
+        assertThat(dao.observeForItem("s", "u", "li_1").first()).hasSize(3)
+        assertThat(dao.mostRecentForItem("s", "u", "li_1")?.toSec).isEqualTo(500.0)
         db.close()
     }
 }

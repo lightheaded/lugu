@@ -453,7 +453,8 @@ data class LibraryItemFtsEntity(
 )
 
 /**
- * Every large position change, so no jump is ever unrecoverable.
+ * Every large position change, so no jump is ever unrecoverable, and every play and
+ * pause, so the listener can see when they listened.
  *
  * Added after a real incident: the notification's previous button seeked a book to
  * zero, that position was persisted and synced, and there was no way back — the local
@@ -474,6 +475,9 @@ data class PositionHistoryEntity(
     val fromSec: Double,
     val toSec: Double,
     val atMs: Long,
-    /** Why the position moved: "seek", "chapter", "notification", "adopted-remote". */
+    /**
+     * Why the position moved, for example "seek" or "chapter-next". A play or a pause
+     * ("play", "pause", "pause-noisy", ...) has [fromSec] equal to [toSec].
+     */
     val reason: String,
 )

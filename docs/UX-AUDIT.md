@@ -631,7 +631,9 @@ Where: `PlayerScreen.kt:536, 580-583`
 
 Where: `PlayerActionRow.kt:54-64` · `SleepSheet.kt:147-153`
 
-### Position history hides the timestamps it carries
+### ~~Position history hides the timestamps it carries~~
+
+**Done 2 November** in `feat(player): the history shows plays and pauses with the date and time`. The sheet groups the entries by day. Each row shows the time, the event (play, pause with its cause, or a jump with its reason) and the position. The row is the one tap target.
 
 **Severity: medium.**
 

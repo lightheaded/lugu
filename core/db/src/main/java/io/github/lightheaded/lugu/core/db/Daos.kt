@@ -1788,7 +1788,7 @@ interface PositionHistoryDao {
         serverId: String,
         userId: String,
         itemId: String,
-        limit: Int = 50,
+        limit: Int = 200,
     ): Flow<List<PositionHistoryEntity>>
 
     @Query(
@@ -1800,10 +1800,12 @@ interface PositionHistoryDao {
     )
     fun observeRecent(serverId: String, userId: String, limit: Int = 50): Flow<List<PositionHistoryEntity>>
 
+    /** The newest jump. A play or a pause stays where it is, so it is not one. */
     @Query(
         """
         SELECT * FROM position_history
         WHERE serverId = :serverId AND userId = :userId AND libraryItemId = :itemId
+            AND fromSec != toSec
         ORDER BY atMs DESC LIMIT 1
         """,
     )

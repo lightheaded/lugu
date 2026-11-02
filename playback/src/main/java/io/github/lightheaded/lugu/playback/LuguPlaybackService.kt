@@ -207,6 +207,23 @@ class LuguPlaybackService : MediaLibraryService() {
     /** How far to rewind on the next play, set when the sleep timer stopped playback. */
     private var pendingSleepRewindSec: Double? = null
 
+    /**
+     * The history event for a pause the service makes itself, set only for the length of
+     * the `pause()` call. Media3 calls the listener inside that call, so the listener
+     * reads it there. A null [PauseCause.event] records nothing.
+     */
+    private class PauseCause(val event: String?)
+    private var pauseCause: PauseCause? = null
+
+    private fun pauseFor(event: String?) {
+        pauseCause = PauseCause(event)
+        try {
+            player.pause()
+        } finally {
+            pauseCause = null
+        }
+    }
+
     /** Whether the timer is being held for a car, so the hold can be taken off again. */
     private var sleepSuspendedForCar = false
 
@@ -1479,7 +1496,7 @@ class LuguPlaybackService : MediaLibraryService() {
             // inside `pause()`, and it now decides whether a pause ends the timer. A timer
             // still armed at that moment would be reported as cancelled by the listener.
             stateHolder.clearSleepTimer()
-            player.pause()
+            pauseFor(PlaybackEvents.PAUSE_SLEEP_TIMER)
             // Restore the volume so the next play is not silent — the commonest way a
             // fade-out implementation leaves the app apparently broken. The value comes
             // from the tick rather than from a literal here, so a test can assert it.
@@ -1839,6 +1856,24 @@ class LuguPlaybackService : MediaLibraryService() {
         )
     }
 
+    /** Writes a play or a pause into the position history, at the position it happened. */
+    private fun recordPlaybackEvent(event: String) {
+        val context = stateHolder.nowPlaying.value ?: return
+        val atSec = currentAbsoluteSec()?.takeIf { it >= 0 } ?: return
+        scope.launch {
+            val account = authRepository.account() ?: return@launch
+            withContext(Dispatchers.IO) {
+                progressRepository.recordPlayback(
+                    account = account,
+                    itemId = context.libraryItemId,
+                    episodeId = context.episodeId,
+                    atSec = atSec,
+                    reason = event,
+                )
+            }
+        }
+    }
+
     private fun persistPosition(reason: String) {
         // Decided now, on the main thread, because the player can start again before the
         // write below finishes. See [ProgressPushRule].
@@ -1941,6 +1976,16 @@ class LuguPlaybackService : MediaLibraryService() {
     }
 
     private inner class PersistenceListener : Player.Listener {
+        /**
+         * A play or a pause for the history. `playWhenReady` and not `isPlaying`, because
+         * `isPlaying` also turns off while the stream buffers, and nobody paused then.
+         */
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            val cause = pauseCause?.takeIf { !playWhenReady }
+            val event = if (cause != null) cause.event else PlaybackEvents.forPlayWhenReady(playWhenReady, reason)
+            if (event != null) recordPlaybackEvent(event)
+        }
+
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             val now = System.currentTimeMillis()
             buttonClassifier.onPlaybackStateChanged(isPlaying, now)
@@ -2024,6 +2069,7 @@ class LuguPlaybackService : MediaLibraryService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState != Player.STATE_ENDED) return
+            recordPlaybackEvent(PlaybackEvents.ENDED)
             persistPosition(reason = "ended")
             continueToNext()
         }
@@ -2226,7 +2272,9 @@ class LuguPlaybackService : MediaLibraryService() {
             // end of a playlist does not clear it — so loading the next book into it starts
             // that book the moment it is ready, whatever this branch decides. Without the
             // pause, "ask first" asks nothing on the path it exists for.
-            if (continuation.autoStart || startedByListener) player.play() else player.pause()
+            //
+            // Nobody paused the new book, so the history records nothing for it.
+            if (continuation.autoStart || startedByListener) player.play() else pauseFor(null)
         }
     }
 
