@@ -56,6 +56,10 @@ internal class SeekReasons(private val nowMs: () -> Long = System::currentTimeMi
         const val CHAPTER_PREVIOUS = "chapter-previous"
         const val CHAPTER_NEXT = "chapter-next"
 
+        /** A hold on a seek button, recorded once from where it started to where it let go. */
+        const val SCAN_BACK = "scan-back"
+        const val SCAN_FORWARD = "scan-forward"
+
         /** A stretch the listener's trim settings jump over. */
         const val SKIPPED_REGION = "skipped-region"
 

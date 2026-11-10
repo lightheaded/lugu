@@ -179,6 +179,8 @@ private fun jumpLabel(reason: String): String = when (reason) {
     "seek" -> "Seek"
     "skip-back" -> "Skip back"
     "skip-forward" -> "Skip forward"
+    "scan-back" -> "Held back"
+    "scan-forward" -> "Held forward"
     "chapter-previous" -> "Previous chapter"
     "chapter-next" -> "Next chapter"
     "skipped-region" -> "Skipped a trimmed part"

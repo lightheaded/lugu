@@ -44,6 +44,15 @@ class PlaybackStateHolder @Inject constructor() {
     /** Why the next seek happens, so the position history can say more than "seek". */
     internal val seekReasons = SeekReasons()
 
+    /**
+     * True while a seek button is held and the player scans, and for a moment after.
+     *
+     * A scan seeks every slice. The service must not record each of those as a jump, save
+     * the position each time, or rewind on resume when the scan starts a paused player. The
+     * connection records the whole scan as one jump instead.
+     */
+    @Volatile var scanning: Boolean = false
+
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
 

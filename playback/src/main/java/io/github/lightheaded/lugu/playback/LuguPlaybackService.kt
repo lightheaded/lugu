@@ -1997,7 +1997,14 @@ class LuguPlaybackService : MediaLibraryService() {
                 applySleepTimerPauseRule()
             } else {
                 hasPlayedSinceCreate = true
-                applyRewindOnResume()
+                if (stateHolder.scanning) {
+                    // A scan that starts a paused player picks the place by ear. A rewind
+                    // now would only move it from where the listener is about to choose.
+                    pausedAtWallClockMs = null
+                    pendingSleepRewindSec = null
+                } else {
+                    applyRewindOnResume()
+                }
                 lastTickWallClockMs = System.currentTimeMillis()
             }
             syncShakeListening()
@@ -2034,6 +2041,9 @@ class LuguPlaybackService : MediaLibraryService() {
                 // it is also what makes the Undo on a skip notice work rather than be
                 // undone again half a second later.
                 skipEnforcer.onSeek(skipPlan, to)
+                // A scan seeks every slice. The connection records it once, when it ends,
+                // and the regular tick saves the position.
+                if (stateHolder.scanning) return
                 val why = stateHolder.seekReasons.reasonFor(to)
 
                 scope.launch {

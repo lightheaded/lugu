@@ -173,6 +173,10 @@ class PlayerViewModel @Inject constructor(
 
     fun seekTo(absoluteSec: Double) = connection.seekTo(absoluteSec)
 
+    fun startScan(forward: Boolean) = connection.startScan(forward)
+
+    fun stopScan() = connection.stopScan()
+
     fun setSpeed(speed: Float) = connection.setSpeed(speed)
 
     fun previousChapter() = connection.previousChapter()

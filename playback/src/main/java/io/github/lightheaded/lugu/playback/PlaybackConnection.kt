@@ -462,6 +462,84 @@ class PlaybackConnection @Inject constructor(
         }
     }
 
+    private var scanJob: kotlinx.coroutines.Job? = null
+    private var scanEndJob: kotlinx.coroutines.Job? = null
+    private var scanOriginSec: Double? = null
+
+    /**
+     * Scans while a seek button is held: jump a step, play a slice, jump again. See [ScanPlan].
+     *
+     * A paused player starts, because the point is to hear where the scan is. It keeps
+     * playing after [stopScan]: the listener let go because they found the place.
+     */
+    fun startScan(forward: Boolean) {
+        scanJob?.cancel()
+        scanEndJob?.cancel()
+        scanJob = scope.launch {
+            val player = controller()
+            val context = stateHolder.nowPlaying.value ?: return@launch
+            // A skip still settling is where the scan starts from, not something to apply later.
+            seekJob?.cancel()
+            val pending = pendingSeekMutex.withLock { pendingSeekTargetSec.also { pendingSeekTargetSec = null } }
+            var target = pending ?: playerAbsoluteSec()
+            scanOriginSec = target
+            stateHolder.scanning = true
+            if (!player.playWhenReady) player.play()
+
+            val startedAtMs = android.os.SystemClock.elapsedRealtime()
+            while (true) {
+                val heldMs = android.os.SystemClock.elapsedRealtime() - startedAtMs
+                val next = ScanPlan.nextTarget(target, forward, ScanPlan.stepSec(heldMs), context.durationSec)
+                    ?: break
+                target = next
+                seekPlayer(player, context, target)
+                pushState()
+                delay(ScanPlan.SLICE_MS)
+            }
+        }
+    }
+
+    /** The button is let go. Records the whole scan as one jump, so the history can undo it. */
+    fun stopScan() {
+        val job = scanJob ?: return
+        scanJob = null
+        job.cancel()
+        val origin = scanOriginSec
+        scanOriginSec = null
+        scanEndJob = scope.launch {
+            val context = stateHolder.nowPlaying.value
+            if (origin != null && context != null) {
+                val end = playerAbsoluteSec()
+                val account = authRepository.account()
+                if (account != null) {
+                    withContext(Dispatchers.IO) {
+                        progressRepository.recordJump(
+                            account = account,
+                            itemId = context.libraryItemId,
+                            episodeId = context.episodeId,
+                            fromSec = origin,
+                            toSec = end,
+                            reason = if (end < origin) SeekReasons.SCAN_BACK else SeekReasons.SCAN_FORWARD,
+                        )
+                    }
+                }
+            }
+            // The last seek reaches the service through the controller. Wait for it, so the
+            // service does not record it as a jump of its own.
+            delay(SCAN_SETTLE_MS)
+            stateHolder.scanning = false
+        }
+    }
+
+    private fun seekPlayer(player: MediaController, context: NowPlaying?, absoluteSec: Double) {
+        if (context == null || context.tracks.size <= 1) {
+            player.seekTo((absoluteSec * 1000).toLong())
+        } else {
+            val position = AbsoluteTiming.toTrack(context.tracks, absoluteSec)
+            player.seekTo(position.trackIndex, position.positionMs)
+        }
+    }
+
     private suspend fun commitPendingSeek() {
         val target = pendingSeekMutex.withLock { pendingSeekTargetSec } ?: return
         // The direction of the whole flurry of presses, from where the player still is:
@@ -495,12 +573,7 @@ class PlaybackConnection @Inject constructor(
         val player = controller()
         val context = stateHolder.nowPlaying.value
         stateHolder.seekReasons.expect(reason, absoluteSec)
-        if (context == null || context.tracks.size <= 1) {
-            player.seekTo((absoluteSec * 1000).toLong())
-        } else {
-            val position = AbsoluteTiming.toTrack(context.tracks, absoluteSec)
-            player.seekTo(position.trackIndex, position.positionMs)
-        }
+        seekPlayer(player, context, absoluteSec)
     }
 
     fun seekTo(absoluteSec: Double) {
@@ -678,6 +751,9 @@ class PlaybackConnection @Inject constructor(
 
         /** How long presses are allowed to accumulate before a seek is issued. */
         const val SEEK_SETTLE_MS = 350L
+
+        /** How long the service ignores seeks after a scan ends. See [stopScan]. */
+        const val SCAN_SETTLE_MS = 1_000L
 
         /** Chapter buttons fall back to a plain skip when an item has no chapters. */
         const val SKIP_BACK_FALLBACK_SEC = 30.0

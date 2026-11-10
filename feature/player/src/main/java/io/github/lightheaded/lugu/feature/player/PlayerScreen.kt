@@ -4,6 +4,15 @@ import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
@@ -464,6 +473,8 @@ private fun PortraitPlayerContent(
             onNextChapter = viewModel::nextChapter,
             onSeekBack = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
             onSeekForward = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+            onScan = viewModel::startScan,
+            onScanEnd = viewModel::stopScan,
             onTogglePlayPause = viewModel::togglePlayPause,
         )
 
@@ -597,6 +608,8 @@ private fun LandscapePlayerContent(
                 onNextChapter = viewModel::nextChapter,
                 onSeekBack = { viewModel.seekBy(-settings.skipBackSec.toDouble()) },
                 onSeekForward = { viewModel.seekBy(settings.skipForwardSec.toDouble()) },
+                onScan = viewModel::startScan,
+                onScanEnd = viewModel::stopScan,
                 onTogglePlayPause = viewModel::togglePlayPause,
             )
 
@@ -768,7 +781,11 @@ private fun SeekBar(
     }
 }
 
-/** Previous chapter, seek back, play/pause, seek forward, next chapter. */
+/**
+ * Previous chapter, seek back, play/pause, seek forward, next chapter.
+ *
+ * A tap on a seek button skips. A hold scans, with the audio playing, until it is let go.
+ */
 @Composable
 private fun TransportRow(
     isPlaying: Boolean,
@@ -780,6 +797,8 @@ private fun TransportRow(
     onNextChapter: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
+    onScan: (forward: Boolean) -> Unit,
+    onScanEnd: () -> Unit,
     onTogglePlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -802,9 +821,10 @@ private fun TransportRow(
             }
         }
 
-        FilledTonalIconButton(
+        HoldToScanButton(
             onClick = onSeekBack,
-            modifier = Modifier.size(60.dp),
+            onScan = { onScan(false) },
+            onScanEnd = onScanEnd,
         ) {
             SeekIcon(
                 seconds = skipBackSec,
@@ -824,9 +844,10 @@ private fun TransportRow(
             )
         }
 
-        FilledTonalIconButton(
+        HoldToScanButton(
             onClick = onSeekForward,
-            modifier = Modifier.size(60.dp),
+            onScan = { onScan(true) },
+            onScanEnd = onScanEnd,
         ) {
             SeekIcon(
                 seconds = skipForwardSec,
@@ -849,6 +870,78 @@ private fun TransportRow(
             }
         }
     }
+}
+
+/**
+ * A seek button that skips on a tap and scans while it is held.
+ *
+ * The hold starts after the system's long-press time, with a haptic tick so the listener
+ * knows the scan began before they hear it. Letting go, or sliding off the button, ends it.
+ * The tap that a release would also fire is dropped after a scan, so letting go never skips
+ * on top of the scan.
+ */
+@Composable
+private fun HoldToScanButton(
+    onClick: () -> Unit,
+    onScan: () -> Unit,
+    onScanEnd: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val haptics = LocalHapticFeedback.current
+    val longPressMs = LocalViewConfiguration.current.longPressTimeoutMillis
+    val currentOnScan by rememberUpdatedState(onScan)
+    val currentOnScanEnd by rememberUpdatedState(onScanEnd)
+    val hold = remember { ScanHold() }
+
+    LaunchedEffect(interactionSource) {
+        var holdJob: Job? = null
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    hold.scanned = false
+                    holdJob?.cancel()
+                    holdJob = launch {
+                        delay(longPressMs)
+                        hold.scanning = true
+                        hold.scanned = true
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        currentOnScan()
+                    }
+                }
+                is PressInteraction.Release, is PressInteraction.Cancel -> {
+                    holdJob?.cancel()
+                    if (hold.scanning) {
+                        hold.scanning = false
+                        currentOnScanEnd()
+                    }
+                }
+            }
+        }
+    }
+    // A screen that goes away under a held finger never sees the release.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (hold.scanning) {
+                hold.scanning = false
+                currentOnScanEnd()
+            }
+        }
+    }
+
+    FilledTonalIconButton(
+        onClick = { if (hold.scanned) hold.scanned = false else onClick() },
+        interactionSource = interactionSource,
+        modifier = Modifier.size(60.dp),
+    ) {
+        content()
+    }
+}
+
+/** Plain fields, not state: nothing on screen reads them. */
+private class ScanHold {
+    var scanning = false
+    var scanned = false
 }
 
 /**
