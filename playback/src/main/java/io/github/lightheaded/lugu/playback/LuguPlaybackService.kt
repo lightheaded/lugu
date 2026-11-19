@@ -844,7 +844,12 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private fun openAppIntent(): PendingIntent {
         val launch = packageManager.getLaunchIntentForPackage(packageName)
-            ?.apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }
+            ?.apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                // A tap on the notification opens the player. The app's OpenPlayerIntent
+                // reads this name; :playback cannot see that module, so it is spelled out.
+                putExtra("io.github.lightheaded.lugu.extra.OPEN_PLAYER", true)
+            }
         return PendingIntent.getActivity(
             this,
             0,

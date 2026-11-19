@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class StartupState { Checking, SignedIn, SignedOut }
 
@@ -52,7 +54,11 @@ class StartupViewModel @Inject constructor(
             // the app on the splash screen, on every launch, and no launch can clear it.
             // The sign-in screen is the correct answer to every question this call cannot
             // answer, so it is the answer to a failure as well.
-            val signedIn = runCatching { authRepository.isSignedIn() }.getOrDefault(false)
+            // Off the main thread: the token store decrypts on read, and the splash waits
+            // on this answer.
+            val signedIn = withContext(Dispatchers.IO) {
+                runCatching { authRepository.isSignedIn() }.getOrDefault(false)
+            }
             _state.value = if (signedIn) StartupState.SignedIn else StartupState.SignedOut
         }
     }

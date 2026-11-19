@@ -9,6 +9,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -26,7 +34,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -65,9 +76,11 @@ import io.github.lightheaded.lugu.ui.LuguTheme
 import io.github.lightheaded.lugu.ui.PlaybackRecordScreen
 import io.github.lightheaded.lugu.ui.StatsScreen
 import io.github.lightheaded.lugu.ui.RequestNotificationPermission
+import io.github.lightheaded.lugu.ui.yieldCrashPrompt
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 @AndroidEntryPoint
@@ -89,6 +102,9 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingEpisode = MutableStateFlow<EpisodeTarget?>(null)
 
+    /** A tap on the media notification or the widget, parked like [pendingEpisode]. */
+    private val pendingOpenPlayer = MutableStateFlow(false)
+
     /**
      * The same signed-in check [LuguApp] waits on to pick a start destination — resolved
      * here too, so the splash screen below can hold on exactly as long as that check runs
@@ -106,14 +122,18 @@ class MainActivity : ComponentActivity() {
         splashScreen.setKeepOnScreenCondition { startup.state.value == StartupState.Checking }
         handleSearchIntent(intent)
         handleEpisodeIntent(intent)
+        // Not after a restore: the system hands the first intent over again then, and the
+        // listener who had moved on would be taken back to the player.
+        if (savedInstanceState == null) handlePlayerIntent(intent)
         handleOidcIntent(intent)
         setContent {
             LuguTheme {
-                RequestNotificationPermission()
                 LuguApp(
                     playback = playback,
                     pendingEpisode = pendingEpisode,
                     onEpisodeHandled = { pendingEpisode.value = null },
+                    pendingOpenPlayer = pendingOpenPlayer,
+                    onOpenPlayerHandled = { pendingOpenPlayer.value = false },
                     pendingOidcRedirect = pendingOidcRedirect,
                     onOidcHandled = { pendingOidcRedirect.value = null },
                 )
@@ -126,6 +146,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleSearchIntent(intent)
         handleEpisodeIntent(intent)
+        handlePlayerIntent(intent)
         handleOidcIntent(intent)
     }
 
@@ -147,6 +168,13 @@ class MainActivity : ComponentActivity() {
         intent?.removeExtra(NewEpisodeIntent.EXTRA_LIBRARY_ITEM_ID)
         intent?.removeExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
         pendingEpisode.value = target
+    }
+
+    /** The media notification or the widget, which open the player. Cleared once read. */
+    private fun handlePlayerIntent(intent: Intent?) {
+        if (!opensPlayer(intent)) return
+        intent?.removeExtra(OpenPlayerIntent.EXTRA_OPEN_PLAYER)
+        pendingOpenPlayer.value = true
     }
 
     /**
@@ -184,6 +212,101 @@ internal fun episodeTargetOf(intent: Intent?): EpisodeTarget? {
     val episodeId = intent.getStringExtra(NewEpisodeIntent.EXTRA_EPISODE_ID)
         ?.takeIf { it.isNotBlank() }
     return EpisodeTarget(itemId, episodeId)
+}
+
+/**
+ * The extra that makes a launch open the player.
+ *
+ * Set by the media notification's tap (`LuguPlaybackService.openAppIntent`, which spells
+ * the same string out, because `:playback` cannot see this module) and by the widget.
+ */
+internal object OpenPlayerIntent {
+    const val EXTRA_OPEN_PLAYER = "io.github.lightheaded.lugu.extra.OPEN_PLAYER"
+}
+
+/** Whether an intent asks for the player. A free function, so a test needs no activity. */
+internal fun opensPlayer(intent: Intent?): Boolean =
+    intent?.getBooleanExtra(OpenPlayerIntent.EXTRA_OPEN_PLAYER, false) == true
+
+/**
+ * Opens the player, and only one of it.
+ *
+ * A play from a page that the player itself opened would otherwise stack a second player
+ * on the first, and Back would show the old one.
+ */
+private fun NavHostController.openPlayer() {
+    // Already on top: a second open would build the player again and close its sheets.
+    if (currentDestination?.route == Routes.PLAYER) return
+    navigate(Routes.PLAYER) {
+        launchSingleTop = true
+        popUpTo(Routes.PLAYER) { inclusive = true }
+    }
+}
+
+/**
+ * Navigates only from a page that has settled.
+ *
+ * During a transition the new page is not yet RESUMED, so a second tap on the same row
+ * does nothing, instead of pushing the same page twice.
+ */
+private fun NavHostController.navigateFromResumed(route: String) {
+    if (currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED) {
+        navigate(route)
+    }
+}
+
+private const val PAGE_MS = 230
+private const val PLAYER_MS = 300
+
+private fun NavBackStackEntry.isPlayer(): Boolean = destination.route == Routes.PLAYER
+
+/*
+ * Short and plain, so that two pages never show through each other for long. A page
+ * enters from the end side with a small slide and a fade, and Back mirrors it. The player
+ * comes up from the bottom and goes back down.
+ */
+private val pageEnter: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition = {
+    if (targetState.isPlayer()) {
+        slideInVertically(tween(PLAYER_MS)) { it } + fadeIn(tween(PLAYER_MS))
+    } else {
+        slideIntoContainer(
+            AnimatedContentTransitionScope.SlideDirection.Start,
+            tween(PAGE_MS),
+        ) { it / 10 } + fadeIn(tween(PAGE_MS))
+    }
+}
+
+private val pageExit: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition = {
+    if (targetState.isPlayer()) {
+        fadeOut(tween(PLAYER_MS))
+    } else {
+        slideOutOfContainer(
+            AnimatedContentTransitionScope.SlideDirection.Start,
+            tween(PAGE_MS),
+        ) { it / 10 } + fadeOut(tween(PAGE_MS))
+    }
+}
+
+private val pagePopEnter: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition = {
+    if (initialState.isPlayer()) {
+        fadeIn(tween(PLAYER_MS))
+    } else {
+        slideIntoContainer(
+            AnimatedContentTransitionScope.SlideDirection.End,
+            tween(PAGE_MS),
+        ) { it / 10 } + fadeIn(tween(PAGE_MS))
+    }
+}
+
+private val pagePopExit: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition = {
+    if (initialState.isPlayer()) {
+        slideOutVertically(tween(PLAYER_MS)) { it } + fadeOut(tween(PLAYER_MS))
+    } else {
+        slideOutOfContainer(
+            AnimatedContentTransitionScope.SlideDirection.End,
+            tween(PAGE_MS),
+        ) { it / 10 } + fadeOut(tween(PAGE_MS))
+    }
 }
 
 internal object Routes {
@@ -276,6 +399,8 @@ private fun LuguApp(
     playback: PlaybackConnection,
     pendingEpisode: StateFlow<EpisodeTarget?>,
     onEpisodeHandled: () -> Unit,
+    pendingOpenPlayer: StateFlow<Boolean>,
+    onOpenPlayerHandled: () -> Unit,
     pendingOidcRedirect: MutableStateFlow<String?>,
     onOidcHandled: () -> Unit,
     startViewModel: StartupViewModel = hiltViewModel(),
@@ -283,6 +408,7 @@ private fun LuguApp(
     val navController = rememberNavController()
     val startState by startViewModel.state.collectAsStateWithLifecycle()
     val episodeTarget by pendingEpisode.collectAsStateWithLifecycle()
+    val openPlayerRequested by pendingOpenPlayer.collectAsStateWithLifecycle()
     val oidcRedirect by pendingOidcRedirect.collectAsStateWithLifecycle()
 
     // Wait for the signed-in check before choosing a start destination, so a returning
@@ -323,10 +449,6 @@ private fun LuguApp(
         }
     }
 
-    // Offered once per crash, above whatever is on screen: the moment someone can say
-    // what they were doing is the moment right after it broke.
-    CrashPrompt(onOpenFeedback = { navController.navigate(Routes.FEEDBACK) })
-
     /*
      * The trim-skip undo, raised to the shell so it reaches the mini player and every
      * other screen, not only the full player. `pendingJump` is `PlaybackConnection`'s one
@@ -341,12 +463,21 @@ private fun LuguApp(
      * shell's copy is the only one left.
      */
     val shellSnackbarHostState = remember { SnackbarHostState() }
+
+    // Offered once per crash, in the shell's snackbar: the moment someone can say what
+    // they were doing is the moment right after it broke.
+    CrashPrompt(
+        snackbarHostState = shellSnackbarHostState,
+        onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
+    )
     val pendingJump by playback.pendingJump.collectAsStateWithLifecycle()
     val playerSettings by playback.settings.collectAsStateWithLifecycle(initialValue = PlayerSettings())
     val noticeMillis = playerSettings.noticeSeconds.coerceAtLeast(1) * 1000L
 
     LaunchedEffect(pendingJump, noticeMillis) {
         pendingJump?.let { pending ->
+            // The crash offer waits for an answer, and this notice cannot wait behind it.
+            shellSnackbarHostState.yieldCrashPrompt()
             val result = withTimeoutOrNull(noticeMillis) {
                 shellSnackbarHostState.showSnackbar(
                     message = "${pending.reason ?: "Jumped"} from " +
@@ -382,6 +513,15 @@ private fun LuguApp(
     // True where the destination draws the bottom of its own screen. Only Home does.
     val routeOwnsItsBottom = currentRoute == Routes.HOME
 
+    /*
+     * Asked when playback first starts, not at launch: on the sign-in screen the request
+     * explains nothing, and at the first play it is plainly about the playback controls.
+     */
+    val playerState by playback.state.collectAsStateWithLifecycle()
+    RequestNotificationPermission(
+        ask = playerState.isPlaying && currentRoute != null && currentRoute != Routes.LOGIN,
+    )
+
     val showShellMiniPlayer = currentRoute != null &&
         !routeOwnsItsBottom &&
         currentRoute != Routes.PLAYER &&
@@ -392,20 +532,28 @@ private fun LuguApp(
         // places it above `bottomBar` automatically, so it never sits over the mini
         // player, and it is nowhere near the fixed top controls (chips, browse links)
         // the Compose overlay rule in CLAUDE.md is about.
-        snackbarHost = { SnackbarHost(shellSnackbarHostState) },
+        // Home draws this host in its own Scaffold, above its tab bar and mini player. Here
+        // the bottom bar is empty on Home, so the snackbar would cover both.
+        snackbarHost = {
+            if (!routeOwnsItsBottom) SnackbarHost(shellSnackbarHostState)
+        },
         bottomBar = {
             // MiniPlayer itself renders nothing when there is nothing to play, so no
             // separate playable check is needed here — with no floor to draw either it
             // emits no layout node at all, and the padding below then falls back to the
             // system bar inset alone.
             if (showShellMiniPlayer) {
-                MiniPlayer(onOpen = { navController.navigate(Routes.PLAYER) })
+                MiniPlayer(onOpen = { navController.openPlayer() })
             }
         },
     ) { shellPadding ->
         NavHost(
             navController = navController,
             startDestination = start,
+            enterTransition = pageEnter,
+            exitTransition = pageExit,
+            popEnterTransition = pagePopEnter,
+            popExitTransition = pagePopExit,
             /*
              * Reused by every destination without an edit of its own: each screen's own
              * Scaffold still asks for the system bar inset it always did, but that inset
@@ -460,38 +608,41 @@ private fun LuguApp(
             composable(Routes.HOME) {
                 val playerViewModel: PlayerViewModel = hiltViewModel()
                 HomeScreen(
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
-                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
-                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                    onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
-                    onOpenQueue = { navController.navigate(Routes.QUEUE) },
-                    onBrowse = { kind -> navController.navigate(Routes.browse(kind)) },
-                    onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
-                    onOpenEpisodes = { navController.navigate(Routes.ALL_EPISODES) },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
+                    onOpenSearch = { navController.navigateFromResumed(Routes.SEARCH) },
+                    onOpenSettings = { navController.navigateFromResumed(Routes.SETTINGS) },
+                    onOpenDownloads = { navController.navigateFromResumed(Routes.DOWNLOADS) },
+                    onOpenQueue = { navController.navigateFromResumed(Routes.QUEUE) },
+                    onBrowse = { kind -> navController.navigateFromResumed(Routes.browse(kind)) },
+                    onOpenCollections = { navController.navigateFromResumed(Routes.COLLECTIONS) },
+                    onOpenEpisodes = { navController.navigateFromResumed(Routes.ALL_EPISODES) },
                     // A shelf tap on something already in progress means "carry on", so it
                     // plays rather than opening a page and asking again.
                     onPlay = { itemId, episodeId ->
                         playerViewModel.play(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        navController.openPlayer()
                     },
                     // The same call as the shell's own bottom bar above, with Home's tab
                     // bar handed in as the floor under the mini player.
                     bottomBar = { tabBar ->
                         MiniPlayer(
-                            onOpen = { navController.navigate(Routes.PLAYER) },
+                            onOpen = { navController.openPlayer() },
                             floor = tabBar,
                         )
                     },
+                    // The shell's host, drawn by Home so that it sits above the tab bar.
+                    snackbarHost = { SnackbarHost(shellSnackbarHostState) },
+                    onOpenPlayer = { navController.openPlayer() },
                 )
             }
 
             composable(Routes.DOWNLOADS) {
                 DownloadsScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
                     // A downloaded episode opens its own page, not the show it is part of.
                     onOpenEpisode = { itemId, episodeId ->
-                        navController.navigate(Routes.episode(itemId, episodeId))
+                        navController.navigateFromResumed(Routes.episode(itemId, episodeId))
                     },
                 )
             }
@@ -504,7 +655,7 @@ private fun LuguApp(
                     // queue is a list of things to play, so that is what a tap must mean.
                     onPlay = { itemId, episodeId ->
                         playerViewModel.play(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        navController.openPlayer()
                     },
                 )
             }
@@ -518,16 +669,16 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     onPlay = { itemId, episodeId ->
                         playerViewModel.play(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        navController.openPlayer()
                     },
                     // A tap on an episode reads it; the row's own play button plays it.
                     onOpenEpisode = { itemId, episodeId ->
-                        navController.navigate(Routes.episode(itemId, episodeId))
+                        navController.navigateFromResumed(Routes.episode(itemId, episodeId))
                     },
                     // The author, series and narrator on an item page are links now that there
                     // is somewhere for them to lead.
                     onBrowseGroup = { kind, name ->
-                        navController.navigate(Routes.browseGroup(kind, name))
+                        navController.navigateFromResumed(Routes.browseGroup(kind, name))
                     },
                 )
             }
@@ -544,9 +695,9 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     onPlay = { itemId, episodeId ->
                         playerViewModel.play(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        navController.openPlayer()
                     },
-                    onOpenShow = { navController.navigate(Routes.item(it)) },
+                    onOpenShow = { navController.navigateFromResumed(Routes.item(it)) },
                 )
             }
 
@@ -557,7 +708,7 @@ private fun LuguApp(
                 BrowseScreen(
                     onBack = { navController.popBackStack() },
                     onOpenGroup = { kind, name ->
-                        navController.navigate(Routes.browseGroup(kind, name))
+                        navController.navigateFromResumed(Routes.browseGroup(kind, name))
                     },
                 )
             }
@@ -571,19 +722,19 @@ private fun LuguApp(
             ) {
                 BrowseGroupScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
                 )
             }
 
             composable(Routes.SEARCH) {
                 SearchScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
                     onOpenEpisode = { itemId, episodeId ->
-                        navController.navigate(Routes.episode(itemId, episodeId))
+                        navController.navigateFromResumed(Routes.episode(itemId, episodeId))
                     },
-                    onOpenGroup = { kind, name -> navController.navigate(Routes.browseGroup(kind, name)) },
-                    onOpenCollection = { navController.navigate(Routes.collection(it)) },
+                    onOpenGroup = { kind, name -> navController.navigateFromResumed(Routes.browseGroup(kind, name)) },
+                    onOpenCollection = { navController.navigateFromResumed(Routes.collection(it)) },
                 )
             }
 
@@ -593,10 +744,10 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     onPlay = { itemId, episodeId ->
                         playerViewModel.play(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        navController.openPlayer()
                     },
                     onOpenEpisode = { itemId, episodeId ->
-                        navController.navigate(Routes.episode(itemId, episodeId))
+                        navController.navigateFromResumed(Routes.episode(itemId, episodeId))
                     },
                 )
             }
@@ -606,11 +757,11 @@ private fun LuguApp(
                     onBack = { navController.popBackStack() },
                     // The cover and title lead to what plays (the episode, for a podcast), and
                     // the credit under them to the author or the show. See `PlayerLink`.
-                    onOpenLink = { navController.navigate(Routes.of(it)) },
+                    onOpenLink = { navController.navigateFromResumed(Routes.of(it)) },
                     // The same route Home's top bar opens, so the queue is one screen and
                     // not two. The player is where a listener asks "what is after this",
                     // and until now only Home could answer.
-                    onOpenQueue = { navController.navigate(Routes.QUEUE) },
+                    onOpenQueue = { navController.navigateFromResumed(Routes.QUEUE) },
                 )
             }
 
@@ -622,12 +773,12 @@ private fun LuguApp(
                             popUpTo(0) { inclusive = true }
                         }
                     },
-                    onOpenLicenses = { navController.navigate(Routes.LICENSES) },
-                    onOpenPlaybackRecord = { navController.navigate(Routes.PLAYBACK_RECORD) },
-                    onOpenStats = { navController.navigate(Routes.STATS) },
-                    onOpenAccounts = { navController.navigate(Routes.ACCOUNTS) },
-                    onOpenFeedback = { navController.navigate(Routes.FEEDBACK) },
-                    onOpenConnection = { navController.navigate(Routes.CONNECTION) },
+                    onOpenLicenses = { navController.navigateFromResumed(Routes.LICENSES) },
+                    onOpenPlaybackRecord = { navController.navigateFromResumed(Routes.PLAYBACK_RECORD) },
+                    onOpenStats = { navController.navigateFromResumed(Routes.STATS) },
+                    onOpenAccounts = { navController.navigateFromResumed(Routes.ACCOUNTS) },
+                    onOpenFeedback = { navController.navigateFromResumed(Routes.FEEDBACK) },
+                    onOpenConnection = { navController.navigateFromResumed(Routes.CONNECTION) },
                 )
             }
 
@@ -638,7 +789,7 @@ private fun LuguApp(
             composable(Routes.COLLECTIONS) {
                 CollectionsScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenCollection = { navController.navigate(Routes.collection(it)) },
+                    onOpenCollection = { navController.navigateFromResumed(Routes.collection(it)) },
                 )
             }
 
@@ -648,14 +799,14 @@ private fun LuguApp(
             ) {
                 CollectionScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenItem = { navController.navigate(Routes.item(it)) },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
                 )
             }
 
             composable(Routes.PLAYBACK_RECORD) {
                 PlaybackRecordScreen(
                     onBack = { navController.popBackStack() },
-                    onSendFeedback = { navController.navigate(Routes.FEEDBACK) },
+                    onSendFeedback = { navController.navigateFromResumed(Routes.FEEDBACK) },
                 )
             }
 
@@ -665,15 +816,18 @@ private fun LuguApp(
                     // Adding an account reuses the sign-in screen. On success it lands on
                     // Home with the new account active and the stack cleared, which is
                     // exactly what adding an account should do.
-                    onAddAccount = { navController.navigate(Routes.login()) },
+                    onAddAccount = { navController.navigateFromResumed(Routes.login()) },
                     // The same screen, filled in for that account, with its row, mirror and
                     // downloads left in place.
-                    onSignInAgain = { serverId -> navController.navigate(Routes.login(serverId)) },
+                    onSignInAgain = { serverId -> navController.navigateFromResumed(Routes.login(serverId)) },
                 )
             }
 
             composable(Routes.STATS) {
-                StatsScreen(onBack = { navController.popBackStack() })
+                StatsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenItem = { navController.navigateFromResumed(Routes.item(it)) },
+                )
             }
 
             composable(Routes.FEEDBACK) {
@@ -713,4 +867,26 @@ private fun LuguApp(
         }
         onEpisodeHandled()
     }
+
+    /*
+     * A tap on the media notification or the widget opens the player, on top of Home, so
+     * that Back reaches the library from a cold start too. It waits a moment for the
+     * session to say what is loaded. With nothing loaded, or nobody signed in, the tap
+     * opens the app where it was.
+     */
+    LaunchedEffect(openPlayerRequested, start) {
+        if (!openPlayerRequested) return@LaunchedEffect
+        if (start == Routes.HOME) {
+            val loaded = withTimeoutOrNull(PLAYER_WAIT_MS) {
+                playback.nowPlaying.first { it != null }
+            }
+            if (loaded != null && navController.currentDestination?.route != Routes.LOGIN) {
+                navController.openPlayer()
+            }
+        }
+        onOpenPlayerHandled()
+    }
 }
+
+/** How long a notification or widget tap waits for the session to report what is loaded. */
+private const val PLAYER_WAIT_MS = 2_000L

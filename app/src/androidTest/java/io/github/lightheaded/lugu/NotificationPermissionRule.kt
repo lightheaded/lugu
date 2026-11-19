@@ -7,9 +7,8 @@ import androidx.test.rule.GrantPermissionRule
 /**
  * Grants the notification permission before the activity under test launches.
  *
- * lugu asks for it on first launch, deliberately — the media notification *is* the player
- * for most of a listening session, so waiting until something plays would mean the first
- * book plays with no controls on the lock screen. On a phone that is a one-off dialog. On a
+ * lugu asks for it when playback first starts, because the media notification *is* the
+ * player for most of a listening session. On a phone that is a one-off dialog. On a
  * freshly created emulator it happens during every single test run, and the system's
  * permission dialog is a separate activity that comes up over the app: `MainActivity`
  * reaches RESUMED, is paused behind `GrantPermissionsActivity`, and Compose reports "no

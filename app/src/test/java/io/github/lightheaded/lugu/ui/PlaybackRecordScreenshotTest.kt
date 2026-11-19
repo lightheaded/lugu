@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.ui
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,12 +25,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
@@ -39,6 +37,8 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import io.github.lightheaded.lugu.core.sync.DiaryEntry
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
+import io.github.lightheaded.lugu.core.ui.LuguDarkColors
+import io.github.lightheaded.lugu.core.ui.LuguLightColors
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -130,9 +130,9 @@ class PlaybackRecordScreenshotTest {
 @Composable
 private fun ScreenshotTheme(dark: Boolean, content: @Composable () -> Unit) {
     val colors = if (dark) {
-        darkColorScheme(primary = Color(0xFFEDC08B), secondary = Color(0xFFD6C3AE))
+        LuguDarkColors
     } else {
-        lightColorScheme(primary = Color(0xFF7A5A36), secondary = Color(0xFF6B5D4D))
+        LuguLightColors
     }
     MaterialTheme(colorScheme = colors) {
         Surface(color = MaterialTheme.colorScheme.background, content = content)
@@ -196,10 +196,10 @@ private fun PlaybackRecordPreview(empty: Boolean) {
                 )
             }
             item {
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     FilledTonalButton(onClick = {}, enabled = days.isNotEmpty()) { Text("Copy") }
                     TextButton(onClick = {}) { Text("Send feedback") }

@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,20 +24,22 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -45,11 +47,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.sync.Clock
+import io.github.lightheaded.lugu.core.sync.DiaryEntry
 import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -74,22 +80,65 @@ class PlaybackRecordViewModel @Inject constructor(
     private val clock: Clock,
 ) : ViewModel() {
 
-    val state: StateFlow<PlaybackRecordUiState> = diary.entries
-        .map { entries ->
-            val now = clock.nowMs()
-            PlaybackRecordUiState(
-                summary = PlaybackRecord.summarise(entries, PlaybackRecord.startOfDay(now)),
-                days = PlaybackRecord.read(entries, now),
-            )
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlaybackRecordUiState())
+    /**
+     * The time of the newest line a Clear hid, or null when nothing waits on Undo.
+     *
+     * A Clear hides the record at once and deletes it only when the Undo offer ends. The
+     * diary has no way to write old lines back, so hiding is what makes Undo exact. Lines
+     * recorded during the offer stay in view.
+     */
+    private val clearedUpTo = MutableStateFlow<Long?>(null)
 
-    /** The whole record as text, for the clipboard. */
-    fun asText(): String = diary.asText()
+    val state: StateFlow<PlaybackRecordUiState> = combine(diary.entries, clearedUpTo) { all, cutoff ->
+        val entries = visible(all, cutoff)
+        val now = clock.nowMs()
+        PlaybackRecordUiState(
+            summary = PlaybackRecord.summarise(entries, PlaybackRecord.startOfDay(now)),
+            days = PlaybackRecord.read(entries, now),
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlaybackRecordUiState())
 
-    fun clear() {
-        viewModelScope.launch { diary.clear() }
+    /** The record as text, for the clipboard. Lines waiting to be cleared are left out. */
+    fun asText(): String = visible(diary.entries.value, clearedUpTo.value)
+        .joinToString("\n") { it.render() }
+
+    /**
+     * Hides the record now and returns the token for [undoClear] and [commitClear], or
+     * null when there is nothing to clear. A token from an older Clear does nothing.
+     */
+    fun clear(): Long? {
+        val newest = diary.entries.value.lastOrNull()?.atMs ?: return null
+        // A second Clear during the offer: the first one is final.
+        clearedUpTo.value?.let { commitClear(it) }
+        clearedUpTo.value = newest
+        return newest
     }
+
+    fun undoClear(token: Long) {
+        clearedUpTo.compareAndSet(token, null)
+    }
+
+    /** Deletes the record. Lines recorded during the offer go with it. */
+    fun commitClear(token: Long) {
+        if (clearedUpTo.value != token) return
+        viewModelScope.launch {
+            diary.clear()
+            clearedUpTo.compareAndSet(token, null)
+        }
+    }
+
+    /**
+     * Leaving the screen during the offer is the same as letting it run out. The view
+     * model's scope is already gone here, so the delete runs on a scope of its own.
+     */
+    override fun onCleared() {
+        if (clearedUpTo.value != null) {
+            CoroutineScope(Dispatchers.IO).launch { diary.clear() }
+        }
+    }
+
+    private fun visible(all: List<DiaryEntry>, cutoff: Long?): List<DiaryEntry> =
+        if (cutoff == null) all else all.filter { it.atMs > cutoff }
 }
 
 /**
@@ -113,7 +162,6 @@ fun PlaybackRecordScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var confirmingClear by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier,
@@ -148,10 +196,12 @@ fun PlaybackRecordScreen(
             }
 
             item {
-                Row(
+                // A FlowRow, so that with a large font the buttons wrap instead of
+                // squeezing their labels.
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     FilledTonalButton(
                         onClick = {
@@ -167,8 +217,29 @@ fun PlaybackRecordScreen(
                         Text("Copy")
                     }
                     TextButton(onClick = onSendFeedback) { Text("Send feedback") }
+                    // No confirmation: the record goes at once and Undo brings it back.
                     TextButton(
-                        onClick = { confirmingClear = true },
+                        onClick = {
+                            val token = viewModel.clear() ?: return@TextButton
+                            scope.launch {
+                                var undone = false
+                                try {
+                                    snackbarHostState.currentSnackbarData?.dismiss()
+                                    val result = snackbarHostState.showSnackbar(
+                                        message = "Record cleared",
+                                        actionLabel = "Undo",
+                                        withDismissAction = true,
+                                        duration = SnackbarDuration.Long,
+                                    )
+                                    undone = result == SnackbarResult.ActionPerformed
+                                } finally {
+                                    // Also when the screen is left during the offer: that
+                                    // cancels this coroutine, and the clear must still be
+                                    // final, or a feedback report would carry the lines.
+                                    if (undone) viewModel.undoClear(token) else viewModel.commitClear(token)
+                                }
+                            }
+                        },
                         enabled = !state.isEmpty,
                     ) {
                         Text("Clear the record")
@@ -181,7 +252,9 @@ fun PlaybackRecordScreen(
                     Text(
                         text = day.label,
                         style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 8.dp),
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .semantics { heading() },
                     )
                 }
                 itemsIndexed(
@@ -194,31 +267,6 @@ fun PlaybackRecordScreen(
         }
     }
 
-    if (confirmingClear) {
-        AlertDialog(
-            onDismissRequest = { confirmingClear = false },
-            title = { Text("Clear the record?") },
-            text = {
-                Text(
-                    "The record is the only evidence of a stop that has already happened. " +
-                        "Once it is gone it cannot be recovered.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.clear()
-                        confirmingClear = false
-                    },
-                ) {
-                    Text("Clear")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingClear = false }) { Text("Keep it") }
-            },
-        )
-    }
 }
 
 /**

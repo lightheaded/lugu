@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -237,7 +238,7 @@ class FeedbackViewModel @Inject constructor(
             appVersion = BuildConfig.VERSION_NAME,
             deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
             androidVersion = "${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
-            playbackActive = player.isPlaying || player.isBuffering,
+            playbackActive = player.isPlaying || player.isAudible || player.isBuffering,
             playerState = describe(player, nowPlaying),
             crashEventId = crashEventId,
         ),
@@ -257,8 +258,10 @@ class FeedbackViewModel @Inject constructor(
         append(
             when {
                 nowPlaying == null -> "nothing loaded"
-                player.isPlaying -> "playing"
+                player.isAudible -> "playing"
                 player.isBuffering -> "buffering"
+                // Meant to play, but no sound yet.
+                player.isPlaying -> "starting"
                 else -> "paused"
             },
         )
@@ -266,7 +269,10 @@ class FeedbackViewModel @Inject constructor(
             append(", at ${clock(player.positionSec)} of ${clock(player.durationSec)}")
             append(", speed ${player.speed}x")
         }
-        player.error?.let { append(", last error: $it") }
+        player.error?.let { message ->
+            append(", last error: $message")
+            player.errorDetail?.let { append(" ($it)") }
+        }
     }
 
     private fun clock(seconds: Double): String {
@@ -321,6 +327,8 @@ fun FeedbackScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    // Edge to edge: without this the keyboard covers Send.
+                    .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -361,6 +369,17 @@ fun FeedbackScreen(
                     payload = state.payload,
                     expanded = showingPayload,
                     onToggle = { showingPayload = !showingPayload },
+                )
+
+                // True as worded: the report has no name or account in it, there is no
+                // reply channel, and Redaction.scrub blanks every web address (and the
+                // token a URL carries) in the whole payload.
+                Text(
+                    text = "Feedback is anonymous and one-way. If you want a reply, put " +
+                        "your email in the text. Web addresses, and any token in them, " +
+                        "are blanked before it leaves the phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 if (state.crashReportingEnabled) {

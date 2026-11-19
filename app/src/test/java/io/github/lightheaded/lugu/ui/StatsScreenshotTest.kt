@@ -3,10 +3,7 @@ package io.github.lightheaded.lugu.ui
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -17,6 +14,8 @@ import io.github.lightheaded.lugu.core.model.ListeningStatsCalculator
 import io.github.lightheaded.lugu.core.model.LocalDayIndex
 import io.github.lightheaded.lugu.core.model.SessionPoint
 import io.github.lightheaded.lugu.core.model.TitleTotal
+import io.github.lightheaded.lugu.core.ui.LuguDarkColors
+import io.github.lightheaded.lugu.core.ui.LuguLightColors
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -196,9 +195,9 @@ class StatsScreenshotTest {
 @Composable
 private fun ScreenshotTheme(dark: Boolean, content: @Composable () -> Unit) {
     val colors = if (dark) {
-        darkColorScheme(primary = Color(0xFFEDC08B), secondary = Color(0xFFD6C3AE))
+        LuguDarkColors
     } else {
-        lightColorScheme(primary = Color(0xFF7A5A36), secondary = Color(0xFF6B5D4D))
+        LuguLightColors
     }
     MaterialTheme(colorScheme = colors) {
         Surface(color = MaterialTheme.colorScheme.background, content = content)

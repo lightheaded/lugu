@@ -1,6 +1,7 @@
 package io.github.lightheaded.lugu.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.intl.Locale as ComposeLocale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -102,11 +105,12 @@ class StatsViewModel @Inject constructor(
 @Composable
 fun StatsScreen(
     onBack: () -> Unit,
+    onOpenItem: (String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: StatsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    StatsContent(state = state, onBack = onBack, modifier = modifier)
+    StatsContent(state = state, onBack = onBack, onOpenItem = onOpenItem, modifier = modifier)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,12 +119,13 @@ fun StatsContent(
     state: StatsUiState,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenItem: (String) -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Listening") },
+                title = { Text("Listening stats") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -152,11 +157,15 @@ fun StatsContent(
                             Text(
                                 text = "Most listened",
                                 style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(top = 4.dp),
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .semantics { heading() },
                             )
                         }
                         stats.topTitles.forEach { title ->
-                            item(key = "title-${title.libraryItemId}") { TitleRow(title) }
+                            item(key = "title-${title.libraryItemId}") {
+                                TitleRow(title, onOpen = onOpenItem)
+                            }
                         }
                     }
                     item { LocalRecordNote() }
@@ -175,7 +184,10 @@ fun StatsContent(
  */
 @Composable
 private fun NothingYetCard() {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Nothing recorded yet", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -189,7 +201,8 @@ private fun NothingYetCard() {
 
 @Composable
 private fun TotalsCard(stats: ListeningStats) {
-    Card {
+    // Full width, so the cards line up instead of each wrapping its own text.
+    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = formatLength(stats.totalSeconds),
@@ -235,9 +248,13 @@ private fun DayChart(days: List<DayTotal>, busiestSeconds: Double) {
     // not observable, so a phone whose language changes under the app keeps the weekday
     // names it started with — and lint refuses it outright.
     val locale = Locale.forLanguageTag(ComposeLocale.current.toLanguageTag())
-    Card {
+    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("The last ${days.size} days", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = "The last ${days.size} days",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.semantics { heading() },
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -291,7 +308,7 @@ private fun DayChart(days: List<DayTotal>, busiestSeconds: Double) {
 
 @Composable
 private fun StreakCard(stats: ListeningStats) {
-    Card {
+    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = if (stats.currentStreakDays > 0) {
@@ -312,9 +329,13 @@ private fun StreakCard(stats: ListeningStats) {
 
 @Composable
 private fun SplitCard(stats: ListeningStats) {
-    Card {
+    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Books and podcasts", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = "Books and podcasts",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.semantics { heading() },
+            )
             Text(
                 text = "${formatLength(stats.bookSeconds)} of books · " +
                     "${formatLength(stats.podcastSeconds)} of podcasts",
@@ -325,9 +346,18 @@ private fun SplitCard(stats: ListeningStats) {
 }
 
 @Composable
-private fun TitleRow(title: TitleTotal) {
+private fun TitleRow(title: TitleTotal, onOpen: (String) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (title.libraryItemId.isNotBlank()) {
+                    Modifier.clickable { onOpen(title.libraryItemId) }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

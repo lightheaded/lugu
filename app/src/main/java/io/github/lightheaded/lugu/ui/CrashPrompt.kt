@@ -1,23 +1,12 @@
 package io.github.lightheaded.lugu.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +52,14 @@ class CrashPromptViewModel @Inject constructor(
         _pendingKey.value?.let(prefs::markAsked)
         _pendingKey.value = null
     }
+
+    /**
+     * Puts the offer away for this run without marking it asked, so the next launch offers
+     * it again. For when another notice took its place before the listener answered.
+     */
+    fun deferToNextLaunch() {
+        _pendingKey.value = null
+    }
 }
 
 /**
@@ -71,63 +68,56 @@ class CrashPromptViewModel @Inject constructor(
  * The moment right after a crash is the only moment someone remembers what they were
  * doing, which is why this is asked at launch rather than left for them to find in
  * Settings. It is equally the moment they are least willing to be interrupted, so it is a
- * banner over the bottom of whatever is on screen and never a dialog: nothing is blocked,
- * and ignoring it is a valid answer that costs nothing.
+ * snackbar and never a dialog: nothing is blocked, and ignoring it is a valid answer.
  *
- * Drawn in a [Popup] because it is composed before the navigation host and would otherwise
- * be painted underneath it. A popup is its own window, so it floats over the app without
- * the caller having to wrap anything.
+ * It goes through the shell's snackbar host, which sits above the mini player and Home's
+ * tab bar, so the offer does not cover the controls at the bottom as the old popup did.
+ * It stays until answered. A jump notice can take its place: see [yieldCrashPrompt].
  */
 @Composable
 fun CrashPrompt(
+    snackbarHostState: SnackbarHostState,
     onOpenFeedback: () -> Unit,
-    modifier: Modifier = Modifier,
     viewModel: CrashPromptViewModel = hiltViewModel(),
 ) {
     val pendingKey by viewModel.pendingKey.collectAsStateWithLifecycle()
-    if (pendingKey == null) return
-
-    Popup(
-        alignment = Alignment.BottomCenter,
-        // Not focusable, so it never takes the back button or the keyboard from the app
-        // behind it.
-        properties = PopupProperties(focusable = false),
-    ) {
-        Card(
-            modifier = modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            ),
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // One voice: lugu names itself, and the button is the reader's own action.
-                // An earlier wording said "me" for the app in the line and "me" for the
-                // reader on the button.
-                Text(
-                    text = "lugu crashed last time.",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                ) {
-                    TextButton(onClick = viewModel::acknowledge) { Text("Not now") }
-                    TextButton(
-                        onClick = {
-                            viewModel.acknowledge()
-                            onOpenFeedback()
-                        },
-                    ) {
-                        Text("Describe what happened")
-                    }
-                }
+    LaunchedEffect(pendingKey) {
+        if (pendingKey == null) return@LaunchedEffect
+        val visuals = CrashPromptVisuals()
+        val result = snackbarHostState.showSnackbar(visuals)
+        when {
+            result == SnackbarResult.ActionPerformed -> {
+                viewModel.acknowledge()
+                onOpenFeedback()
             }
+            visuals.yielded -> viewModel.deferToNextLaunch()
+            // Dismissed by the listener. Declining is an answer too.
+            else -> viewModel.acknowledge()
         }
     }
+}
+
+/**
+ * Takes the crash offer off the screen, if it shows, so that another notice can show now.
+ *
+ * The offer waits for an answer and the host shows one snackbar at a time, so a jump
+ * notice with Undo would otherwise wait behind it and time out unseen. A yielded offer is
+ * not counted as answered: the next launch offers it again.
+ */
+fun SnackbarHostState.yieldCrashPrompt() {
+    val current = currentSnackbarData ?: return
+    val visuals = current.visuals as? CrashPromptVisuals ?: return
+    visuals.yielded = true
+    current.dismiss()
+}
+
+// One voice: lugu names itself, and the action is the reader's own.
+private class CrashPromptVisuals : SnackbarVisuals {
+    override val message: String = "lugu crashed last time."
+    override val actionLabel: String = "Describe what happened"
+    override val withDismissAction: Boolean = true
+    override val duration: SnackbarDuration = SnackbarDuration.Indefinite
+
+    /** Set when another notice took the offer's place. */
+    var yielded: Boolean = false
 }

@@ -23,10 +23,11 @@ import androidx.glance.layout.padding
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.compose.ui.unit.dp
-import androidx.glance.action.actionStartActivity
+import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.action.actionSendBroadcast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lightheaded.lugu.MainActivity
+import io.github.lightheaded.lugu.OpenPlayerIntent
 import io.github.lightheaded.lugu.core.model.formatLengthCompact
 
 /**
@@ -92,7 +93,13 @@ private fun WidgetBody(item: WidgetItem?) {
             .background(GlanceTheme.colors.widgetBackground)
             .cornerRadius(16.dp)
             .padding(12.dp)
-            .clickable(actionStartActivity<MainActivity>()),
+            // Opens the player when something is loaded, and the app as it was otherwise.
+            .clickable(
+                actionStartActivity(
+                    android.content.Intent(LocalContext.current, MainActivity::class.java)
+                        .putExtra(OpenPlayerIntent.EXTRA_OPEN_PLAYER, true),
+                ),
+            ),
         verticalAlignment = Alignment.Vertical.CenterVertically,
     ) {
         if (item == null) {
