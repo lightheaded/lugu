@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.playback
 import android.content.ComponentName
 import android.content.Context
 import android.os.Bundle
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -40,7 +41,16 @@ import kotlinx.coroutines.withContext
 
 /** What the player screen renders. Positions are whole-book seconds, never per-track. */
 data class PlayerUiState(
+    /**
+     * Whether the transport shows Pause: the player means to play, or a start is promised.
+     *
+     * This is intent, not sound. It stays true while a stream stalls for data, so the
+     * button keeps saying Pause and a press pauses, which is what the listener sees. The
+     * rule is Media3's `Util.shouldShowPlayButton`, inverted, without the suppression case.
+     */
     val isPlaying: Boolean = false,
+    /** Whether audio is really moving now. False while the player waits for data. */
+    val isAudible: Boolean = false,
     val isBuffering: Boolean = false,
     val positionSec: Double = 0.0,
     val durationSec: Double = 0.0,
@@ -51,8 +61,48 @@ data class PlayerUiState(
     /** Position within the current chapter, which is how listeners think about place. */
     val chapterPositionSec: Double = 0.0,
     val chapterDurationSec: Double = 0.0,
+    /** One plain sentence for the listener. See [playbackErrorMessage]. */
     val error: String? = null,
+    /** The raw cause behind [error], for logs and feedback reports. Never shown. */
+    val errorDetail: String? = null,
 )
+
+/**
+ * One plain sentence for a Media3 playback error code.
+ *
+ * The listener sees this, not the code: "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED" says
+ * nothing they can act on. The code ranges are Media3's own groups: 3xxx parsing,
+ * 4xxx decoding, 5xxx audio output.
+ */
+internal fun playbackErrorMessage(errorCode: Int): String = when (errorCode) {
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> NO_CONNECTION_MESSAGE
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+    PlaybackException.ERROR_CODE_TIMEOUT,
+    -> TIMEOUT_MESSAGE
+    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+    PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+    -> "The server did not send the audio. Try again later."
+    PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+    PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+    PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+    in 3000..5999,
+    -> FILE_MESSAGE
+    else -> "Playback stopped. Try again."
+}
+
+/** The same, for a start that failed before the player had anything to play. */
+internal fun startErrorMessage(cause: Throwable): String = when {
+    cause is java.net.SocketTimeoutException -> TIMEOUT_MESSAGE
+    cause is java.io.IOException -> NO_CONNECTION_MESSAGE
+    cause is io.github.lightheaded.lugu.core.api.AbsHttpException -> "The server could not start this. Try again later."
+    cause.message == NOT_SIGNED_IN -> "Sign in to play."
+    else -> "Playback could not start. Try again."
+}
+
+private const val NO_CONNECTION_MESSAGE = "No connection. Downloaded books still play."
+private const val TIMEOUT_MESSAGE = "The server took too long to answer. Try again."
+private const val FILE_MESSAGE = "This file could not be played."
+private const val NOT_SIGNED_IN = "Not signed in"
 
 /**
  * The UI's handle on the playback service.
@@ -137,7 +187,7 @@ class PlaybackConnection @Inject constructor(
      * away the report of one that has already happened. Nothing is retried by it.
      */
     fun dismissError() {
-        _state.value = _state.value.copy(error = null)
+        _state.value = _state.value.copy(error = null, errorDetail = null)
     }
 
     init {
@@ -162,6 +212,12 @@ class PlaybackConnection @Inject constructor(
                     pushState()
                 }
 
+                // A pause or a play from the notification or a headset moves the intent,
+                // and the button follows it at once rather than at the next poll.
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    pushState()
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
                         clearStartPromise()
@@ -171,7 +227,10 @@ class PlaybackConnection @Inject constructor(
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     clearStartPromise()
-                    _state.value = _state.value.copy(error = error.errorCodeName)
+                    _state.value = _state.value.copy(
+                        error = playbackErrorMessage(error.errorCode),
+                        errorDetail = error.errorCodeName,
+                    )
                     pushState()
                 }
             },
@@ -197,7 +256,8 @@ class PlaybackConnection @Inject constructor(
         val chapters = context?.chapters.orEmpty()
         val chapter = Chapters.at(chapters, effectivePosition)
         _state.value = _state.value.copy(
-            isPlaying = player.isPlaying || startingPlayback,
+            isPlaying = showsPause(player) || startingPlayback,
+            isAudible = player.isPlaying,
             isBuffering = player.playbackState == Player.STATE_BUFFERING,
             positionSec = effectivePosition,
             durationSec = context?.durationSec ?: (player.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0),
@@ -294,7 +354,7 @@ class PlaybackConnection @Inject constructor(
             makeStartPromise()
             // Reported here rather than waiting for the next poll: the press that has to
             // be prevented is the one that arrives in the next half second.
-            _state.value = _state.value.copy(isPlaying = true, isBuffering = true, error = null)
+            _state.value = _state.value.copy(isPlaying = true, isBuffering = true, error = null, errorDetail = null)
             if (authRepository.account() == null) {
                 clearStartPromise()
                 pushState()
@@ -311,7 +371,8 @@ class PlaybackConnection @Inject constructor(
                     _state.value = _state.value.copy(
                         isBuffering = false,
                         isPlaying = false,
-                        error = outcome.cause.message ?: "Could not start playback",
+                        error = startErrorMessage(outcome.cause),
+                        errorDetail = outcome.cause.toString(),
                     )
                     pushState()
                 }
@@ -329,7 +390,7 @@ class PlaybackConnection @Inject constructor(
         // Read again rather than passed in: a sign-out can land while an earlier request
         // was resolving, and this is the read that the resolution acts for.
         val account = authRepository.account()
-            ?: return Result.failure(IllegalStateException("Not signed in"))
+            ?: return Result.failure(IllegalStateException(NOT_SIGNED_IN))
 
         val resolved = withContext(Dispatchers.IO) {
             mediaResolver.resolve(account, libraryItemId, episodeId)
@@ -395,10 +456,11 @@ class PlaybackConnection @Inject constructor(
      *
      * While the promise is held the button reads Pause, so a press has to mean pause even
      * though the player may not have started yet — anything else would leave the control
-     * doing the opposite of what it says.
+     * doing the opposite of what it says. For the same reason the test is the player's
+     * intent, not its sound: a stream that stalls for data still reads Pause.
      */
     fun togglePlayPause() = withController {
-        if (it.isPlaying || startingPlayback) {
+        if (showsPause(it) || startingPlayback) {
             clearStartPromise()
             requests.abandon()
             it.pause()
@@ -431,6 +493,12 @@ class PlaybackConnection @Inject constructor(
             }
         }
     }
+
+    /** Media3's `Util.shouldShowPlayButton`, inverted, without the suppression case. */
+    private fun showsPause(player: Player): Boolean =
+        player.playWhenReady &&
+            player.playbackState != Player.STATE_IDLE &&
+            player.playbackState != Player.STATE_ENDED
 
     private fun clearStartPromise() {
         startingPlayback = false

@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -52,7 +53,10 @@ internal fun PositionHistorySheet(
     onDismiss: () -> Unit,
 ) {
     val days = remember(history) { historyDays(history) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         LazyColumn(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             item {
                 Text("History", style = MaterialTheme.typography.titleMedium)

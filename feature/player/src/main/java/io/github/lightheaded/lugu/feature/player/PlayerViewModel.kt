@@ -27,7 +27,10 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToLong
 
 /**
  * Thin adapter over [PlaybackConnection].
@@ -207,9 +210,17 @@ class PlayerViewModel @Inject constructor(
      * The title is left blank on purpose: the repository names an unnamed bookmark after
      * its position, and naming it here as well would give the same bookmark two names
      * depending on where it was made.
+     *
+     * Returns the whole second the bookmark is stored at, so the screen can offer to name
+     * that bookmark at once. It is worked out here, before the write, because the write
+     * also waits for the server.
      */
-    fun addBookmark(title: String = "") = withBookmarkableItem { active, itemId ->
-        bookmarkRepository.add(active, itemId, state.value.positionSec, title)
+    fun addBookmark(title: String = ""): Long {
+        val timeSec = state.value.positionSec.coerceAtLeast(0.0).roundToLong()
+        withBookmarkableItem { active, itemId ->
+            bookmarkRepository.add(active, itemId, timeSec.toDouble(), title)
+        }
+        return timeSec
     }
 
     fun renameBookmark(timeSec: Long, title: String) = withBookmarkableItem { active, itemId ->
@@ -218,6 +229,12 @@ class PlayerViewModel @Inject constructor(
 
     fun removeBookmark(timeSec: Long) = withBookmarkableItem { active, itemId ->
         bookmarkRepository.remove(active, itemId, timeSec)
+    }
+
+    /** Undo of a delete: the same time and the same title come back. */
+    fun restoreBookmark(bookmark: Bookmark) = withBookmarkableItem { active, itemId ->
+        if (bookmark.libraryItemId != itemId) return@withBookmarkableItem
+        bookmarkRepository.add(active, itemId, bookmark.timeSec.toDouble(), bookmark.title)
     }
 
     fun undoJump() = connection.undoJump()
@@ -235,12 +252,21 @@ class PlayerViewModel @Inject constructor(
         transcodingDismissals.dismiss(now.libraryItemId, now.episodeId)
     }
 
+    /**
+     * One bookmark write at a time. A delete waits for the server, and an Undo pressed
+     * during that wait must not run beside it: the delete would then remove the row the
+     * Undo just wrote back.
+     */
+    private val bookmarkWrites = Mutex()
+
     private fun withBookmarkableItem(block: suspend (ActiveAccount, String) -> Unit) {
         viewModelScope.launch {
             val now = nowPlaying.value ?: return@launch
             if (now.episodeId != null) return@launch
             val active = authRepository.account() ?: return@launch
-            withContext(Dispatchers.IO) { block(active, now.libraryItemId) }
+            bookmarkWrites.withLock {
+                withContext(Dispatchers.IO) { block(active, now.libraryItemId) }
+            }
         }
     }
 }

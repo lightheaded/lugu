@@ -2,6 +2,7 @@ package io.github.lightheaded.lugu.feature.player
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -21,16 +24,24 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.Bookmark
@@ -59,9 +70,13 @@ internal fun BookmarkSheet(
     speed: Float,
     onSeek: (Double) -> Unit,
     onRename: (Long, String) -> Unit,
-    onDelete: (Long) -> Unit,
+    onDelete: (Bookmark) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    // The screen's own host. The sheet draws it again inside itself, because a delete's
+    // Undo has to be seen while the sheet is still open, and the screen's copy is behind
+    // the sheet. Both show the same snackbar, so it stays after the sheet closes.
+    snackbarHostState: SnackbarHostState? = null,
 ) {
     var renaming by remember { mutableStateOf<Bookmark?>(null) }
 
@@ -81,31 +96,37 @@ internal fun BookmarkSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         modifier = modifier,
     ) {
-        Column(Modifier.padding(horizontal = 24.dp)) {
-            Text("Bookmarks", style = MaterialTheme.typography.titleMedium)
-            Text(
-                if (bookmarks.isEmpty()) {
-                    "Nothing marked yet. The bookmark button saves wherever you are, and the " +
-                        "same bookmarks show up on the server and in every other client."
-                } else {
-                    "Tap a bookmark to go there"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        LazyColumn {
-            items(bookmarks, key = { it.timeSec }) { bookmark ->
-                BookmarkRow(
-                    bookmark = bookmark,
-                    speed = speed,
-                    onSeek = onSeek,
-                    onRename = { renaming = bookmark },
-                    onDelete = { onDelete(bookmark.timeSec) },
-                )
+        Box(Modifier.fillMaxWidth()) {
+            Column {
+                Column(Modifier.padding(horizontal = 24.dp)) {
+                    Text("Bookmarks", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (bookmarks.isEmpty()) {
+                            "Nothing marked yet. The bookmark button saves wherever you are, and the " +
+                                "same bookmarks show up on the server and in every other client."
+                        } else {
+                            "Tap a bookmark to go there"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                LazyColumn {
+                    items(bookmarks, key = { it.timeSec }) { bookmark ->
+                        BookmarkRow(
+                            bookmark = bookmark,
+                            speed = speed,
+                            onSeek = onSeek,
+                            onRename = { renaming = bookmark },
+                            onDelete = { onDelete(bookmark) },
+                        )
+                    }
+                    item { Spacer(Modifier.height(32.dp)) }
+                }
             }
-            item { Spacer(Modifier.height(32.dp)) }
+            // Over the list, never in it, so the rows do not move when it appears.
+            snackbarHostState?.let { SnackbarHost(it, Modifier.align(Alignment.BottomCenter)) }
         }
     }
 }
@@ -186,16 +207,23 @@ private fun BookmarkRow(
  * the way of the tap that people actually came for.
  */
 @Composable
-private fun RenameBookmarkDialog(
+internal fun RenameBookmarkDialog(
     bookmark: Bookmark,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var title by remember(bookmark.timeSec) { mutableStateOf(bookmark.title) }
+    // The name starts selected, so typing replaces it and one tap on the field keeps it.
+    var field by remember(bookmark.timeSec) {
+        mutableStateOf(TextFieldValue(bookmark.title, selection = TextRange(0, bookmark.title.length)))
+    }
+    val focus = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename bookmark") },
         text = {
+            // Opened to type a name, so the keyboard comes up with it. Asked from inside
+            // the dialog, because the field is not attached before its window is.
+            LaunchedEffect(bookmark.timeSec) { focus.requestFocus() }
             Column {
                 Text(
                     formatClock(bookmark.timeSec.toDouble()),
@@ -204,16 +232,19 @@ private fun RenameBookmarkDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
+                    value = field,
+                    onValueChange = { field = it },
                     singleLine = true,
                     label = { Text("Name") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onConfirm(field.text) }),
+                    modifier = Modifier.focusRequester(focus),
                 )
             }
         },
         // An empty name is left to the repository, which names a bookmark after its
         // position. Clearing the field is a reasonable way to ask for that back.
-        confirmButton = { TextButton(onClick = { onConfirm(title) }) { Text("Save") } },
+        confirmButton = { TextButton(onClick = { onConfirm(field.text) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

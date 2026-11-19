@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,15 +28,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ModalBottomSheet
@@ -56,6 +63,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +85,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -85,7 +95,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -93,6 +102,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import io.github.lightheaded.lugu.core.model.Bookmark
 import io.github.lightheaded.lugu.core.model.SleepTimerState
 import io.github.lightheaded.lugu.core.model.formatClock
 import io.github.lightheaded.lugu.core.model.formatLength
@@ -258,20 +268,63 @@ fun PlayerScreen(
                 showBookmarkSheet = false
             },
             onRename = viewModel::renameBookmark,
-            onDelete = viewModel::removeBookmark,
+            // Deleted at once, with Undo, as every other change on this screen is.
+            onDelete = { bookmark ->
+                viewModel.removeBookmark(bookmark.timeSec)
+                scope.launch {
+                    // A second delete replaces the first notice rather than queueing behind
+                    // it and timing out unseen. The first delete stays.
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    val result = withTimeoutOrNull(noticeMillis) {
+                        snackbarHostState.showSnackbar(
+                            message = "Bookmark deleted",
+                            actionLabel = "Undo",
+                            withDismissAction = true,
+                            duration = SnackbarDuration.Indefinite,
+                        )
+                    }
+                    if (result == SnackbarResult.ActionPerformed) viewModel.restoreBookmark(bookmark)
+                }
+            },
             onDismiss = { showBookmarkSheet = false },
+            snackbarHostState = snackbarHostState,
+        )
+    }
+
+    // The bookmark the "Name" action opened, renamed here rather than in the sheet: the
+    // listener should not have to find it in a list they did not open.
+    var naming by remember { mutableStateOf<Bookmark?>(null) }
+    naming?.let { bookmark ->
+        RenameBookmarkDialog(
+            bookmark = bookmark,
+            onConfirm = { title ->
+                viewModel.renameBookmark(bookmark.timeSec, title)
+                naming = null
+            },
+            onDismiss = { naming = null },
         )
     }
 
     val addBookmark: () -> Unit = {
-        viewModel.addBookmark()
+        val timeSec = viewModel.addBookmark()
+        val itemId = nowPlaying?.libraryItemId.orEmpty()
         // The write lands in Room before the server hears about it, so the
         // confirmation is honest even with no signal.
         scope.launch {
-            snackbarHostState.showSnackbar(
-                "Bookmarked at ${formatClock(state.positionSec)}",
-                withDismissAction = true,
-            )
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = withTimeoutOrNull(noticeMillis) {
+                snackbarHostState.showSnackbar(
+                    message = "Bookmarked at ${formatClock(timeSec.toDouble())}",
+                    actionLabel = "Name",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
+            if (result == SnackbarResult.ActionPerformed) {
+                // The stored row, if it has arrived, so the field starts with its name.
+                naming = viewModel.bookmarks.value.firstOrNull { it.timeSec == timeSec }
+                    ?: Bookmark(libraryItemId = itemId, timeSec = timeSec, title = "", createdAtMs = 0L)
+            }
         }
     }
 
@@ -414,7 +467,19 @@ private fun PortraitPlayerContent(
             title = header.title,
             enabled = header.titleLink != null,
             onOpen = { header.titleLink?.let(onOpenLink) },
-            modifier = Modifier.fillMaxWidth(0.8f).aspectRatio(1f),
+            /*
+             * The cover is the one thing here that can give up space, so it does: it is
+             * measured last, from the height the rest leaves, and stays square. On a
+             * normal phone that height is more than 80% of the width, so the cover is the
+             * same size as before. On a small phone or at a large font it shrinks, and
+             * the transport stays on screen. wrapContentWidth turns the fixed 80% into a
+             * ceiling, so the square can be narrower than that.
+             */
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .fillMaxWidth(0.8f)
+                .wrapContentWidth()
+                .aspectRatio(1f, matchHeightConstraintsFirst = true),
         )
 
         Spacer(Modifier.height(24.dp))
@@ -465,6 +530,7 @@ private fun PortraitPlayerContent(
          */
         TransportRow(
             isPlaying = state.isPlaying,
+            isBuffering = state.isBuffering && state.isPlaying,
             chapterCount = state.chapterCount,
             playerButtons = settings.playerButtons,
             skipBackSec = settings.skipBackSec,
@@ -482,6 +548,7 @@ private fun PortraitPlayerContent(
         PlayerActionRow(
             speed = state.speed,
             sleepArmed = sleep.isArmed,
+            sleepMinutesLeft = sleepMinutesLeft(sleep, state.speed),
             canBookmark = canBookmark,
             onSpeed = onSpeed,
             onSleep = onSleep,
@@ -600,6 +667,7 @@ private fun LandscapePlayerContent(
             Spacer(Modifier.height(8.dp))
             TransportRow(
                 isPlaying = state.isPlaying,
+                isBuffering = state.isBuffering && state.isPlaying,
                 chapterCount = state.chapterCount,
                 playerButtons = settings.playerButtons,
                 skipBackSec = settings.skipBackSec,
@@ -617,6 +685,7 @@ private fun LandscapePlayerContent(
             PlayerActionRow(
                 speed = state.speed,
                 sleepArmed = sleep.isArmed,
+                sleepMinutesLeft = sleepMinutesLeft(sleep, state.speed),
                 canBookmark = canBookmark,
                 onSpeed = onSpeed,
                 onSleep = onSleep,
@@ -719,16 +788,36 @@ private fun ChapterReadout(
         modifier = Modifier
             .then(if (hidden) Modifier.alpha(0f).clearAndSetSemantics {} else Modifier)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = hasChapterList && !hidden, onClick = onOpen)
+            .clickable(
+                enabled = hasChapterList && !hidden,
+                onClickLabel = "Show chapters",
+                role = Role.Button,
+                onClick = onOpen,
+            )
             .padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // Takes what is left after the chevron, so a long title ellipsizes
+                // and the chevron stays on screen.
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            // Says the readout opens something. 16 dp is less than the title's line
+            // height, so the line is as tall with the chevron as without it.
+            if (hasChapterList) {
+                Icon(
+                    Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
         if (hasChapterList) {
             Text(
                 "Chapter ${chapterIndex + 1} of $chapterCount · " +
@@ -789,6 +878,7 @@ private fun SeekBar(
 @Composable
 private fun TransportRow(
     isPlaying: Boolean,
+    isBuffering: Boolean,
     chapterCount: Int,
     playerButtons: Set<TransportButton>,
     skipBackSec: Int,
@@ -802,71 +892,97 @@ private fun TransportRow(
     onTogglePlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (TransportButton.PREVIOUS_CHAPTER in playerButtons) {
-            IconButton(
-                onClick = onPreviousChapter,
-                enabled = chapterCount > 1,
-                modifier = Modifier.size(40.dp),
+    val showPrevious = TransportButton.PREVIOUS_CHAPTER in playerButtons
+    val showNext = TransportButton.NEXT_CHAPTER in playerButtons
+    BoxWithConstraints(modifier) {
+        /*
+         * On a narrow width (a small phone, half of a landscape screen, a large display
+         * size) every size here shrinks by one factor, so nothing is clipped and the order
+         * and the proportions stay. Where the row fits, the factor is 1 and nothing changes.
+         */
+        val chapterButtons = listOf(showPrevious, showNext).count { it }
+        val naturalWidth = 76.dp + 60.dp * 2 + 40.dp * chapterButtons + 8.dp * (2 + chapterButtons)
+        val scale = if (constraints.hasBoundedWidth) (maxWidth / naturalWidth).coerceAtMost(1f) else 1f
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp * scale),
+        ) {
+            if (showPrevious) {
+                IconButton(
+                    onClick = onPreviousChapter,
+                    enabled = chapterCount > 1,
+                    modifier = Modifier.size(40.dp * scale),
+                ) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = "Previous chapter",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            HoldToScanButton(
+                onClick = onSeekBack,
+                onScan = { onScan(false) },
+                onScanEnd = onScanEnd,
+                size = 60.dp * scale,
             ) {
-                Icon(
-                    Icons.Default.SkipPrevious,
-                    contentDescription = "Previous chapter",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                SeekIcon(
+                    seconds = skipBackSec,
+                    forward = false,
+                    description = "Back $skipBackSec seconds",
                 )
             }
-        }
 
-        HoldToScanButton(
-            onClick = onSeekBack,
-            onScan = { onScan(false) },
-            onScanEnd = onScanEnd,
-        ) {
-            SeekIcon(
-                seconds = skipBackSec,
-                forward = false,
-                description = "Back $skipBackSec seconds",
-            )
-        }
+            // The box has the button's size, so the ring below cannot make the row grow.
+            Box(Modifier.size(76.dp * scale), contentAlignment = Alignment.Center) {
+                FilledIconButton(
+                    onClick = onTogglePlayPause,
+                    modifier = Modifier.size(76.dp * scale),
+                ) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.size(38.dp * scale),
+                    )
+                }
+                // Waiting for data: a thin ring just outside the button. requiredSize lets
+                // it draw past the box.
+                if (isBuffering) {
+                    CircularProgressIndicator(
+                        strokeWidth = 3.dp,
+                        modifier = Modifier
+                            .requiredSize(84.dp * scale)
+                            .clearAndSetSemantics { contentDescription = "Loading" },
+                    )
+                }
+            }
 
-        FilledIconButton(
-            onClick = onTogglePlayPause,
-            modifier = Modifier.size(76.dp),
-        ) {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Play",
-                modifier = Modifier.size(38.dp),
-            )
-        }
-
-        HoldToScanButton(
-            onClick = onSeekForward,
-            onScan = { onScan(true) },
-            onScanEnd = onScanEnd,
-        ) {
-            SeekIcon(
-                seconds = skipForwardSec,
-                forward = true,
-                description = "Forward $skipForwardSec seconds",
-            )
-        }
-
-        if (TransportButton.NEXT_CHAPTER in playerButtons) {
-            IconButton(
-                onClick = onNextChapter,
-                enabled = chapterCount > 1,
-                modifier = Modifier.size(40.dp),
+            HoldToScanButton(
+                onClick = onSeekForward,
+                onScan = { onScan(true) },
+                onScanEnd = onScanEnd,
+                size = 60.dp * scale,
             ) {
-                Icon(
-                    Icons.Default.SkipNext,
-                    contentDescription = "Next chapter",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                SeekIcon(
+                    seconds = skipForwardSec,
+                    forward = true,
+                    description = "Forward $skipForwardSec seconds",
                 )
+            }
+
+            if (showNext) {
+                IconButton(
+                    onClick = onNextChapter,
+                    enabled = chapterCount > 1,
+                    modifier = Modifier.size(40.dp * scale),
+                ) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = "Next chapter",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -885,6 +1001,7 @@ private fun HoldToScanButton(
     onClick: () -> Unit,
     onScan: () -> Unit,
     onScanEnd: () -> Unit,
+    size: Dp = 60.dp,
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -932,7 +1049,7 @@ private fun HoldToScanButton(
     FilledTonalIconButton(
         onClick = { if (hold.scanned) hold.scanned = false else onClick() },
         interactionSource = interactionSource,
-        modifier = Modifier.size(60.dp),
+        modifier = Modifier.size(size),
     ) {
         content()
     }
@@ -1043,6 +1160,7 @@ fun MiniPlayer(
                     else -> 0f
                 },
                 isPlaying = state.isPlaying,
+                isBuffering = state.isBuffering && state.isPlaying,
                 onOpen = onOpen,
                 onPlayPause = viewModel::togglePlayPause,
                 // The inset belongs to whatever is lowest on the screen.
@@ -1083,6 +1201,7 @@ internal fun MiniPlayerBar(
     onOpen: () -> Unit,
     onPlayPause: () -> Unit,
     modifier: Modifier = Modifier,
+    isBuffering: Boolean = false,
 ) {
     Column(
         modifier = modifier
@@ -1091,12 +1210,16 @@ internal fun MiniPlayerBar(
     ) {
         LinearProgressIndicator(
             progress = { progress },
-            modifier = Modifier.fillMaxWidth().height(2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                // Read as a share of the whole item, not a bare percent with no subject.
+                .semantics { stateDescription = "${(progress.coerceIn(0f, 1f) * 100).toInt()}% played" },
         )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpen)
+                .clickable(onClickLabel = "Open player", onClick = onOpen)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1126,10 +1249,22 @@ internal fun MiniPlayerBar(
                 )
             }
             IconButton(onClick = onPlayPause) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                    )
+                    // The same waiting ring as the full player, inside the button's
+                    // touch area, so the bar keeps its height.
+                    if (isBuffering) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier
+                                .requiredSize(36.dp)
+                                .clearAndSetSemantics {},
+                        )
+                    }
+                }
             }
         }
         HorizontalDivider(thickness = Dp.Hairline, color = MaterialTheme.colorScheme.outlineVariant)
@@ -1153,10 +1288,14 @@ internal fun SeekIcon(seconds: Int, forward: Boolean, description: String) {
         Canvas(modifier = Modifier.size(30.dp)) {
             drawSkipGlyph(forward = forward, tint = tint)
         }
+        // Sized in dp, not sp: the number lives inside a drawn arc of fixed size, and a
+        // larger font setting would push it into the arc. 11 dp fits two digits inside it.
+        val numberSize = with(LocalDensity.current) { 11.dp.toSp() }
         Text(
             seconds.toString(),
             style = MaterialTheme.typography.labelSmall,
-            fontSize = 9.sp,
+            fontSize = numberSize,
+            lineHeight = numberSize,
             maxLines = 1,
             softWrap = false,
         )
@@ -1223,7 +1362,10 @@ private fun SpeedSheet(
     onPick: (Float) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("Playback speed", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -1236,7 +1378,12 @@ private fun SpeedSheet(
                 presets.forEach { speed ->
                     FilterChip(
                         selected = kotlin.math.abs(current - speed) < 0.01f,
-                        onClick = { onPick(speed) },
+                        // A preset is a whole choice, so it closes the sheet. The stepper
+                        // below is a fine adjustment and leaves the sheet open.
+                        onClick = {
+                            onPick(speed)
+                            onDismiss()
+                        },
                         label = { Text("${formatSpeedNumber(speed)}x", maxLines = 1, softWrap = false) },
                     )
                 }
@@ -1251,9 +1398,8 @@ private fun SpeedSheet(
                 IconButton(
                     onClick = { onPick(slower) },
                     enabled = slower < current,
-                    modifier = Modifier.semantics { contentDescription = "Slower" },
                 ) {
-                    Text("−")
+                    Icon(Icons.Default.Remove, contentDescription = "Slower")
                 }
                 Text(
                     "${formatSpeedNumber(current)}x",
@@ -1265,9 +1411,8 @@ private fun SpeedSheet(
                 IconButton(
                     onClick = { onPick(faster) },
                     enabled = faster > current,
-                    modifier = Modifier.semantics { contentDescription = "Faster" },
                 ) {
-                    Text("+")
+                    Icon(Icons.Default.Add, contentDescription = "Faster")
                 }
             }
         }

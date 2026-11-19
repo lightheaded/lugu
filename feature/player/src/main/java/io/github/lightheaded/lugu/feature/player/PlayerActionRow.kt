@@ -11,6 +11,8 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.formatSpeedNumber
 
@@ -53,6 +56,8 @@ internal fun PlayerActionRow(
     onHistory: () -> Unit,
     onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier,
+    // Minutes left on an armed timer, or null when there is no figure to show.
+    sleepMinutesLeft: Int? = null,
 ) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
@@ -65,16 +70,42 @@ internal fun PlayerActionRow(
             leadingIcon = { Icon(Icons.Default.Speed, contentDescription = "Playback speed") },
         )
 
+        /*
+         * The time left is a badge on the icon, not text beside it. A badge is drawn over
+         * the button and takes no width, so the row does not move or wrap when the timer
+         * arms, and the time can be read without opening the sheet.
+         */
+        val minutesLeft = sleepMinutesLeft.takeIf { sleepArmed }
         IconButton(onClick = onSleep) {
-            Icon(
-                Icons.Default.Bedtime,
-                contentDescription = if (sleepArmed) "Sleep timer, running" else "Sleep timer",
-                tint = if (sleepArmed) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+            BadgedBox(
+                badge = {
+                    if (minutesLeft != null) {
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            // Read once, in the icon's description below.
+                            modifier = Modifier.clearAndSetSemantics {},
+                        ) {
+                            Text(if (minutesLeft <= 1) "<1m" else "${minutesLeft}m")
+                        }
+                    }
                 },
-            )
+            ) {
+                Icon(
+                    Icons.Default.Bedtime,
+                    contentDescription = when {
+                        !sleepArmed -> "Sleep timer"
+                        minutesLeft == null -> "Sleep timer, running"
+                        minutesLeft <= 1 -> "Sleep timer, less than a minute left"
+                        else -> "Sleep timer, $minutesLeft minutes left"
+                    },
+                    tint = if (sleepArmed) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
 
         /*
@@ -101,7 +132,8 @@ internal fun PlayerActionRow(
         IconButton(onClick = onHistory) {
             Icon(
                 Icons.Default.History,
-                contentDescription = "Where you were",
+                // The same name as the sheet it opens.
+                contentDescription = "History",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

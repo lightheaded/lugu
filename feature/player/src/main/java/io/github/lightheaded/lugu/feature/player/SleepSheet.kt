@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,7 +122,11 @@ internal fun SleepTimerSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = modifier) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = modifier,
+    ) {
         Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("Sleep timer", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -169,7 +175,8 @@ internal fun SleepTimerSheet(
             Spacer(Modifier.height(12.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 presets.forEach { minutes ->
-                    AssistChip(
+                    FilterChip(
+                        selected = timer.mode == SleepMode.Duration(minutes),
                         onClick = { onPick(SleepMode.Duration(minutes)) },
                         label = { Text("$minutes min") },
                     )
@@ -177,7 +184,8 @@ internal fun SleepTimerSheet(
             }
             if (hasChapters) {
                 Spacer(Modifier.height(12.dp))
-                AssistChip(
+                FilterChip(
+                    selected = timer.mode == SleepMode.EndOfChapter,
                     onClick = { onPick(SleepMode.EndOfChapter) },
                     label = { Text("End of chapter") },
                 )
@@ -198,7 +206,8 @@ internal fun SleepTimerSheet(
                 Spacer(Modifier.height(12.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     counts.forEach { count ->
-                        AssistChip(
+                        FilterChip(
+                            selected = timer.mode == SleepMode.Chapters(count),
                             onClick = { onPick(SleepMode.Chapters(count)) },
                             label = { Text("$count chapters") },
                         )
@@ -220,8 +229,14 @@ internal fun SleepTimerSheet(
  * out by the speed.
  */
 private fun remainingLabel(timer: SleepTimerState, speed: Float): String {
-    val remaining = timer.remainingSec ?: return "Timer armed"
+    val minutes = sleepMinutesLeft(timer, speed) ?: return "Timer armed"
     if (timer.isFading) return "Fading out now"
-    val minutes = ceil(wallClockSecondsAt(remaining, speed) / 60.0).toInt()
     return if (minutes <= 1) "Less than a minute left" else "About $minutes minutes left"
+}
+
+/** Whole minutes of the listener's evening left on the timer, rounded up. Null when unknown. */
+internal fun sleepMinutesLeft(timer: SleepTimerState, speed: Float): Int? {
+    if (!timer.isArmed) return null
+    val remaining = timer.remainingSec ?: return null
+    return ceil(wallClockSecondsAt(remaining, speed) / 60.0).toInt()
 }
