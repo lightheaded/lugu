@@ -104,6 +104,7 @@ class SettingsViewModel @Inject constructor(
     private val companionDevices: CompanionDevices,
     private val pairedDevices: PairedDevices,
     private val connectionPrefs: ConnectionPrefs,
+    private val accountSignOut: AccountSignOut,
     private val credentialLosses: CredentialLossReport = CredentialLossReport(),
 ) : ViewModel() {
 
@@ -438,5 +439,33 @@ class SettingsViewModel @Inject constructor(
     fun setShelvesFollowLibrary(enabled: Boolean) =
         viewModelScope.launch { libraryPrefs.setShelvesFollowLibrary(enabled) }
 
-    fun signOut() = viewModelScope.launch { authRepository.logout() }
+    private val _signOut = MutableStateFlow(SignOutState())
+
+    /** Where a sign-out from this screen has got to. See [signOut]. */
+    val signOutState: StateFlow<SignOutState> = _signOut
+
+    /**
+     * Signs out of the account in use, downloads and all, through the same path as the
+     * Accounts screen.
+     *
+     * The screen leaves only once [SignOutState.done] is set. It used to leave at once, and
+     * leaving clears this view model, which cancelled the `/logout` call and the local
+     * clean-up half way — so an account row and its tokens could stay behind.
+     */
+    fun signOut() {
+        if (_signOut.value.busy || _signOut.value.done) return
+        _signOut.value = SignOutState(busy = true)
+        viewModelScope.launch {
+            accountSignOut.signOutOfActive()
+                .onSuccess { _signOut.value = SignOutState(done = true) }
+                .onFailure { _signOut.value = SignOutState(problem = "Signing out did not finish. Try again.") }
+        }
+    }
 }
+
+/** A sign-out from Settings: running, finished, or stopped with a [problem] to show. */
+data class SignOutState(
+    val busy: Boolean = false,
+    val done: Boolean = false,
+    val problem: String? = null,
+)

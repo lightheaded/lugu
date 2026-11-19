@@ -13,11 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -201,17 +203,15 @@ fun LoginScreen(
                 viewModel.checkServer()
                 focusManager.moveFocus(FocusDirection.Down)
             }),
-            // Offered only while the address came from memory. An icon in the field rather
-            // than a button under it, so it can come and go without moving anything.
-            trailingIcon = if (state.remembered) {
-                {
-                    IconButton(onClick = viewModel::forgetServer) {
-                        Icon(Icons.Default.Close, contentDescription = "Forget this server")
-                    }
-                }
+            // Icons in the field rather than lines under it, so each can come and go
+            // without moving anything: a spinner while the address is checked, a tick when
+            // a server answered, and "forget" while the address came from memory.
+            trailingIcon = if (state.isProbing || state.serverFound || state.remembered) {
+                { AddressFieldIcons(state, onForget = viewModel::forgetServer) }
             } else {
                 null
             },
+            enabled = !state.isBusy,
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {
@@ -257,6 +257,7 @@ fun LoginScreen(
                 autoCorrectEnabled = false,
                 imeAction = ImeAction.Next,
             ),
+            enabled = !state.isBusy,
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {
@@ -289,6 +290,8 @@ fun LoginScreen(
                 imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(onDone = { viewModel.submit() }),
+            // What is being sent cannot change while it is sent.
+            enabled = !state.isBusy,
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {
@@ -332,7 +335,7 @@ fun LoginScreen(
             enabled = state.canUseProvider,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Sign in with your provider")
+            Text("Sign in with single sign-on (OpenID)")
         }
 
         Spacer(Modifier.height(16.dp))
@@ -476,17 +479,10 @@ private fun LoginCertificateDialog(state: LoginUiState, viewModel: LoginViewMode
         title = { Text("Certificate password") },
         text = {
             Column {
-                OutlinedTextField(
+                CertificatePasswordField(
                     value = state.certificatePassword,
                     onValueChange = viewModel::onCertificatePasswordChange,
-                    label = { Text("Password") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                    ),
-                    modifier = Modifier.semantics { contentDescription = "Certificate password" },
+                    onDone = viewModel::confirmCertificate,
                 )
                 Spacer(Modifier.height(4.dp))
                 ReservedMessage(state.certificateProblem)
@@ -494,5 +490,70 @@ private fun LoginCertificateDialog(state: LoginUiState, viewModel: LoginViewMode
         },
         confirmButton = { TextButton(onClick = viewModel::confirmCertificate) { Text("Install") } },
         dismissButton = { TextButton(onClick = viewModel::cancelCertificate) { Text("Cancel") } },
+    )
+}
+
+/** The address field's trailing icons. See the comment where they are placed. */
+@Composable
+private fun AddressFieldIcons(state: LoginUiState, onForget: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        when {
+            state.isProbing -> CircularProgressIndicator(
+                modifier = Modifier
+                    .padding(horizontal = 12.dp)
+                    .size(20.dp)
+                    .semantics { contentDescription = "Checking the address" },
+                strokeWidth = 2.dp,
+            )
+            state.serverFound -> Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = state.serverVersionHint
+                    ?.let { "Server found, version $it" }
+                    ?: "Server found",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        }
+        if (state.remembered) {
+            IconButton(onClick = onForget) {
+                Icon(Icons.Default.Close, contentDescription = "Forget this server")
+            }
+        }
+    }
+}
+
+/**
+ * The password field of both certificate dialogs, with the same eye and the same Done as
+ * the sign-in password: an export password is long and typed blind, and Done that does
+ * nothing sends the thumb to look for Install.
+ */
+@Composable
+internal fun CertificatePasswordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDone: () -> Unit,
+) {
+    // Not saveable, for the reason the sign-in password gives.
+    var shown by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text("Password") },
+        singleLine = true,
+        visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { shown = !shown }) {
+                Icon(
+                    if (shown) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = if (shown) "Hide password" else "Show password",
+                )
+            }
+        },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(onDone = { onDone() }),
+        modifier = Modifier.semantics { contentDescription = "Certificate password" },
     )
 }

@@ -69,4 +69,35 @@ class SettingsIndexTest {
     fun `a query matching nothing returns nothing rather than everything`() {
         assertThat(SettingsIndex.filter(entries, "chromecast")).isEmpty()
     }
+
+    /**
+     * A heading is drawn over the first entry of its category only, so an entry declared
+     * away from the rest of its category landed under somebody else's heading: "Accounts"
+     * under "Diagnostics".
+     */
+    @Test
+    fun `results keep each category together, in the order the categories first appear`() {
+        val split = listOf(
+            entry("crash", "Diagnostics", "Send crash reports"),
+            entry("accounts", "Account", "Accounts"),
+            entry("record", "Diagnostics", "Why playback stopped"),
+            entry("version", "About", "Version"),
+        )
+
+        assertThat(SettingsIndex.filter(split, "").map { it.id })
+            .containsExactly("crash", "record", "accounts", "version")
+            .inOrder()
+    }
+
+    @Test
+    fun `a category declared in two places is reported as split`() {
+        val split = listOf(
+            entry("a", "Speed", "Default speed"),
+            entry("b", "Sound", "Skip silence"),
+            entry("c", "Speed", "Speed presets"),
+        )
+
+        assertThat(SettingsIndex.splitCategories(split)).containsExactly("Speed")
+        assertThat(SettingsIndex.splitCategories(entries)).isEmpty()
+    }
 }

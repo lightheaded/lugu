@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.ConnectionCertificate
 import io.github.lightheaded.lugu.core.api.ConnectionHeader
 import io.github.lightheaded.lugu.core.api.ConnectionHeaders
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
@@ -53,8 +56,17 @@ data class LoginUiState(
     val serverUrl: String = "",
     val username: String = "",
     val password: String = "",
+    /** A sign-in request is running. The fields and the buttons wait for it. */
     val isBusy: Boolean = false,
+    /**
+     * The address check that runs on Next is running. Kept apart from [isBusy]: nobody
+     * pressed Sign in, so the Sign in button must not spin for it.
+     */
+    val isProbing: Boolean = false,
     val error: String? = null,
+    /** An Audiobookshelf server answered at the address as it is typed now. */
+    val serverFound: Boolean = false,
+    /** The version it gave, when [serverFound] and it gave one. */
     val serverVersionHint: String? = null,
     val signedIn: Boolean = false,
     /**
@@ -64,6 +76,17 @@ data class LoginUiState(
      */
     val advancedOpen: Boolean = false,
     val headers: List<ConnectionHeader> = emptyList(),
+    /**
+     * The normalised address [headers] were read for, or null when none was read. Headers
+     * belong to one address, so a list read for one host must not be sent to another.
+     */
+    val headersAddress: String? = null,
+    /**
+     * The names of the headers typed on this screen. They are the listener's work for this
+     * sign-in, so they stay when the address changes. The others were read for one
+     * address and stay with it.
+     */
+    val typedHeaders: Set<String> = emptySet(),
     val revealed: Set<String> = emptySet(),
     val draft: HeaderDraft? = null,
     val draftProblem: String? = null,
@@ -133,6 +156,8 @@ class LoginViewModel @Inject constructor(
     private val connectionPrefs: ConnectionPrefs,
     private val credentialLosses: CredentialLossReport,
     private val signInMemory: SignInMemory,
+    /** For the address check, whose answer carries the server's version. */
+    private val client: AbsClient,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -178,6 +203,7 @@ class LoginViewModel @Inject constructor(
                 serverUrl = address ?: it.serverUrl,
                 username = lapsed?.username ?: last?.username ?: it.username,
                 headers = headers ?: it.headers,
+                headersAddress = if (headers != null) address else it.headersAddress,
                 remembered = lapsed == null && last != null,
                 lossNotice = lossNotice,
                 ready = true,
@@ -211,43 +237,70 @@ class LoginViewModel @Inject constructor(
     fun forgetServer() {
         signInMemory.forget()
         _state.update {
-            it.copy(serverUrl = "", username = "", headers = emptyList(), remembered = false, error = null)
+            it.copy(
+                serverUrl = "",
+                username = "",
+                headers = emptyList(),
+                headersAddress = null,
+                typedHeaders = emptySet(),
+                remembered = false,
+                error = null,
+            )
         }
     }
 
-    /**
-     * Changing the address also picks up any headers already stored for it, so somebody
-     * who signed out and came back is not asked to type their proxy credentials again.
-     * Only when nothing has been typed here yet: re-reading over a half-finished edit
-     * would delete work in front of them.
-     */
+    /** See [followAddress]. */
     fun onServerUrlChange(value: String) = _state.update { current ->
-        val stored = ServerUrl.normalise(value)
-            ?.takeIf { current.headers.isEmpty() }
-            ?.let(connectionPrefs::headers)
-        current.copy(serverUrl = value, error = null, headers = stored ?: current.headers, remembered = false)
+        followAddress(current, value, connectionPrefs::headers)
     }
 
     fun onUsernameChange(value: String) = _state.update { it.copy(username = value, error = null) }
 
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }
 
-    /** Separating "is this a server" from "are these the right credentials" makes errors honest. */
+    /**
+     * Separating "is this a server" from "are these the right credentials" makes errors honest.
+     *
+     * The same check as `AuthRepository.probe`, made here because its answer carries the
+     * server's version, and a success is worth showing: before, it showed nothing. An answer
+     * for an address that has been edited since is dropped, because it is about another one.
+     */
+    private var probe: Job? = null
+
     fun checkServer() {
         val url = _state.value.serverUrl
         if (url.isBlank()) return
         persistHeaders()
-        viewModelScope.launch {
-            _state.update { it.copy(isBusy = true) }
-            authRepository.probe(url)
-                .onSuccess { normalised ->
-                    _state.update { it.copy(isBusy = false, serverUrl = normalised, error = null) }
+        // One check at a time: an older one that ends first must not stop the spinner.
+        probe?.cancel()
+        probe = viewModelScope.launch {
+            _state.update { it.copy(isProbing = true, serverFound = false, serverVersionHint = null) }
+            val normalised = ServerUrl.normalise(url)
+            val outcome = if (normalised == null) {
+                Result.failure(IllegalArgumentException("That does not look like a server address"))
+            } else {
+                runCatching { client.status(normalised) }
+            }
+            // runCatching also catches the cancellation of a replaced check.
+            ensureActive()
+            _state.update { current ->
+                when {
+                    current.serverUrl != url -> current.copy(isProbing = false)
+                    outcome.isSuccess -> current.copy(
+                        isProbing = false,
+                        serverUrl = normalised ?: url,
+                        error = null,
+                        serverFound = true,
+                        serverVersionHint = outcome.getOrNull()?.serverVersion,
+                    )
+                    // A sign-in that started meanwhile reports its own outcome.
+                    current.isBusy -> current.copy(isProbing = false)
+                    else -> current.copy(
+                        isProbing = false,
+                        error = outcome.exceptionOrNull()?.message ?: "Could not reach that server",
+                    )
                 }
-                .onFailure { failure ->
-                    _state.update {
-                        it.copy(isBusy = false, error = failure.message ?: "Could not reach that server")
-                    }
-                }
+            }
         }
     }
 
@@ -374,7 +427,14 @@ class LoginViewModel @Inject constructor(
         val kept = _state.value.headers.filterNot {
             it.name.equals(name, ignoreCase = true) || it.name == draft.original
         }
-        _state.update { it.copy(headers = kept + ConnectionHeader(name, draft.value), draft = null) }
+        _state.update {
+            it.copy(
+                headers = kept + ConnectionHeader(name, draft.value),
+                typedHeaders = it.typedHeaders - draft.original.orEmpty() + name,
+                headersAddress = ServerUrl.normalise(it.serverUrl),
+                draft = null,
+            )
+        }
         persistHeaders()
     }
 
@@ -382,6 +442,8 @@ class LoginViewModel @Inject constructor(
         _state.update {
             it.copy(
                 headers = it.headers.filterNot { existing -> existing.name == header.name },
+                typedHeaders = it.typedHeaders - header.name,
+                headersAddress = ServerUrl.normalise(it.serverUrl),
                 revealed = it.revealed - header.name,
             )
         }
@@ -450,4 +512,39 @@ class LoginViewModel @Inject constructor(
     }
 
     // endregion
+}
+
+/**
+ * The state after the address field changed to [typed].
+ *
+ * The headers follow the address. Headers stored for an address are read in when it is
+ * typed, so somebody who signed out and came back is not asked for their proxy
+ * credentials again. And when a pre-filled address is edited into another one, the old
+ * address's headers go: kept, they would be saved under the new address and sent to it,
+ * which the connection screen promises never happens. Only the headers typed here stay
+ * whatever the address becomes, and they win over a stored header of the same name.
+ */
+internal fun followAddress(
+    current: LoginUiState,
+    typed: String,
+    storedHeaders: (String) -> List<ConnectionHeader>,
+): LoginUiState {
+    // What the check found was about the address before this edit.
+    val base = current.copy(
+        serverUrl = typed,
+        error = null,
+        remembered = false,
+        serverFound = false,
+        serverVersionHint = null,
+    )
+    val normalised = ServerUrl.normalise(typed)
+    if (normalised == current.headersAddress) return base
+    val own = current.headers.filter { it.name in current.typedHeaders }
+    val stored = normalised?.let(storedHeaders).orEmpty()
+        .filterNot { saved -> own.any { it.name.equals(saved.name, ignoreCase = true) } }
+    return base.copy(
+        headers = stored + own,
+        headersAddress = normalised,
+        revealed = current.revealed.intersect(current.typedHeaders),
+    )
 }

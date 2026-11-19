@@ -42,7 +42,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -378,17 +377,10 @@ private fun CertificatePasswordDialog(state: ConnectionUiState, viewModel: Conne
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                CertificatePasswordField(
                     value = state.certificatePassword,
                     onValueChange = viewModel::onCertificatePasswordChange,
-                    label = { Text("Password") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                    ),
-                    modifier = Modifier.semantics { contentDescription = "Certificate password" },
+                    onDone = viewModel::confirmCertificate,
                 )
                 Spacer(Modifier.height(4.dp))
                 ReservedMessage(state.certificateProblem)

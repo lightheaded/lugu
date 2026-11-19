@@ -41,24 +41,25 @@ internal fun settingsViewModelForTest(context: Context, database: LuguDatabase):
         positionHistoryDao = database.positionHistoryDao(),
         clock = WallClock(),
     )
+    val authRepository = AuthRepository(
+        client = client,
+        serverDao = database.serverDao(),
+        accountDataDao = database.accountDataDao(),
+        tokenStore = InMemoryAccountTokens(),
+        progressRepository = progressRepository,
+        serverUrlProvider = ActiveServerUrlProvider(
+            serverDao = database.serverDao(),
+            connectionPrefs = ConnectionPrefs(context),
+            // The probe never runs: there is no active server, so nothing is
+            // raced. It refuses anyway, so a change that did start probing would
+            // fail here rather than reach the network from a test.
+            race = ConnectionRace(probe = { _, _ -> false }),
+        ),
+    )
     return SettingsViewModel(
         prefs = PlaybackPrefs(context),
         downloadPrefs = DownloadPrefs(context),
-        authRepository = AuthRepository(
-            client = client,
-            serverDao = database.serverDao(),
-            accountDataDao = database.accountDataDao(),
-            tokenStore = InMemoryAccountTokens(),
-            progressRepository = progressRepository,
-            serverUrlProvider = ActiveServerUrlProvider(
-                serverDao = database.serverDao(),
-                connectionPrefs = ConnectionPrefs(context),
-                // The probe never runs: there is no active server, so nothing is
-                // raced. It refuses anyway, so a change that did start probing would
-                // fail here rather than reach the network from a test.
-                race = ConnectionRace(probe = { _, _ -> false }),
-            ),
-        ),
+        authRepository = authRepository,
         crashReportingPrefs = CrashReportingPrefs(context),
         queuePrefs = QueuePrefs(context),
         libraryPrefs = LibraryPrefs(context),
@@ -73,5 +74,7 @@ internal fun settingsViewModelForTest(context: Context, database: LuguDatabase):
         // the proof — the row appears in its ordinary wording rather than the screen going
         // blank. Take the guard out of `webClientReachable` and these pictures stop.
         connectionPrefs = ConnectionPrefs(context),
+        // No downloads exist in these tests, so there is nothing to remove.
+        accountSignOut = AccountSignOut(authRepository, removeDownloads = { _, _ -> }),
     )
 }

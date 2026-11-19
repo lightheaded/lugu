@@ -18,6 +18,7 @@ import com.google.common.truth.Truth.assertThat
 import io.github.lightheaded.lugu.core.db.LuguDatabase
 import io.github.lightheaded.lugu.core.sync.CrashReportingPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
+import io.github.lightheaded.lugu.core.sync.PlayerSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -130,6 +131,71 @@ class SettingsBehaviourTest {
             runCatching { compose.onNodeWithText("Tell me about new books").assertIsOn() }.isSuccess
         }
         assertThat(runBlocking { DownloadPrefs(context).current().notifyNewBooks }).isTrue()
+    }
+
+    /**
+     * The declaration the screen ships, not a copy: each category in one piece, so every
+     * entry sits under its own heading, and the categories in the order a listener looks.
+     * The switches that reveal more rows are on, so those rows are checked too.
+     */
+    @Test
+    fun `each category is declared in one piece, in the order a listener expects`() {
+        val everything = PlayerSettings().let {
+            it.copy(
+                speed = it.speed.copy(separatePodcastSpeed = true),
+                sleep = it.sleep.copy(shakeToExtend = true),
+            )
+        }
+        val entries = declaredEntries(SettingsUiState(settings = everything))
+
+        assertThat(SettingsIndex.splitCategories(entries)).isEmpty()
+        assertThat(entries.map { it.category }.distinct()).containsExactly(
+            "Speed",
+            "Skipping and buttons",
+            "Sleep timer",
+            "Sound",
+            "Up next",
+            "Podcast trimming",
+            "Library",
+            "Downloads",
+            "Streaming",
+            "Headphones and car",
+            "Notices and notifications",
+            "Account",
+            "Diagnostics",
+            "About",
+        ).inOrder()
+        assertThat(entries.map { it.id }).containsAtLeast("speed-podcast-default", "sleep-extend")
+    }
+
+    /** The time stays: the sleep sheet's Add chip uses it with shake off too. */
+    @Test
+    fun `with shake off, only how hard to shake is hidden`() {
+        val ids = declaredEntries(SettingsUiState()).map { it.id }
+
+        assertThat(ids).doesNotContain("sleep-shake-sensitivity")
+        assertThat(ids).contains("sleep-extend")
+    }
+
+    private fun declaredEntries(state: SettingsUiState): List<SettingEntry> {
+        var entries: List<SettingEntry> = emptyList()
+        compose.setContent {
+            MaterialTheme {
+                entries = settingEntries(
+                    state = state,
+                    signOut = SignOutState(),
+                    viewModel = viewModel,
+                    onOpenLicenses = {},
+                    onOpenPlaybackRecord = {},
+                    onOpenStats = {},
+                    onOpenAccounts = {},
+                    onOpenFeedback = {},
+                    onOpenConnection = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        return entries
     }
 
     /**

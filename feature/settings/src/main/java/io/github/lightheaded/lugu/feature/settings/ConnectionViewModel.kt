@@ -11,6 +11,7 @@ import io.github.lightheaded.lugu.core.api.ConnectionProbe
 import io.github.lightheaded.lugu.core.api.ConnectionRace
 import io.github.lightheaded.lugu.core.api.ProbeOutcome
 import io.github.lightheaded.lugu.core.api.ServerUrl
+import io.github.lightheaded.lugu.core.api.TransportFailure
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.ConnectionPrefs
 import javax.inject.Inject
@@ -143,16 +144,24 @@ class ConnectionViewModel @Inject constructor(
             val message = when (outcome) {
                 is ProbeOutcome.Answered -> {
                     val version = outcome.serverVersion?.let { " (version $it)" }.orEmpty()
-                    "An Audiobookshelf server answered$version. lugu will use this address " +
-                        "whenever it answers, and the other one when it does not."
+                    // A promise about what lugu will do is only true once the address is
+                    // saved, and the test is usually pressed before Save.
+                    if (normalised == _state.value.savedLanAddress) {
+                        "An Audiobookshelf server answered$version. lugu will use this address " +
+                            "whenever it answers, and the other one when it does not."
+                    } else {
+                        "An Audiobookshelf server answered$version. Save it and lugu will use " +
+                            "it whenever it answers, and the other one when it does not."
+                    }
                 }
 
                 ProbeOutcome.NotAudiobookshelf ->
                     "Something answered at that address, but it is not an Audiobookshelf server."
 
+                // The probe's reason is the network stack's own words, so it is translated
+                // rather than shown: the strip has two lines, and a class name fills them.
                 is ProbeOutcome.Silent ->
-                    "Nothing answered within ${ConnectionRace.DEFAULT_TIMEOUT_MS} milliseconds, " +
-                        "which is the same deadline lugu uses. Reason given: ${outcome.reason}"
+                    TransportFailure.describe(outcome.reason, ConnectionRace.DEFAULT_TIMEOUT_MS)
             }
             _state.update { it.copy(isTesting = false, testResult = message) }
         }

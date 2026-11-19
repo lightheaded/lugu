@@ -73,13 +73,14 @@ class SessionLapseTest {
     private lateinit var tokens: InMemoryAccountTokens
     private lateinit var auth: AuthRepository
     private lateinit var memory: SignInMemory
+    private lateinit var client: AbsClient
 
     @Before
     fun setUp() {
         database = Room.inMemoryDatabaseBuilder(context, LuguDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        val client = AbsClient(
+        client = AbsClient(
             serverUrlProvider = StaticServerUrlProvider(null),
             tokenStore = InMemoryTokenStore(),
             deviceInfo = DeviceInfoDto(deviceId = "session-lapse"),
@@ -293,6 +294,7 @@ class SessionLapseTest {
             connectionPrefs = ConnectionPrefs(context),
             credentialLosses = CredentialLossReport(),
             signInMemory = memory,
+            client = client,
             savedStateHandle = SavedStateHandle(
                 account?.let { mapOf(LoginArgs.ACCOUNT to LoginArgs.encode(it)) } ?: emptyMap(),
             ),

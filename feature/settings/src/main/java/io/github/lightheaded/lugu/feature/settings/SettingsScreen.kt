@@ -1,6 +1,9 @@
 package io.github.lightheaded.lugu.feature.settings
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.IntentSender
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,8 +55,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -75,14 +80,7 @@ import io.github.lightheaded.lugu.core.sync.SpeedSettings
 import io.github.lightheaded.lugu.core.sync.StreamSettings
 import io.github.lightheaded.lugu.core.sync.TransportButton
 import io.github.lightheaded.lugu.core.ui.ReservedMessage
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
-
-/**
- * How long the sign-out button stays armed. Long enough to reach with the same hand,
- * short enough that an armed button nobody meant to touch disarms before it is forgotten.
- */
-private const val SIGN_OUT_ARM_MILLIS = 4_000L
 
 /**
  * Settings, grouped by what the listener is trying to change rather than by which
@@ -109,10 +107,15 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val signOut by viewModel.signOutState.collectAsStateWithLifecycle()
+    // Here rather than beside the button, which a scroll can take out of composition.
+    LaunchedEffect(signOut.done) {
+        if (signOut.done) onSignedOut()
+    }
     val entries = settingEntries(
         state = state,
+        signOut = signOut,
         viewModel = viewModel,
-        onSignedOut = onSignedOut,
         onOpenLicenses = onOpenLicenses,
         onOpenPlaybackRecord = onOpenPlaybackRecord,
         onOpenStats = onOpenStats,
@@ -181,12 +184,18 @@ fun SettingsScreen(
  *
  * Kept as data rather than as a hand-written column so that search, ordering and
  * rendering all read from the same list.
+ *
+ * In the order a listener looks for things: how it plays first (speed, skipping, the sleep
+ * timer, sound), then what plays next and podcast trimming, then the library, downloads,
+ * streaming, headphones and the car, notices and notifications, and last the account,
+ * diagnostics and About. Each category is declared in one piece; `SettingsBehaviourTest`
+ * fails when one is split.
  */
 @Composable
-private fun settingEntries(
+internal fun settingEntries(
     state: SettingsUiState,
+    signOut: SignOutState,
     viewModel: SettingsViewModel,
-    onSignedOut: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenPlaybackRecord: () -> Unit,
     onOpenStats: () -> Unit,
@@ -205,150 +214,6 @@ private fun settingEntries(
     val openLink: (String) -> Unit = { address -> runCatching { uriHandler.openUri(address) } }
 
     return buildList {
-        add(
-            SettingEntry(
-                id = "skip-back",
-                category = "Skipping",
-                title = "Skip back",
-                keywords = "rewind back seconds jump replay again re-listen missed",
-            ) {
-                ChoiceRow(
-                    title = "Skip back",
-                    subtitle = "Used most often, to re-hear something missed",
-                    options = PlayerSettings.SKIP_CHOICES,
-                    selected = settings.skipBackSec,
-                    format = { "${it}s" },
-                    onSelect = viewModel::setSkipBack,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "skip-forward",
-                category = "Skipping",
-                title = "Skip forward",
-                keywords = "forward fast skip ahead seconds jump",
-            ) {
-                ChoiceRow(
-                    title = "Skip forward",
-                    subtitle = null,
-                    options = PlayerSettings.SKIP_CHOICES,
-                    selected = settings.skipForwardSec,
-                    format = { "${it}s" },
-                    onSelect = viewModel::setSkipForward,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "notice-duration",
-                category = "Notices",
-                title = "How long a notice stays up",
-                keywords = "toast snackbar popup message rewound jumped undo timeout dismiss duration",
-            ) {
-                ChoiceRow(
-                    title = "How long a notice stays up",
-                    subtitle = "Applies to the rewound and jumped notices, which carry an Undo",
-                    options = PlayerSettings.NOTICE_CHOICES,
-                    selected = settings.noticeSeconds,
-                    format = { "${it}s" },
-                    onSelect = viewModel::setNoticeSeconds,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "buttons-player",
-                category = "Buttons",
-                title = "Buttons in the player",
-                keywords = "controls transport chapter layout screen show hide",
-            ) {
-                ButtonPicker(
-                    title = "In the player",
-                    subtitle = "The skip pair is always shown. Choose what else appears.",
-                    selected = settings.playerButtons,
-                    onToggle = viewModel::togglePlayerButton,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "buttons-notification",
-                category = "Buttons",
-                title = "Buttons in the notification",
-                keywords = "notification lock screen controls headphones bluetooth chapter show " +
-                    "hide order arrange icons position",
-            ) {
-                OrderedButtonPicker(
-                    title = "In the notification",
-                    subtitle = "Tap in the order you want them. Space is tight here; fewer is " +
-                        "usually better.",
-                    selected = settings.notificationButtons,
-                    onToggle = viewModel::toggleNotificationButton,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "notification-persistence",
-                category = "Buttons",
-                title = "How long the notification stays",
-                keywords = "notification persistent disappears vanishes resume ready lock " +
-                    "screen paused shade sticky always",
-            ) {
-                ChoiceRow(
-                    title = "How long the notification stays",
-                    subtitle = "\"Always ready\" also loads the last thing you played when " +
-                        "lugu opens, so a headset button works straight away. It never " +
-                        "starts playing on its own.",
-                    options = NotificationPersistence.entries,
-                    selected = settings.notification,
-                    format = { it.label },
-                    onSelect = viewModel::setNotificationPersistence,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "headset-next",
-                category = "Headset buttons",
-                title = "What the next button does",
-                keywords = "headphones headset bluetooth remote watch next forward button press " +
-                    "avrcp car controls",
-            ) {
-                ChoiceRow(
-                    title = "What the next button does",
-                    subtitle = "A book has no tracks, so \"next\" has to mean something chosen",
-                    options = HeadsetAction.entries,
-                    selected = settings.headset.nextAction,
-                    format = { it.label },
-                    onSelect = viewModel::setHeadsetNextAction,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "headset-previous",
-                category = "Headset buttons",
-                title = "What the previous button does",
-                keywords = "headphones headset bluetooth remote watch previous back button press " +
-                    "avrcp car controls rewind",
-            ) {
-                ChoiceRow(
-                    title = "What the previous button does",
-                    subtitle = "Android's own default here seeks to zero on a single-file book, " +
-                        "which is how a forty-hour book loses its place to one press",
-                    options = HeadsetAction.entries,
-                    selected = settings.headset.previousAction,
-                    format = { it.label },
-                    onSelect = viewModel::setHeadsetPreviousAction,
-                )
-            },
-        )
-
         add(
             SettingEntry(
                 id = "speed-default",
@@ -441,123 +306,50 @@ private fun settingEntries(
 
         add(
             SettingEntry(
-                id = "skip-silence",
-                category = "Sound",
-                title = "Skip silence",
-                keywords = "silence gaps pauses trim shorten faster podcast dead air",
-            ) {
-                SwitchRow(
-                    title = "Skip silence",
-                    subtitle = "Shortens long gaps. Saves real time on a badly mastered " +
-                        "recording, and clips pauses a narrator meant to be there.",
-                    checked = settings.audio.skipSilence,
-                    onChange = viewModel::setSkipSilence,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "volume-boost",
-                category = "Sound",
-                title = "Volume boost",
-                keywords = "volume loud quiet gain boost car bluetooth headphones louder amplify",
+                id = "skip-back",
+                category = "Skipping and buttons",
+                title = "Skip back",
+                keywords = "rewind back seconds jump replay again re-listen missed",
             ) {
                 ChoiceRow(
-                    title = "Volume boost",
-                    subtitle = "For quiet recordings. Past a point this is distortion rather " +
-                        "than volume, so the range is deliberately short.",
-                    options = AudioSettings.BOOST_CHOICES_DB,
-                    selected = settings.audio.volumeBoostDb,
-                    format = { if (it == 0) "Off" else "+${it} dB" },
-                    onSelect = viewModel::setVolumeBoostDb,
+                    title = "Skip back",
+                    subtitle = "Used most often, to re-hear something missed",
+                    options = PlayerSettings.SKIP_CHOICES,
+                    selected = settings.skipBackSec,
+                    format = ::formatSeconds,
+                    onSelect = viewModel::setSkipBack,
                 )
             },
         )
-
         add(
             SettingEntry(
-                id = "duck-on-interruption",
-                category = "Sound",
-                title = "Lower the volume for interruptions",
-                keywords = "duck ducking interruption notification navigation satnav lower quieter pause",
-            ) {
-                SwitchRow(
-                    title = "Lower the volume for interruptions",
-                    subtitle = "A navigation prompt lowers the book rather than cutting it. " +
-                        "Off, anything short pauses instead.",
-                    checked = settings.audio.duckOnInterruption,
-                    onChange = viewModel::setDuckOnInterruption,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "trim-intro",
-                category = "Podcast trimming",
-                title = "Skip the intro",
-                keywords = "podcast intro sting theme tune opening skip trim seconds start jingle",
+                id = "skip-forward",
+                category = "Skipping and buttons",
+                title = "Skip forward",
+                keywords = "forward fast skip ahead seconds jump",
             ) {
                 ChoiceRow(
-                    title = "Skip the intro",
-                    // The one line that stops this reading as broken. A listener who sets
-                    // 15s here, then hears a show's full intro, has to be able to work out
-                    // why without filing a bug about it.
-                    subtitle = "Where a podcast starts from. Each show can be set differently " +
-                        "from its own page.",
-                    options = PodcastTrim.TRIM_CHOICES_SEC,
-                    selected = settings.skip.defaultTrim.introSec,
-                    format = { if (it == 0) "Off" else "${it}s" },
-                    onSelect = viewModel::setDefaultTrimIntro,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "trim-outro",
-                category = "Podcast trimming",
-                title = "Skip the outro",
-                keywords = "podcast outro credits ending closing skip trim seconds end signoff",
-            ) {
-                ChoiceRow(
-                    title = "Skip the outro",
+                    title = "Skip forward",
                     subtitle = null,
-                    options = PodcastTrim.TRIM_CHOICES_SEC,
-                    selected = settings.skip.defaultTrim.outroSec,
-                    format = { if (it == 0) "Off" else "${it}s" },
-                    onSelect = viewModel::setDefaultTrimOutro,
+                    options = PlayerSettings.SKIP_CHOICES,
+                    selected = settings.skipForwardSec,
+                    format = ::formatSeconds,
+                    onSelect = viewModel::setSkipForward,
                 )
             },
         )
         add(
             SettingEntry(
-                id = "trim-adverts",
-                category = "Podcast trimming",
-                title = "Skip marked adverts",
-                keywords = "podcast advert ads advertising sponsor commercial promo skip chapters marked",
+                id = "buttons-player",
+                category = "Skipping and buttons",
+                title = "Buttons in the player",
+                keywords = "controls transport chapter layout screen show hide",
             ) {
-                SwitchRow(
-                    title = "Skip marked adverts",
-                    subtitle = "Only where the episode says where they are, with a chapter " +
-                        "named as advertising. An unmarked advert is not found.",
-                    checked = settings.skip.defaultTrim.skipMarkedAdverts,
-                    onChange = viewModel::setDefaultTrimAdverts,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "announce-skips",
-                category = "Podcast trimming",
-                title = "Say when something was skipped",
-                keywords = "podcast skip notice announce undo silent tell notification trim advert",
-            ) {
-                SwitchRow(
-                    title = "Say when something was skipped",
-                    subtitle = "A silent skip and a lost minute of audio look the same. The " +
-                        "notice carries an Undo.",
-                    checked = settings.skip.announceSkips,
-                    onChange = viewModel::setAnnounceSkips,
+                ButtonPicker(
+                    title = "In the player",
+                    subtitle = "The skip pair is always shown. Choose what else appears.",
+                    selected = settings.playerButtons,
+                    onToggle = viewModel::togglePlayerButton,
                 )
             },
         )
@@ -589,7 +381,7 @@ private fun settingEntries(
                     subtitle = "Stopping dead wakes people up, which rather defeats the point",
                     options = SleepSettings.FADE_CHOICES,
                     selected = settings.sleep.fadeSeconds,
-                    format = { if (it == 0) "No fade" else "${it}s" },
+                    format = { if (it == 0) "No fade" else formatSeconds(it) },
                     onSelect = viewModel::setSleepFadeSeconds,
                 )
             },
@@ -607,7 +399,7 @@ private fun settingEntries(
                         "really heard",
                     options = SleepSettings.REWIND_CHOICES,
                     selected = settings.sleep.rewindOnWakeSec,
-                    format = { if (it == 0) "Off" else "${it}s" },
+                    format = { if (it == 0) "Off" else formatSeconds(it) },
                     onSelect = viewModel::setRewindOnWakeSec,
                 )
             },
@@ -646,16 +438,17 @@ private fun settingEntries(
                 },
             )
         }
+        // Always shown: the sleep sheet's "Add" chip uses this value with shake off too.
         add(
             SettingEntry(
                 id = "sleep-extend",
                 category = "Sleep timer",
                 title = "How much time a shake adds",
-                keywords = "sleep timer extend minutes shake more time",
+                keywords = "sleep timer extend minutes shake more time add",
             ) {
                 ChoiceRow(
                     title = "How much time a shake adds",
-                    subtitle = null,
+                    subtitle = "The sleep timer's Add button adds the same time",
                     options = SleepSettings.EXTEND_CHOICES,
                     selected = settings.sleep.extendMinutes,
                     format = { "$it min" },
@@ -666,375 +459,51 @@ private fun settingEntries(
 
         add(
             SettingEntry(
-                id = "route-pause",
-                category = "Headphones and car",
-                title = "Pause when headphones disconnect",
-                keywords = "bluetooth headphones unplug disconnect pause car noisy",
+                id = "skip-silence",
+                category = "Sound",
+                title = "Skip silence",
+                keywords = "silence gaps pauses trim shorten faster podcast dead air",
             ) {
                 SwitchRow(
-                    title = "Pause when headphones disconnect",
-                    subtitle = "Otherwise a book carries on playing to an empty room",
-                    checked = settings.route.pauseOnDisconnect,
-                    onChange = viewModel::setPauseOnDisconnect,
+                    title = "Skip silence",
+                    subtitle = "Shortens long gaps. Saves real time on a badly mastered " +
+                        "recording, and clips pauses a narrator meant to be there.",
+                    checked = settings.audio.skipSilence,
+                    onChange = viewModel::setSkipSilence,
                 )
             },
         )
         add(
             SettingEntry(
-                id = "route-resume-headphones",
-                category = "Headphones and car",
-                title = "Resume when headphones reconnect",
-                keywords = "bluetooth headphones reconnect resume continue automatic",
-            ) {
-                SwitchRow(
-                    title = "Resume when headphones reconnect",
-                    subtitle = "Off by default: reconnecting headphones does not always mean " +
-                        "carry on right now",
-                    checked = settings.route.resumeOnHeadphones,
-                    onChange = viewModel::setResumeOnHeadphones,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "route-resume-car",
-                category = "Headphones and car",
-                title = "Resume when the car connects",
-                keywords = "bluetooth car resume drive automatic engine android auto",
-            ) {
-                SwitchRow(
-                    title = "Resume when the car connects",
-                    subtitle = "A car connecting usually means the engine just started",
-                    checked = settings.route.resumeInCar,
-                    onChange = viewModel::setResumeInCar,
-                )
-            },
-        )
-
-        if (viewModel.autoPlaySupported) {
-            add(
-                SettingEntry(
-                    id = "auto-play",
-                    category = "Headphones and car",
-                    title = "Start playing when a device connects",
-                    keywords = "auto play automatic start headphones bluetooth connect resume " +
-                        "tasker automation begin",
-                ) {
-                    SwitchRow(
-                        title = "Start playing when a device connects",
-                        subtitle = "Picks up the last thing you were listening to, even with " +
-                            "the app closed. Only for the devices you choose below",
-                        checked = settings.autoPlay.enabled,
-                        onChange = viewModel::setAutoPlayEnabled,
-                    )
-                },
-            )
-            add(
-                SettingEntry(
-                    id = "auto-play-devices",
-                    category = "Headphones and car",
-                    title = "Devices that start a book",
-                    keywords = "device headphones earbuds car choose pick add remove pair " +
-                        "bluetooth which auto play",
-                ) {
-                    AutoPlayDevices(
-                        devices = settings.autoPlay.devices,
-                        usesSystemPicker = viewModel.usesSystemDevicePicker,
-                        message = state.autoPlayMessage,
-                        pending = viewModel.devicePicker,
-                        onChoose = viewModel::chooseAutoPlayDevice,
-                        onPickerLaunched = viewModel::devicePickerLaunched,
-                        onPicked = viewModel::onDevicePicked,
-                        pairedDevices = viewModel::pairedDevices,
-                        onAdd = viewModel::addAutoPlayDevice,
-                        onRemove = viewModel::removeAutoPlayDevice,
-                        onDismissMessage = viewModel::dismissAutoPlayMessage,
-                    )
-                },
-            )
-            add(
-                SettingEntry(
-                    id = "auto-play-wait",
-                    category = "Headphones and car",
-                    title = "Extra wait before it starts",
-                    keywords = "wait delay seconds auto play start pause before begin " +
-                        "immediately switch over route",
-                ) {
-                    ChoiceRow(
-                        title = "Extra wait before it starts",
-                        subtitle = "It already waits for the audio to move to the device. " +
-                            "Add a moment on top if the first words still get clipped",
-                        options = AutoPlay.WAIT_CHOICES_SEC,
-                        selected = settings.autoPlay.waitSec,
-                        format = { if (it == 0) "None" else "$it s" },
-                        onSelect = viewModel::setAutoPlayWaitSec,
-                    )
-                },
-            )
-        }
-
-        add(
-            SettingEntry(
-                id = "library-media-types",
-                category = "Library",
-                title = "What to show",
-                keywords = "hide podcasts books media type tabs disable remove show library",
-            ) {
-                MediaTypePicker(
-                    hidden = library.hiddenMediaTypes,
-                    onToggle = { type, hidden -> viewModel.setMediaTypeHidden(type, hidden) },
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "library-start-tab",
-                category = "Library",
-                title = "Which tab opens first",
-                keywords = "start home library default tab open launch first screen",
+                id = "volume-boost",
+                category = "Sound",
+                title = "Volume boost",
+                keywords = "volume loud quiet gain boost car bluetooth headphones louder amplify",
             ) {
                 ChoiceRow(
-                    title = "Which tab opens first",
-                    subtitle = "Home is the shelves and one-tap resume; Library is the whole grid",
-                    options = StartTab.entries,
-                    selected = library.startTab,
-                    format = { it.label },
-                    onSelect = viewModel::setStartTab,
+                    title = "Volume boost",
+                    subtitle = "For quiet recordings. Past a point this is distortion rather " +
+                        "than volume, so the range is deliberately short.",
+                    options = AudioSettings.BOOST_CHOICES_DB,
+                    selected = settings.audio.volumeBoostDb,
+                    format = { if (it == 0) "Off" else "+${it} dB" },
+                    onSelect = viewModel::setVolumeBoostDb,
                 )
             },
         )
         add(
             SettingEntry(
-                id = "library-shelves",
-                category = "Library",
-                title = "Shelves on Home",
-                keywords = "shelves home order reorder hide show continue downloaded series " +
-                    "arrange move rows",
-            ) {
-                ShelfEditor(
-                    order = library.arrangeShelves(ShelfKind.entries) { it.name },
-                    hidden = library.hiddenShelves,
-                    onToggle = { kind, hidden -> viewModel.setShelfHidden(kind.name, hidden) },
-                    onMove = { kind, up -> viewModel.moveShelf(kind.name, up) },
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "library-shelves-scope",
-                category = "Library",
-                title = "Shelves follow the library picker",
-                keywords = "shelves home library filter scope continue listening podcasts mixed",
+                id = "duck-on-interruption",
+                category = "Sound",
+                title = "Lower the volume for interruptions",
+                keywords = "duck ducking interruption notification navigation satnav lower quieter pause",
             ) {
                 SwitchRow(
-                    title = "Shelves follow the library picker",
-                    subtitle = "On, the shelves show only the library you picked. Off, they " +
-                        "span everything you are part-way through.",
-                    checked = library.shelvesFollowLibrary,
-                    onChange = viewModel::setShelvesFollowLibrary,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "stream-buffer",
-                category = "Streaming",
-                title = "Read ahead while streaming",
-                keywords = "stream buffer ahead tunnel lift dropout signal network data lag stall " +
-                    "underground offline gap",
-            ) {
-                ChoiceRow(
-                    title = "Read ahead while streaming",
-                    subtitle = "How long a gap in the signal a book can play through. Spoken " +
-                        "word is small, so minutes cost a couple of megabytes.",
-                    options = StreamSettings.BUFFER_CHOICES_MIN,
-                    selected = settings.stream.bufferAheadMinutes,
-                    format = { "$it min" },
-                    onSelect = viewModel::setBufferAheadMinutes,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "stream-retain",
-                category = "Streaming",
-                title = "Keep what you have streamed",
-                keywords = "stream cache keep disk storage retain replay reuse space megabytes " +
-                    "temporary scratch offline",
-            ) {
-                ChoiceRow(
-                    title = "Keep what you have streamed",
-                    // Said plainly because the two look identical on disk and are not the
-                    // same promise: a download was asked for and is kept until it is
-                    // deleted, this is scratch space that disappears on its own.
-                    subtitle = "Disposable, and never a download. The oldest goes first when " +
-                        "this fills, and nothing you downloaded is deleted to make room.",
-                    options = StreamSettings.RETAIN_CHOICES_MB,
-                    selected = settings.stream.retainStreamedMb,
-                    format = ::formatRetainedAudio,
-                    onSelect = viewModel::setRetainStreamedMb,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "download-wifi",
-                category = "Downloads",
-                title = "Download on Wi-Fi only",
-                keywords = "wifi mobile data cellular metered offline allowance roaming",
-            ) {
-                SwitchRow(
-                    title = "Wi-Fi only",
-                    subtitle = "A book is often a gigabyte or two",
-                    checked = downloads.wifiOnly,
-                    onChange = viewModel::setWifiOnly,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "download-charging",
-                category = "Downloads",
-                title = "Only while charging",
-                keywords = "charging battery power plugged offline",
-            ) {
-                SwitchRow(
-                    title = "Only while charging",
-                    subtitle = null,
-                    checked = downloads.requiresCharging,
-                    onChange = viewModel::setRequiresCharging,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "download-cap",
-                category = "Downloads",
-                title = "Storage cap",
-                keywords = "storage space limit size gb full disk offline",
-            ) {
-                ChoiceRow(
-                    title = "Storage cap",
-                    subtitle = "Downloads stop before this; nothing is ever deleted to make room",
-                    options = DownloadSettings.CAP_CHOICES_BYTES,
-                    selected = downloads.storageCapBytes,
-                    format = { "${it / (1024 * 1024 * 1024)} GB" },
-                    onSelect = viewModel::setStorageCap,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "download-auto-delete",
-                category = "Downloads",
-                title = "Delete books you have listened to",
-                keywords = "auto delete cleanup finished listened complete reclaim space tidy",
-            ) {
-                // "Remove finished downloads" was ambiguous in the one way that matters:
-                // finished *downloading* would mean deleting things the moment they
-                // arrive. Say which finished is meant, and spell out the intervals.
-                ChoiceRow(
-                    title = "Delete books you have listened to",
-                    subtitle = "Applies once you reach the end. Deletes the files only; your " +
-                        "position and history are kept.",
-                    options = DownloadSettings.AUTO_DELETE_CHOICES_DAYS,
-                    selected = downloads.autoDeleteFinishedAfterDays,
-                    format = ::formatAutoDeleteDelay,
-                    onSelect = viewModel::setAutoDeleteFinishedAfterDays,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "auto-download-queue",
-                category = "Downloading ahead",
-                title = "Download what is queued",
-                keywords = "auto download queue ahead offline automatic prefetch",
-            ) {
-                SwitchRow(
-                    title = "Download what is queued",
-                    subtitle = "Anything in Up next is fetched on Wi-Fi, so it is ready when it plays",
-                    checked = downloads.autoDownloadQueue,
-                    onChange = viewModel::setAutoDownloadQueue,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "auto-download-series",
-                category = "Downloading ahead",
-                title = "Keep the next in a series ready",
-                keywords = "auto download series next book ahead offline automatic",
-            ) {
-                ChoiceRow(
-                    title = "Keep the next in a series ready",
-                    subtitle = "Only for series you have already started",
-                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
-                    selected = downloads.autoDownloadNextInSeries,
-                    format = { if (it == 0) "Off" else "$it" },
-                    onSelect = viewModel::setAutoDownloadNextInSeries,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "auto-download-episodes",
-                category = "Downloading ahead",
-                title = "Keep recent episodes ready",
-                keywords = "auto download podcast episodes latest ahead offline automatic",
-            ) {
-                ChoiceRow(
-                    title = "Keep recent episodes ready",
-                    subtitle = "Only for podcasts you are listening to",
-                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
-                    selected = downloads.autoDownloadLatestEpisodes,
-                    format = { if (it == 0) "Off" else "$it" },
-                    onSelect = viewModel::setAutoDownloadLatestEpisodes,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "notify-new-episodes",
-                category = "Downloading ahead",
-                title = "Tell me about new episodes",
-                keywords = "notification podcast new episode alert notify",
-            ) {
-                SwitchRow(
-                    title = "Tell me about new episodes",
-                    // The second sentence exists because without it this feature looks
-                    // broken for its first six hours. New is decided by comparing a
-                    // podcast's episode ids before and after a refresh, so the first
-                    // refresh after switching this on establishes the baseline and
-                    // reports nothing — which is indistinguishable from a switch that
-                    // does not work.
-                    subtitle = "One quiet notification for the batch, for podcasts you are " +
-                        "listening to. The first check after switching this on only takes " +
-                        "stock — anything new arrives from the one after it.",
-                    checked = downloads.notifyNewEpisodes,
-                    onChange = viewModel::setNotifyNewEpisodes,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "notify-new-books",
-                category = "Downloading ahead",
-                title = "Tell me about new books",
-                keywords = "notification new book audiobook added arrived library alert notify",
-            ) {
-                SwitchRow(
-                    title = "Tell me about new books",
-                    // The second sentence for the reason the episode row gives: a first
-                    // sync that only takes stock must not read as a broken switch.
-                    subtitle = "A quiet notification when a book arrives in a library you " +
-                        "have opened. The first sync after signing in or changing account " +
-                        "only takes stock.",
-                    checked = downloads.notifyNewBooks,
-                    onChange = viewModel::setNotifyNewBooks,
+                    title = "Lower the volume for interruptions",
+                    subtitle = "A navigation prompt lowers the book rather than cutting it. " +
+                        "Off, anything short pauses instead.",
+                    checked = settings.audio.duckOnInterruption,
+                    onChange = viewModel::setDuckOnInterruption,
                 )
             },
         )
@@ -1108,6 +577,562 @@ private fun settingEntries(
 
         add(
             SettingEntry(
+                id = "trim-intro",
+                category = "Podcast trimming",
+                title = "Skip the intro",
+                keywords = "podcast intro sting theme tune opening skip trim seconds start jingle",
+            ) {
+                ChoiceRow(
+                    title = "Skip the intro",
+                    // The one line that stops this reading as broken. A listener who sets
+                    // 15s here, then hears a show's full intro, has to be able to work out
+                    // why without filing a bug about it.
+                    subtitle = "Where a podcast starts from. Each show can be set differently " +
+                        "from its own page.",
+                    options = PodcastTrim.TRIM_CHOICES_SEC,
+                    selected = settings.skip.defaultTrim.introSec,
+                    format = { if (it == 0) "Off" else formatSeconds(it) },
+                    onSelect = viewModel::setDefaultTrimIntro,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "trim-outro",
+                category = "Podcast trimming",
+                title = "Skip the outro",
+                keywords = "podcast outro credits ending closing skip trim seconds end signoff",
+            ) {
+                ChoiceRow(
+                    title = "Skip the outro",
+                    subtitle = null,
+                    options = PodcastTrim.TRIM_CHOICES_SEC,
+                    selected = settings.skip.defaultTrim.outroSec,
+                    format = { if (it == 0) "Off" else formatSeconds(it) },
+                    onSelect = viewModel::setDefaultTrimOutro,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "trim-adverts",
+                category = "Podcast trimming",
+                title = "Skip marked adverts",
+                keywords = "podcast advert ads advertising sponsor commercial promo skip chapters marked",
+            ) {
+                SwitchRow(
+                    title = "Skip marked adverts",
+                    subtitle = "Only where the episode says where they are, with a chapter " +
+                        "named as advertising. An unmarked advert is not found.",
+                    checked = settings.skip.defaultTrim.skipMarkedAdverts,
+                    onChange = viewModel::setDefaultTrimAdverts,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "announce-skips",
+                category = "Podcast trimming",
+                title = "Say when something was skipped",
+                keywords = "podcast skip notice announce undo silent tell notification trim advert",
+            ) {
+                SwitchRow(
+                    title = "Say when something was skipped",
+                    subtitle = "A silent skip and a lost minute of audio look the same. The " +
+                        "notice carries an Undo.",
+                    checked = settings.skip.announceSkips,
+                    onChange = viewModel::setAnnounceSkips,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "library-media-types",
+                category = "Library",
+                title = "What to show",
+                keywords = "hide podcasts books media type tabs disable remove show library",
+            ) {
+                MediaTypePicker(
+                    hidden = library.hiddenMediaTypes,
+                    onToggle = { type, hidden -> viewModel.setMediaTypeHidden(type, hidden) },
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-start-tab",
+                category = "Library",
+                title = "Which tab opens first",
+                keywords = "start home library default tab open launch first screen",
+            ) {
+                ChoiceRow(
+                    title = "Which tab opens first",
+                    subtitle = "Home is the shelves and one-tap resume; Library is the whole grid",
+                    options = StartTab.entries,
+                    selected = library.startTab,
+                    format = { it.label },
+                    onSelect = viewModel::setStartTab,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-shelves",
+                category = "Library",
+                title = "Shelves on Home",
+                keywords = "shelves home order reorder hide show continue downloaded series " +
+                    "arrange move rows",
+            ) {
+                ShelfEditor(
+                    order = library.arrangeShelves(ShelfKind.entries) { it.name },
+                    hidden = library.hiddenShelves,
+                    onToggle = { kind, hidden -> viewModel.setShelfHidden(kind.name, hidden) },
+                    onMove = { kind, up -> viewModel.moveShelf(kind.name, up) },
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "library-shelves-scope",
+                category = "Library",
+                title = "Shelves follow the library picker",
+                keywords = "shelves home library filter scope continue listening podcasts mixed",
+            ) {
+                SwitchRow(
+                    title = "Shelves follow the library picker",
+                    subtitle = "On, the shelves show only the library you picked. Off, they " +
+                        "span everything you are part-way through.",
+                    checked = library.shelvesFollowLibrary,
+                    onChange = viewModel::setShelvesFollowLibrary,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "stats",
+                category = "Library",
+                title = "Listening stats",
+                keywords = "stats statistics history hours time listened streak total " +
+                    "how much progress record chart week year most",
+            ) {
+                LinkRow(
+                    title = "Listening stats",
+                    subtitle = "Hours, days in a row and what you have listened to most, " +
+                        "counted from lugu's own record rather than the server's",
+                    onClick = onOpenStats,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "download-wifi",
+                category = "Downloads",
+                title = "Download on Wi-Fi only",
+                keywords = "wifi mobile data cellular metered offline allowance roaming",
+            ) {
+                SwitchRow(
+                    title = "Wi-Fi only",
+                    subtitle = "A book is often a gigabyte or two",
+                    checked = downloads.wifiOnly,
+                    onChange = viewModel::setWifiOnly,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-charging",
+                category = "Downloads",
+                title = "Only while charging",
+                keywords = "charging battery power plugged offline",
+            ) {
+                SwitchRow(
+                    title = "Only while charging",
+                    subtitle = null,
+                    checked = downloads.requiresCharging,
+                    onChange = viewModel::setRequiresCharging,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-cap",
+                category = "Downloads",
+                title = "Storage cap",
+                keywords = "storage space limit size gb full disk offline",
+            ) {
+                ChoiceRow(
+                    title = "Storage cap",
+                    subtitle = "Downloads stop before this; nothing is ever deleted to make room",
+                    options = DownloadSettings.CAP_CHOICES_BYTES,
+                    selected = downloads.storageCapBytes,
+                    format = { "${it / (1024 * 1024 * 1024)} GB" },
+                    onSelect = viewModel::setStorageCap,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "download-auto-delete",
+                category = "Downloads",
+                title = "Delete books you have listened to",
+                keywords = "auto delete cleanup finished listened complete reclaim space tidy",
+            ) {
+                // "Remove finished downloads" was ambiguous in the one way that matters:
+                // finished *downloading* would mean deleting things the moment they
+                // arrive. Say which finished is meant, and spell out the intervals.
+                ChoiceRow(
+                    title = "Delete books you have listened to",
+                    subtitle = "Applies once you reach the end. Deletes the files only; your " +
+                        "position and history are kept.",
+                    options = DownloadSettings.AUTO_DELETE_CHOICES_DAYS,
+                    selected = downloads.autoDeleteFinishedAfterDays,
+                    format = ::formatAutoDeleteDelay,
+                    onSelect = viewModel::setAutoDeleteFinishedAfterDays,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "auto-download-queue",
+                category = "Downloads",
+                title = "Download what is queued",
+                keywords = "downloading ahead auto download queue ahead offline automatic prefetch",
+            ) {
+                SwitchRow(
+                    title = "Download what is queued",
+                    subtitle = "Anything in Up next is fetched on Wi-Fi, so it is ready when it plays",
+                    checked = downloads.autoDownloadQueue,
+                    onChange = viewModel::setAutoDownloadQueue,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "auto-download-series",
+                category = "Downloads",
+                title = "Keep the next in a series ready",
+                keywords = "downloading ahead auto download series next book ahead offline automatic",
+            ) {
+                ChoiceRow(
+                    title = "Keep the next in a series ready",
+                    subtitle = "Only for series you have already started",
+                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
+                    selected = downloads.autoDownloadNextInSeries,
+                    format = { if (it == 0) "Off" else "$it" },
+                    onSelect = viewModel::setAutoDownloadNextInSeries,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "auto-download-episodes",
+                category = "Downloads",
+                title = "Keep recent episodes ready",
+                keywords = "downloading ahead auto download podcast episodes latest ahead offline " +
+                    "automatic",
+            ) {
+                ChoiceRow(
+                    title = "Keep recent episodes ready",
+                    subtitle = "Only for podcasts you are listening to",
+                    options = DownloadSettings.AUTO_DOWNLOAD_COUNT_CHOICES,
+                    selected = downloads.autoDownloadLatestEpisodes,
+                    format = { if (it == 0) "Off" else "$it" },
+                    onSelect = viewModel::setAutoDownloadLatestEpisodes,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "stream-buffer",
+                category = "Streaming",
+                title = "Read ahead while streaming",
+                keywords = "stream buffer ahead tunnel lift dropout signal network data lag stall " +
+                    "underground offline gap",
+            ) {
+                ChoiceRow(
+                    title = "Read ahead while streaming",
+                    subtitle = "How long a gap in the signal a book can play through. Spoken " +
+                        "word is small, so minutes cost a couple of megabytes.",
+                    options = StreamSettings.BUFFER_CHOICES_MIN,
+                    selected = settings.stream.bufferAheadMinutes,
+                    format = { "$it min" },
+                    onSelect = viewModel::setBufferAheadMinutes,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "stream-retain",
+                category = "Streaming",
+                title = "Keep what you have streamed",
+                keywords = "stream cache keep disk storage retain replay reuse space megabytes " +
+                    "temporary scratch offline",
+            ) {
+                ChoiceRow(
+                    title = "Keep what you have streamed",
+                    // Said plainly because the two look identical on disk and are not the
+                    // same promise: a download was asked for and is kept until it is
+                    // deleted, this is scratch space that disappears on its own.
+                    subtitle = "Disposable, and never a download. The oldest goes first when " +
+                        "this fills, and nothing you downloaded is deleted to make room.",
+                    options = StreamSettings.RETAIN_CHOICES_MB,
+                    selected = settings.stream.retainStreamedMb,
+                    format = ::formatRetainedAudio,
+                    onSelect = viewModel::setRetainStreamedMb,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
+                id = "headset-next",
+                category = "Headphones and car",
+                title = "What the next button does",
+                keywords = "headset buttons headphones headset bluetooth remote watch next forward " +
+                    "button press " +
+                    "avrcp car controls",
+            ) {
+                ChoiceRow(
+                    title = "What the next button does",
+                    subtitle = "A book has no tracks, so \"next\" has to mean something chosen",
+                    options = HeadsetAction.entries,
+                    selected = settings.headset.nextAction,
+                    format = { it.label },
+                    onSelect = viewModel::setHeadsetNextAction,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "headset-previous",
+                category = "Headphones and car",
+                title = "What the previous button does",
+                keywords = "headset buttons headphones headset bluetooth remote watch previous back " +
+                    "button press " +
+                    "avrcp car controls rewind",
+            ) {
+                ChoiceRow(
+                    title = "What the previous button does",
+                    subtitle = "Android's own default here seeks to zero on a single-file book, " +
+                        "which is how a forty-hour book loses its place to one press",
+                    options = HeadsetAction.entries,
+                    selected = settings.headset.previousAction,
+                    format = { it.label },
+                    onSelect = viewModel::setHeadsetPreviousAction,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "route-pause",
+                category = "Headphones and car",
+                title = "Pause when headphones disconnect",
+                keywords = "bluetooth headphones unplug disconnect pause car noisy",
+            ) {
+                SwitchRow(
+                    title = "Pause when headphones disconnect",
+                    subtitle = "Otherwise a book carries on playing to an empty room",
+                    checked = settings.route.pauseOnDisconnect,
+                    onChange = viewModel::setPauseOnDisconnect,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "route-resume-headphones",
+                category = "Headphones and car",
+                title = "Resume when headphones reconnect",
+                keywords = "bluetooth headphones reconnect resume continue automatic",
+            ) {
+                SwitchRow(
+                    title = "Resume when headphones reconnect",
+                    subtitle = "Off by default: reconnecting headphones does not always mean " +
+                        "carry on right now",
+                    checked = settings.route.resumeOnHeadphones,
+                    onChange = viewModel::setResumeOnHeadphones,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "route-resume-car",
+                category = "Headphones and car",
+                title = "Resume when the car connects",
+                keywords = "bluetooth car resume drive automatic engine android auto",
+            ) {
+                SwitchRow(
+                    title = "Resume when the car connects",
+                    subtitle = "A car connecting usually means the engine just started",
+                    checked = settings.route.resumeInCar,
+                    onChange = viewModel::setResumeInCar,
+                )
+            },
+        )
+        if (viewModel.autoPlaySupported) {
+            add(
+                SettingEntry(
+                    id = "auto-play",
+                    category = "Headphones and car",
+                    title = "Start playing when a device connects",
+                    keywords = "auto play automatic start headphones bluetooth connect resume " +
+                        "tasker automation begin",
+                ) {
+                    SwitchRow(
+                        title = "Start playing when a device connects",
+                        subtitle = "Picks up the last thing you were listening to, even with " +
+                            "the app closed. Only for the devices you choose below",
+                        checked = settings.autoPlay.enabled,
+                        onChange = viewModel::setAutoPlayEnabled,
+                    )
+                },
+            )
+            add(
+                SettingEntry(
+                    id = "auto-play-devices",
+                    category = "Headphones and car",
+                    title = "Devices that start a book",
+                    keywords = "device headphones earbuds car choose pick add remove pair " +
+                        "bluetooth which auto play",
+                ) {
+                    AutoPlayDevices(
+                        devices = settings.autoPlay.devices,
+                        usesSystemPicker = viewModel.usesSystemDevicePicker,
+                        message = state.autoPlayMessage,
+                        pending = viewModel.devicePicker,
+                        onChoose = viewModel::chooseAutoPlayDevice,
+                        onPickerLaunched = viewModel::devicePickerLaunched,
+                        onPicked = viewModel::onDevicePicked,
+                        pairedDevices = viewModel::pairedDevices,
+                        onAdd = viewModel::addAutoPlayDevice,
+                        onRemove = viewModel::removeAutoPlayDevice,
+                        onDismissMessage = viewModel::dismissAutoPlayMessage,
+                    )
+                },
+            )
+            add(
+                SettingEntry(
+                    id = "auto-play-wait",
+                    category = "Headphones and car",
+                    title = "Extra wait before it starts",
+                    keywords = "wait delay seconds auto play start pause before begin " +
+                        "immediately switch over route",
+                ) {
+                    ChoiceRow(
+                        title = "Extra wait before it starts",
+                        subtitle = "It already waits for the audio to move to the device. " +
+                            "Add a moment on top if the first words still get clipped",
+                        options = AutoPlay.WAIT_CHOICES_SEC,
+                        selected = settings.autoPlay.waitSec,
+                        format = { if (it == 0) "None" else formatSeconds(it) },
+                        onSelect = viewModel::setAutoPlayWaitSec,
+                    )
+                },
+            )
+        }
+
+        add(
+            SettingEntry(
+                id = "notice-duration",
+                category = "Notices and notifications",
+                title = "How long a notice stays up",
+                keywords = "toast snackbar popup message rewound jumped undo timeout dismiss duration",
+            ) {
+                ChoiceRow(
+                    title = "How long a notice stays up",
+                    subtitle = "Applies to the rewound and jumped notices, which carry an Undo",
+                    options = PlayerSettings.NOTICE_CHOICES,
+                    selected = settings.noticeSeconds,
+                    format = ::formatSeconds,
+                    onSelect = viewModel::setNoticeSeconds,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "buttons-notification",
+                category = "Notices and notifications",
+                title = "Buttons in the notification",
+                keywords = "notification lock screen controls headphones bluetooth chapter show " +
+                    "hide order arrange icons position",
+            ) {
+                OrderedButtonPicker(
+                    title = "In the notification",
+                    subtitle = "Tap in the order you want them. Space is tight here; fewer is " +
+                        "usually better.",
+                    selected = settings.notificationButtons,
+                    onToggle = viewModel::toggleNotificationButton,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "notification-persistence",
+                category = "Notices and notifications",
+                title = "How long the notification stays",
+                keywords = "buttons notification persistent disappears vanishes resume ready lock " +
+                    "screen paused shade sticky always",
+            ) {
+                ChoiceRow(
+                    title = "How long the notification stays",
+                    subtitle = "\"Always ready\" also loads the last thing you played when " +
+                        "lugu opens, so a headset button works straight away. It never " +
+                        "starts playing on its own.",
+                    options = NotificationPersistence.entries,
+                    selected = settings.notification,
+                    format = { it.label },
+                    onSelect = viewModel::setNotificationPersistence,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "notify-new-episodes",
+                category = "Notices and notifications",
+                title = "Tell me about new episodes",
+                keywords = "downloading ahead notification podcast new episode alert notify",
+            ) {
+                SwitchRow(
+                    title = "Tell me about new episodes",
+                    // The second sentence exists because without it this feature looks
+                    // broken for its first six hours. New is decided by comparing a
+                    // podcast's episode ids before and after a refresh, so the first
+                    // refresh after switching this on establishes the baseline and
+                    // reports nothing — which is indistinguishable from a switch that
+                    // does not work.
+                    subtitle = "One quiet notification for the batch, for podcasts you are " +
+                        "listening to. The first check after switching this on only takes " +
+                        "stock — anything new arrives from the one after it.",
+                    checked = downloads.notifyNewEpisodes,
+                    onChange = viewModel::setNotifyNewEpisodes,
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "notify-new-books",
+                category = "Notices and notifications",
+                title = "Tell me about new books",
+                keywords = "downloading ahead notification new book audiobook added arrived library " +
+                    "alert notify",
+            ) {
+                SwitchRow(
+                    title = "Tell me about new books",
+                    // The second sentence for the reason the episode row gives: a first
+                    // sync that only takes stock must not read as a broken switch.
+                    subtitle = "A quiet notification when a book arrives in a library you " +
+                        "have opened. The first sync after signing in or changing account " +
+                        "only takes stock.",
+                    checked = downloads.notifyNewBooks,
+                    onChange = viewModel::setNotifyNewBooks,
+                )
+            },
+        )
+
+        add(
+            SettingEntry(
                 id = "account",
                 category = "Account",
                 title = "Account",
@@ -1148,43 +1173,30 @@ private fun settingEntries(
                         onClick = { openLink(WebClient.home(account.baseUrl)) },
                     )
                 }
-                // Signing out drops the tokens, so it is the one action here that undo
-                // cannot answer — and it sat one stray tap away from a thumb scrolling
-                // settings. It arms instead of asking: the first tap changes what the
-                // button says, the second one does it, and the button disarms itself if
-                // nothing follows. A dialog was not the answer, for the reason the rest of
-                // this app does not use them.
-                var armed by remember { mutableStateOf(false) }
-                if (armed) {
-                    LaunchedEffect(Unit) {
-                        delay(SIGN_OUT_ARM_MILLIS)
-                        armed = false
-                    }
-                }
-                TextButton(
-                    onClick = {
-                        if (armed) {
-                            viewModel.signOut()
-                            onSignedOut()
-                        } else {
-                            armed = true
-                        }
-                    },
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .semantics {
-                            stateDescription = if (armed) {
-                                "Armed. Tap again to sign out."
-                            } else {
-                                "Needs two taps."
-                            }
-                        },
-                ) {
-                    Text(
-                        if (armed) "Tap again to sign out" else "Sign out",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                // Two taps rather than a dialog; see [SignOutButton]. The screen leaves
+                // when the sign-out has finished, not when it starts.
+                SignOutButton(
+                    onSignOut = viewModel::signOut,
+                    busy = signOut.busy,
+                    problem = signOut.problem,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            },
+        )
+        add(
+            SettingEntry(
+                id = "accounts",
+                category = "Account",
+                title = "Accounts",
+                keywords = "account accounts server servers switch add second another " +
+                    "multiple user sign in out login logout profile",
+            ) {
+                LinkRow(
+                    title = "Accounts",
+                    subtitle = "Add a second server, and switch between them. Each keeps " +
+                        "its own library, progress and downloads",
+                    onClick = onOpenAccounts,
+                )
             },
         )
 
@@ -1202,39 +1214,6 @@ private fun settingEntries(
                         "about what you were listening to.",
                     checked = state.crashReporting,
                     onChange = viewModel::setCrashReporting,
-                )
-            },
-        )
-
-        add(
-            SettingEntry(
-                id = "accounts",
-                category = "Account",
-                title = "Accounts",
-                keywords = "account accounts server servers switch add second another " +
-                    "multiple user sign in out login logout profile",
-            ) {
-                LinkRow(
-                    title = "Accounts",
-                    subtitle = "Add a second server, and switch between them. Each keeps " +
-                        "its own library, progress and downloads",
-                    onClick = onOpenAccounts,
-                )
-            },
-        )
-        add(
-            SettingEntry(
-                id = "stats",
-                category = "Listening",
-                title = "Listening stats",
-                keywords = "stats statistics history hours time listened streak total " +
-                    "how much progress record chart week year most",
-            ) {
-                LinkRow(
-                    title = "Listening stats",
-                    subtitle = "Hours, days in a row and what you have listened to most, " +
-                        "counted from lugu's own record rather than the server's",
-                    onClick = onOpenStats,
                 )
             },
         )
@@ -1280,7 +1259,16 @@ private fun settingEntries(
                 title = "Version",
                 keywords = "version build number release which update installed about",
             ) {
-                InfoRow(title = "Version", value = installedVersion())
+                // A bug report needs it word for word, so a tap copies it. Android 13 and
+                // later confirm a copy themselves, so nothing is added here.
+                val version = installedVersion()
+                val context = LocalContext.current
+                InfoRow(
+                    title = "Version",
+                    value = version,
+                    onClickLabel = "Copy the version",
+                    onClick = { copyToClipboard(context, "lugu version", version) },
+                )
             },
         )
         add(
@@ -1310,7 +1298,8 @@ private fun settingEntries(
 
 @Composable
 private fun SectionHeader(title: String) {
-    Column {
+    // A heading to TalkBack too, so a swipe by headings jumps category to category.
+    Column(Modifier.semantics { heading() }) {
         Spacer(Modifier.height(16.dp))
         HorizontalDivider()
         Text(
@@ -1377,12 +1366,19 @@ private fun <T> ChoiceRow(
             )
         }
         Spacer(Modifier.height(8.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // One choice of many, and each chip says which setting it belongs to: alone, "30 s,
+        // selected" does not tell a screen-reader user what is thirty seconds.
+        FlowRow(
+            modifier = Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             options.forEach { option ->
+                val label = format(option)
                 FilterChip(
                     selected = option == selected,
                     onClick = { onSelect(option) },
-                    label = { Text(format(option), maxLines = 1, softWrap = false) },
+                    label = { Text(label, maxLines = 1, softWrap = false) },
+                    modifier = Modifier.semantics { contentDescription = "$title, $label" },
                 )
             }
         }
@@ -1544,7 +1540,11 @@ private fun ShelfRow(
         IconButton(onClick = { onMove(kind, false) }, enabled = canMoveDown) {
             Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move ${kind.label} down")
         }
-        Switch(checked = visible, onCheckedChange = { onToggle(kind, !it) })
+        Switch(
+            checked = visible,
+            onCheckedChange = { onToggle(kind, !it) },
+            modifier = Modifier.semantics { contentDescription = "Show ${kind.label} on Home" },
+        )
     }
 }
 
@@ -1553,12 +1553,17 @@ private fun SpeedRow(title: String, speed: Float, onChange: (Float) -> Unit) {
     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
         Text(title, style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(8.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            modifier = Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             SpeedSettings.DEFAULT_PRESETS.forEach { option ->
+                val label = formatSpeed(option)
                 FilterChip(
                     selected = kotlin.math.abs(option - speed) < 0.01f,
                     onClick = { onChange(option) },
-                    label = { Text(formatSpeed(option), maxLines = 1, softWrap = false) },
+                    label = { Text(label, maxLines = 1, softWrap = false) },
+                    modifier = Modifier.semantics { contentDescription = "$title, $label" },
                 )
             }
         }
@@ -1744,9 +1749,23 @@ private fun AutoPlayDevices(
  * A setting that is only ever read, with its value where a control would otherwise be.
  */
 @Composable
-private fun InfoRow(title: String, value: String) {
+private fun InfoRow(
+    title: String,
+    value: String,
+    onClickLabel: String? = null,
+    onClick: (() -> Unit)? = null,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClickLabel = onClickLabel, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -1756,6 +1775,11 @@ private fun InfoRow(title: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+private fun copyToClipboard(context: Context, label: String, text: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
 /**
@@ -1855,6 +1879,13 @@ internal fun formatRetainedAudio(megabytes: Int): String = when {
     megabytes % 1024 == 0 -> "${megabytes / 1024} GB"
     else -> "$megabytes MB"
 }
+
+/**
+ * One way to write a number of seconds on a chip: "30 s", and whole minutes from a minute
+ * up ("2 min"), so that "300s" next to "10 min" never asks the listener to do sums.
+ */
+internal fun formatSeconds(seconds: Int): String =
+    if (seconds >= 60 && seconds % 60 == 0) "${seconds / 60} min" else "$seconds s"
 
 /** "After a week" rather than "After 7d" — a setting should read like a sentence. */
 internal fun formatAutoDeleteDelay(days: Int): String = when (days) {

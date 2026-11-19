@@ -39,6 +39,25 @@ internal object SettingsIndex {
         return terms.all { haystack.contains(it) }
     }
 
+    /**
+     * The matches, with each category's entries together, in the order the categories
+     * first appear.
+     *
+     * The screen draws a heading only over the first entry of a category, so an entry
+     * declared away from the rest of its category would sit under the wrong heading.
+     */
     fun filter(entries: List<SettingEntry>, query: String): List<SettingEntry> =
         entries.filter { matches(it, query) }
+            .groupBy { it.category }
+            .values
+            .flatten()
+
+    /** The categories whose entries are not declared together. Empty when the list is sound. */
+    fun splitCategories(entries: List<SettingEntry>): List<String> {
+        val runs = entries.map { it.category }.fold(mutableListOf<String>()) { acc, category ->
+            if (acc.lastOrNull() != category) acc.add(category)
+            acc
+        }
+        return runs.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.toList()
+    }
 }

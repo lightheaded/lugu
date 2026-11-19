@@ -18,6 +18,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -106,12 +107,19 @@ class AbsClient(
      * shape for a native client.
      */
     suspend fun login(baseUrl: String, username: String, password: String): LoginResult {
-        val response = http.request("$baseUrl/login") {
-            method = HttpMethod.Post
-            connectionHeaders(baseUrl)
-            header("x-return-tokens", "true")
-            contentType(ContentType.Application.Json)
-            setBody(LoginRequest(username, password))
+        val response = try {
+            http.request("$baseUrl/login") {
+                method = HttpMethod.Post
+                connectionHeaders(baseUrl)
+                header("x-return-tokens", "true")
+                contentType(ContentType.Application.Json)
+                setBody(LoginRequest(username, password))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The address answered the probe a moment ago, but the network can still go.
+            throw AbsHttpException(0, TransportFailure.describe(e))
         }
         if (!response.status.isSuccess()) {
             throw when (response.status.value) {
@@ -243,8 +251,10 @@ class AbsClient(
                 method = HttpMethod.Get
                 connectionHeaders(baseUrl)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            throw AbsHttpException(0, "Could not reach $baseUrl — ${e.message ?: "no response"}")
+            throw AbsHttpException(0, TransportFailure.describe(e))
         }
         if (!response.status.isSuccess()) {
             throw AbsHttpException(response.status.value, NOT_A_SERVER)
@@ -506,6 +516,76 @@ class AbsClient(
                 "Check the host, port and any subpath."
         private const val DEFAULT_ACCESS_TTL_MS = 55 * 60 * 1000L
     }
+}
+
+/**
+ * One plain sentence for a request that got no answer at all.
+ *
+ * What the network stack says is written for a developer: "Unable to resolve host",
+ * "Failed to connect to" with a raw address, a class name, a number of milliseconds. On the
+ * sign-in screen it is cut off after two lines and tells the listener nothing they can act
+ * on. The common failures each get a sentence that says what to check; anything else gets
+ * a general one. An answer from the server is not a transport failure and does not come
+ * here, so its own words, such as an identity provider's reason, reach the listener intact.
+ */
+object TransportFailure {
+    const val ADDRESS_NOT_FOUND =
+        "That address could not be found. Check the spelling, and that this phone is online."
+    const val REFUSED = "Nothing is listening at that address. Check the port, and that the server is running."
+    const val UNREACHABLE = "That address cannot be reached from this network."
+    const val SECURE_CONNECTION =
+        "The secure connection failed. The certificate was not accepted, on one side or the other."
+    const val PLAIN_HTTP_BLOCKED = "Android blocked this plain-HTTP address. Use https:// if the server offers it."
+    const val NO_ANSWER = "Could not reach that address."
+    const val TOO_SLOW = "The server took too long to answer."
+
+    /** "Nothing answered within 4 seconds." Seconds, because nobody counts in milliseconds. */
+    fun timedOut(timeoutMs: Long?): String {
+        val seconds = timeoutMs?.let { (it + 999) / 1000 } ?: return TOO_SLOW
+        return if (seconds == 1L) "Nothing answered within a second." else "Nothing answered within $seconds seconds."
+    }
+
+    /** Reads the exception and its causes, then falls back to the words of its message. */
+    fun describe(error: Throwable, timeoutMs: Long? = null): String {
+        val chain = generateSequence(error) { it.cause }.take(MAX_CAUSES).toList()
+        return when {
+            chain.any { it is java.net.UnknownHostException } -> ADDRESS_NOT_FOUND
+            chain.any { it is java.net.UnknownServiceException } -> PLAIN_HTTP_BLOCKED
+            // Ktor names its own timeouts, and not all of them extend the Java ones.
+            chain.any { it is java.io.InterruptedIOException || it.javaClass.simpleName.contains("Timeout") } ->
+                timedOut(timeoutMs)
+            chain.any { it is javax.net.ssl.SSLException || it is java.security.cert.CertificateException } ->
+                SECURE_CONNECTION
+            // Android reports an offline phone as a plain ConnectException with these words.
+            chain.any { it is java.net.NoRouteToHostException || it.message.saysUnreachable() } -> UNREACHABLE
+            chain.any { it is java.net.ConnectException } -> REFUSED
+            else -> describe(chain.firstNotNullOfOrNull { it.message }, timeoutMs)
+        }
+    }
+
+    /** For a failure that reached here as its message only. */
+    fun describe(message: String?, timeoutMs: Long? = null): String {
+        val text = message?.lowercase() ?: return NO_ANSWER
+        return when {
+            "unable to resolve host" in text || "no address associated" in text -> ADDRESS_NOT_FOUND
+            "cleartext" in text -> PLAIN_HTTP_BLOCKED
+            // Before "failed to connect": a connect timeout says both.
+            "timeout" in text || "timed out" in text || TIMEOUT_AFTER.containsMatchIn(text) -> timedOut(timeoutMs)
+            "certificat" in text || "trust anchor" in text || "ssl" in text || "handshake" in text ->
+                SECURE_CONNECTION
+            text.saysUnreachable() -> UNREACHABLE
+            "refused" in text || "failed to connect" in text -> REFUSED
+            else -> NO_ANSWER
+        }
+    }
+
+    private fun String?.saysUnreachable(): Boolean {
+        val text = this?.lowercase() ?: return false
+        return "unreachable" in text || "no route to host" in text
+    }
+
+    private const val MAX_CAUSES = 8
+    private val TIMEOUT_AFTER = Regex("""after \d+\s?ms""")
 }
 
 data class LoginResult(

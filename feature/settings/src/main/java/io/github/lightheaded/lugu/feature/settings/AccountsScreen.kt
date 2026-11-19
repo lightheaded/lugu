@@ -6,32 +6,30 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,7 +39,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.StoredAccount
 import io.github.lightheaded.lugu.core.ui.Status
@@ -59,47 +56,58 @@ data class AccountsUiState(
     val accounts: List<StoredAccount> = emptyList(),
     val busy: Boolean = false,
     val error: String? = null,
+    /** What the last action did, when nothing else on screen shows it. */
+    val note: String? = null,
+    /** The account being signed out of, while that runs. */
+    val signingOut: String? = null,
 )
 
 /**
  * The accounts on this device, and which one is in force.
  *
- * ## Why signing out removes the downloads first
- *
- * `:core:sync` cannot reach `:core:download`, so [AuthRepository.signOutOf] cannot take
- * the bytes with it, and its KDoc says the caller must. This is that caller. The order
- * matters: the download rows carry the server id, so removing them after the purge would
- * leave the repository nothing to find and the files unreachable — present on disk, still
- * counted against the storage cap, and belonging to an account the device no longer knows.
+ * Signing out goes through [AccountSignOut], which removes the account's downloads before
+ * the account itself. Settings signs out through the same path.
  */
 @HiltViewModel
 class AccountsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
-    private val downloadRepository: DownloadRepository,
+    private val accountSignOut: AccountSignOut,
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
 
     val state: StateFlow<AccountsUiState> =
         combine(authRepository.observeAccounts(), transient) { accounts, extra ->
-            AccountsUiState(accounts = accounts, busy = extra.busy, error = extra.error)
+            AccountsUiState(
+                accounts = accounts,
+                busy = extra.busy,
+                error = extra.error,
+                note = extra.note,
+                signingOut = extra.signingOut,
+            )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AccountsUiState())
 
     fun switchTo(serverId: String) {
         // A tap on the account already in force is not an error and not a switch.
         if (state.value.accounts.any { it.account.serverId == serverId && it.isActive }) return
-        perform { authRepository.switchTo(serverId).map { } }
-    }
-
-    fun signOutOf(serverId: String) = perform {
-        val account = state.value.accounts.firstOrNull { it.account.serverId == serverId }
-        if (account != null) {
-            downloadRepository.removeAllFor(account.account.serverId, account.account.userId)
+        perform {
+            // Said once it is done. The only other sign is the card colour moving, and a
+            // strip that says "Working…" and then nothing reads as a switch that failed.
+            authRepository.switchTo(serverId).onSuccess { account ->
+                transient.update {
+                    it.copy(note = "Now using ${account.username} on ${hostOf(account.baseUrl)}")
+                }
+            }.map { }
         }
-        authRepository.signOutOf(serverId)
     }
 
-    fun dismissError() = transient.update { it.copy(error = null) }
+    fun signOutOf(serverId: String) {
+        val account = state.value.accounts.firstOrNull { it.account.serverId == serverId } ?: return
+        perform(signingOut = serverId) { accountSignOut.signOutOf(account.account) }
+    }
+
+    /** Puts away whichever line the strip is showing. */
+    fun dismissError() = transient.update { it.copy(error = null, note = null) }
 
     /**
      * Runs one account action, with the screen locked while it runs.
@@ -108,22 +116,31 @@ class AccountsViewModel @Inject constructor(
      * the active account, and two of them at once would race over the same row. The state
      * this reports is the only thing keeping a second tap out.
      */
-    private fun perform(action: suspend () -> Result<Unit>) {
+    private fun perform(signingOut: String? = null, action: suspend () -> Result<Unit>) {
         if (transient.value.busy) return
-        transient.update { it.copy(busy = true, error = null) }
+        transient.update { it.copy(busy = true, error = null, note = null, signingOut = signingOut) }
         viewModelScope.launch {
             val outcome = action()
             transient.update {
                 it.copy(
                     busy = false,
+                    signingOut = null,
                     error = outcome.exceptionOrNull()?.message ?: it.error,
                 )
             }
         }
     }
 
-    private data class TransientState(val busy: Boolean = false, val error: String? = null)
+    private data class TransientState(
+        val busy: Boolean = false,
+        val error: String? = null,
+        val note: String? = null,
+        val signingOut: String? = null,
+    )
 }
+
+/** "books.example" from "https://books.example", for a sentence rather than a link. */
+internal fun hostOf(baseUrl: String): String = baseUrl.substringAfter("://").trimEnd('/')
 
 @Composable
 fun AccountsScreen(
@@ -158,8 +175,6 @@ fun AccountsContent(
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var confirming by remember { mutableStateOf<StoredAccount?>(null) }
-
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -187,18 +202,21 @@ fun AccountsContent(
                         enabled = !state.busy,
                         onSwitchTo = { onSwitchTo(account.account.serverId) },
                         onSignInAgain = { onSignInAgain(account.account.serverId) },
-                        onSignOut = { confirming = account },
+                        signingOut = state.signingOut == account.account.serverId,
+                        onSignOut = { onSignOutOf(account.account.serverId) },
                     )
                 }
 
                 item {
-                    AssistChip(
+                    OutlinedButton(
                         onClick = onAddAccount,
                         enabled = !state.busy,
-                        label = { Text("Add another account") },
-                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add another account")
+                    }
                 }
 
                 item {
@@ -215,23 +233,14 @@ fun AccountsContent(
             StatusStrip(
                 status = when {
                     state.error != null -> Status.Problem(state.error)
-                    state.busy -> Status.Working("Working…")
+                    state.signingOut != null -> Status.Working("Signing out…")
+                    state.busy -> Status.Working("Switching…")
+                    state.note != null -> Status.Note(state.note)
                     else -> null
                 },
                 onDismiss = onDismissError,
             )
         }
-    }
-
-    confirming?.let { account ->
-        SignOutDialog(
-            account = account,
-            onConfirm = {
-                onSignOutOf(account.account.serverId)
-                confirming = null
-            },
-            onDismiss = { confirming = null },
-        )
     }
 }
 
@@ -239,6 +248,7 @@ fun AccountsContent(
 private fun AccountCard(
     account: StoredAccount,
     enabled: Boolean,
+    signingOut: Boolean,
     onSwitchTo: () -> Unit,
     onSignInAgain: () -> Unit,
     onSignOut: () -> Unit,
@@ -251,7 +261,11 @@ private fun AccountCard(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled && !account.isActive, onClick = onSwitchTo),
+            .clickable(
+                enabled = enabled && !account.isActive,
+                onClickLabel = "Use this account",
+                onClick = onSwitchTo,
+            ),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -285,47 +299,27 @@ private fun AccountCard(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // The way back that keeps everything. Without it, the only action on a lapsed
-                // row was a sign-out, which deletes the account's downloads (issue #12).
-                if (!account.isSignedIn) {
-                    TextButton(onClick = onSignInAgain, enabled = enabled) { Text("Sign in again") }
+            // The account in use and signed in has nothing to offer here but a sign-out.
+            if (!account.isSignedIn || !account.isActive) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The way back that keeps everything. Without it, the only action on a
+                    // lapsed row was a sign-out, which deletes the account's downloads (#12).
+                    if (!account.isSignedIn) {
+                        TextButton(onClick = onSignInAgain, enabled = enabled) { Text("Sign in again") }
+                    }
+                    if (!account.isActive && account.isSignedIn) {
+                        TextButton(onClick = onSwitchTo, enabled = enabled) { Text("Use this one") }
+                    }
                 }
-                if (!account.isActive && account.isSignedIn) {
-                    TextButton(onClick = onSwitchTo, enabled = enabled) { Text("Use this one") }
-                }
-                TextButton(onClick = onSignOut, enabled = enabled) { Text("Sign out") }
             }
+            // The same two taps as in Settings, with what it costs said in reserved space
+            // under the button. Listening position is on the server and is not lost.
+            SignOutButton(
+                onSignOut = onSignOut,
+                busy = signingOut,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
-}
-
-/**
- * The confirmation, which names what goes.
- *
- * A sign-out here deletes that account's mirror and its downloaded audio, and neither is
- * recoverable without downloading it again. Listening position is not lost — it is on the
- * server — and saying so is what makes the rest of the warning readable rather than
- * frightening.
- */
-@Composable
-private fun SignOutDialog(
-    account: StoredAccount,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Sign out of ${account.account.username}?") },
-        text = {
-            Text(
-                "This removes the library, the downloads and the local record for this " +
-                    "account on this device. Your listening position stays on the server, " +
-                    "so signing back in restores it. Downloaded audio has to be " +
-                    "downloaded again.",
-            )
-        },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Sign out") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep it") } },
-    )
 }
