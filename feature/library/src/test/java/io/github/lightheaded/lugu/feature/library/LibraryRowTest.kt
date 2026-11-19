@@ -73,4 +73,18 @@ class LibraryRowTest {
         assertThat(podcast(MediaProgress(libraryItemId = "pod", episodeId = "e", progress = 0.4)).progressDescription)
             .isEqualTo("Latest episode 40% listened")
     }
+
+    @Test
+    fun `a finished book is said to be finished, not nearly done`() {
+        val row = book(MediaProgress(libraryItemId = "book", progress = 0.97, isFinished = true))
+
+        assertThat(row.progressDescription).isEqualTo("Finished")
+    }
+
+    @Test
+    fun `a finished episode does not make the feed read as finished`() {
+        val row = podcast(MediaProgress(libraryItemId = "pod", episodeId = "e", progress = 1.0, isFinished = true))
+
+        assertThat(row.progressDescription).isEqualTo("Latest episode 100% listened")
+    }
 }

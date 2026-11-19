@@ -30,7 +30,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -142,6 +144,24 @@ fun DownloadsScreen(
         }
     }
 
+    // A delete has already happened; this is the way back, for as long as the notice
+    // setting says. Letting it time out keeps the delete, and only then do the files go.
+    // The same shape as the queue and the item page.
+    val undo by viewModel.undo.collectAsStateWithLifecycle()
+    val noticeMillis by viewModel.noticeMillis.collectAsStateWithLifecycle()
+    LaunchedEffect(undo, noticeMillis) {
+        val pending = undo ?: return@LaunchedEffect
+        val result = withTimeoutOrNull(noticeMillis) {
+            snackbarHostState.showSnackbar(
+                message = pending.text,
+                actionLabel = "Undo",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            )
+        }
+        if (result == SnackbarResult.ActionPerformed) viewModel.undo(pending) else viewModel.dismissUndo(pending)
+    }
+
     Scaffold(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -173,16 +193,19 @@ fun DownloadsScreen(
         },
     ) { padding ->
         if (state.downloads.isEmpty()) {
-            Box(
-                Modifier.fillMaxSize().padding(padding).padding(32.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "Nothing downloaded yet.\n\nDownload a book from its page and it will play " +
-                        "with no connection at all.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Before the mirror answers, empty means unknown, not "nothing downloaded".
+            if (state.loaded) {
+                Box(
+                    Modifier.fillMaxSize().padding(padding).padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Nothing downloaded yet.\n\nDownload a book from its page and it will play " +
+                            "with no connection at all.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             return@Scaffold
         }
@@ -226,29 +249,37 @@ fun DownloadsScreen(
                 ListControlsBar(
                     query = state.query,
                     onQueryChange = viewModel::setQuery,
-                    searchPlaceholder = "Search downloads",
+                    // One short word, so the box never cuts it. The spoken name says more.
+                    searchPlaceholder = "Search",
+                    searchDescription = "Search downloads",
                     sortOptions = DOWNLOAD_SORTS,
                     selectedSortId = state.sort.id,
                     onSortSelected = { viewModel.setSort(ItemSort.fromId(it)) },
                     filters = DOWNLOAD_FILTERS,
                     selectedFilter = state.filter,
                     onFilterSelected = viewModel::setFilter,
-                    // On this screen the question is about bytes, not about listening.
-                    labelFor = { filter ->
-                        if (filter == ListFilter.IN_PROGRESS) "Downloading" else filter.label
-                    },
+                    labelFor = ::downloadFilterLabel,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
             }
 
             if (state.visible.isEmpty()) {
                 item {
-                    Text(
-                        "Nothing here matches that.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
-                    )
+                    // Names what hides the rows, and gives one way out of both, like the
+                    // Library grid's empty state does.
+                    Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
+                        Text(
+                            downloadsNoMatchLine(state.query, state.filter),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(
+                            onClick = {
+                                viewModel.setQuery("")
+                                viewModel.setFilter(ListFilter.ALL)
+                            },
+                        ) { Text("Show all") }
+                    }
                 }
             }
 
@@ -262,6 +293,9 @@ fun DownloadsScreen(
                     onRemove = { viewModel.remove(download) },
                     onRetry = { viewModel.retry(download) },
                     onExplain = { viewModel.explain(download) },
+                    // A deleted row slides out, and an undone one slides back, so the eye
+                    // sees which row it was.
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -315,6 +349,7 @@ internal fun DownloadRowView(
     onRemove: () -> Unit,
     onRetry: () -> Unit,
     onExplain: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val status = rowStatusOf(download)
     val failure = status as? RowStatus.Failure
@@ -325,7 +360,7 @@ internal fun DownloadRowView(
     // other list in the app still opens the item.
     val explains = !selectionActive && failure?.hasMore == true
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(
                 if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
@@ -426,6 +461,27 @@ internal fun DownloadRowView(
                 compact = true,
             )
         }
+    }
+}
+
+/** On this screen the question is about bytes, not about listening. */
+internal fun downloadFilterLabel(filter: ListFilter): String =
+    if (filter == ListFilter.IN_PROGRESS) "Downloading" else filter.label
+
+/**
+ * Why no download is on the list: the search, the filter, or both.
+ *
+ * A bare "nothing matches" does not say which control to undo.
+ */
+internal fun downloadsNoMatchLine(query: String, filter: ListFilter): String {
+    val words = query.trim()
+    val filtered = filter != ListFilter.ALL
+    return when {
+        words.isNotEmpty() && filtered ->
+            "No downloads match “$words” in “${downloadFilterLabel(filter)}”."
+        words.isNotEmpty() -> "No downloads match “$words”."
+        filtered -> "No downloads in “${downloadFilterLabel(filter)}”."
+        else -> "Nothing here matches that."
     }
 }
 

@@ -3,6 +3,7 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.lightheaded.lugu.core.db.DownloadEntity
 import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.ItemSort
@@ -15,6 +16,7 @@ import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.DownloadSettings
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -163,6 +166,11 @@ data class DownloadsUiState(
     val selectedIds: Set<String> = emptySet(),
     /** Why something this screen was asked to do did not happen. */
     val message: String? = null,
+    /**
+     * False until the mirror has answered, so the first frame does not say "Nothing
+     * downloaded yet" over a list that is about to appear.
+     */
+    val loaded: Boolean = false,
 ) {
     val active: List<DownloadStatus> get() = downloads.filter { it.isActive }
     val complete: List<DownloadStatus> get() = downloads.filter { it.isComplete }
@@ -176,6 +184,19 @@ data class DownloadsUiState(
         }
 }
 
+/**
+ * A delete that has happened and can still be taken back.
+ *
+ * The rows have left every list already. Their files stay on disk until the notice closes,
+ * so Undo puts each one back exactly as it was.
+ */
+data class DownloadsUndo(
+    val text: String,
+    internal val snapshots: List<DownloadEntity>,
+    /** Whose rows these are, so the delete can still finish after the screen has gone. */
+    internal val account: ActiveAccount,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class DownloadsViewModel @Inject constructor(
@@ -184,6 +205,7 @@ class DownloadsViewModel @Inject constructor(
     private val libraryPrefs: LibraryPrefs,
     progressRepository: ProgressRepository,
     downloadPrefs: DownloadPrefs,
+    playbackPrefs: PlaybackPrefs,
 ) : ViewModel() {
 
     private val query = MutableStateFlow("")
@@ -202,6 +224,16 @@ class DownloadsViewModel @Inject constructor(
     private val listPrefs = libraryPrefs.settings.map { it.downloadSort to it.downloadFilter }
 
     private val message = MutableStateFlow<String?>(null)
+
+    private val undoable = MutableStateFlow<DownloadsUndo?>(null)
+
+    /** The last delete, while it can still be taken back. */
+    val undo: StateFlow<DownloadsUndo?> = undoable
+
+    /** How long an Undo stays offered: the notice setting the player and the queue use. */
+    val noticeMillis: StateFlow<Long> = playbackPrefs.settings
+        .map { it.noticeSeconds.coerceAtLeast(1) * 1_000L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10_000L)
 
     private val selection = MutableStateFlow(Selection())
 
@@ -227,6 +259,7 @@ class DownloadsViewModel @Inject constructor(
                         progressByRow = progress.associateBy {
                             "${it.libraryItemId}#${it.episodeId.orEmpty()}"
                         },
+                        loaded = true,
                     )
                 }.map { it.copy(retainedStreamBytes = downloadRepository.retainedStreamBytes()) }
             }
@@ -282,24 +315,76 @@ class DownloadsViewModel @Inject constructor(
     fun remove(status: DownloadStatus) {
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
-            downloadRepository.remove(current, status.libraryItemId, status.episodeId)
+            removeAll(current, listOf(status))
         }
     }
 
     /**
      * Clearing space is the reason anyone opens this screen, and it is rarely one book.
      *
-     * No confirmation: the rows say how much each is worth in bytes, the selection had to
-     * be made deliberately, and anything deleted can be downloaded again.
+     * No confirmation: the delete happens at once and offers Undo, the same as the item
+     * page. The selection had to be made deliberately, and Undo covers the slip.
      */
     fun removeSelected() {
         val chosen = state.value.visible.filter { it.rowKey in state.value.selectedIds }
         if (chosen.isEmpty()) return
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
-            chosen.forEach { downloadRepository.remove(current, it.libraryItemId, it.episodeId) }
+            removeAll(current, chosen)
             clearSelection()
         }
+    }
+
+    /**
+     * A finished download is only marked for deletion, so Undo can put it back exactly; its
+     * files go when the notice closes. A download still running is cancelled at once, as
+     * before: it has no finished file to keep.
+     */
+    private suspend fun removeAll(current: ActiveAccount, chosen: List<DownloadStatus>) {
+        val snapshots = chosen.mapNotNull { status ->
+            if (status.isComplete) {
+                downloadRepository.deferDelete(current, status.libraryItemId, status.episodeId)
+            } else {
+                downloadRepository.remove(current, status.libraryItemId, status.episodeId)
+                null
+            }
+        }
+        if (snapshots.isEmpty()) return
+        // Only one Undo is on offer at a time. The older one closes now, and its files go.
+        // The swap comes first: an Undo tap on the old notice must not pass its
+        // compareAndSet while the files are being deleted, or it restores a row with none.
+        val offer = DownloadsUndo(
+            text = if (snapshots.size == 1) "Download removed" else "Removed ${snapshots.size} downloads",
+            snapshots = snapshots,
+            account = current,
+        )
+        val older = undoable.getAndUpdate { offer }
+        older?.let { finalize(it.account, it) }
+    }
+
+    /** Puts back every download the last delete took away. */
+    fun undo(pending: DownloadsUndo) {
+        if (!undoable.compareAndSet(pending, null)) return
+        viewModelScope.launch {
+            val current = authRepository.account() ?: return@launch
+            pending.snapshots.forEach { downloadRepository.restoreDeferred(current, it) }
+        }
+    }
+
+    /** The notice closed with no Undo, so the delete stands and the files go. */
+    fun dismissUndo(pending: DownloadsUndo) {
+        if (!undoable.compareAndSet(pending, null)) return
+        viewModelScope.launch { finalize(pending.account, pending) }
+    }
+
+    /** The screen closed inside the undo window: the delete stands, and the files go now. */
+    override fun onCleared() {
+        val pending = undoable.getAndUpdate { null } ?: return
+        downloadRepository.finalizeDeferredLater(pending.account, pending.snapshots)
+    }
+
+    private suspend fun finalize(current: ActiveAccount, pending: DownloadsUndo) {
+        pending.snapshots.forEach { downloadRepository.finalizeDeferred(current, it) }
     }
 
     /**

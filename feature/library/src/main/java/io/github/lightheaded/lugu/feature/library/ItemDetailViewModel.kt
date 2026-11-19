@@ -28,14 +28,18 @@ import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueueRepository
 import io.github.lightheaded.lugu.core.sync.ServerEpisodeFetchRepository
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -110,6 +114,12 @@ internal data class Selection(
 
 data class ItemDetailUiState(
     val item: LibraryItem? = null,
+    /**
+     * True once the item is found, or once the detail sync has ended without it. Tells
+     * "not known yet", which shows nothing, apart from "not here", which says so. Room's
+     * first answer is not enough: an item not mirrored yet arrives with that sync.
+     */
+    val loaded: Boolean = false,
     /** Episodes after the search, the filter and the sort — exactly what the screen draws. */
     val episodes: List<EpisodeRow> = emptyList(),
     /** How many episodes the feed holds, so the count line can say what was hidden. */
@@ -179,21 +189,42 @@ data class ItemDetailUiState(
 data class CollectionChoice(val id: String, val name: String, val contains: Boolean)
 
 /**
- * A download delete or cancel that has happened and can still be taken back.
+ * A change on this page that has happened and can still be taken back.
  *
- * Two shapes, because the two actions leave different things behind. Deleting a
- * completed download only marks it pending-delete: nothing has left disk, so
- * [Deferred] carries the exact stored row and undoing it is a plain restore. Cancelling
- * a download still running frees its partial bytes at once — there is no safe
- * pending state for a file the engine itself is still writing to — so [Cancelled]
- * carries only what is needed to ask for the file again; undo re-enqueues it from
- * nothing, which is what FEEDBACK.md calls out as the honest answer here, rather than
- * pretending a resume is a restore.
+ * [Downloads] holds two kinds of row, because a delete and a cancel leave different
+ * things behind. Deleting a completed download only marks it pending-delete: nothing has
+ * left disk, so [Downloads.deferred] carries the exact stored rows and undoing them is a
+ * plain restore. Cancelling a download still running frees its partial bytes at once —
+ * there is no safe pending state for a file the engine itself is still writing to — so
+ * [Downloads.cancelled] carries only what is needed to ask for the file again; undo
+ * re-enqueues it from nothing, which is what FEEDBACK.md calls out as the honest answer
+ * here, rather than pretending a resume is a restore.
+ *
+ * [Progress] holds the progress each item had before a finished mark changed it, so an
+ * undo puts the position back too, not only the flag.
  */
-internal sealed class DownloadUndo(val text: String) {
-    class Deferred(val snapshot: DownloadEntity, text: String) : DownloadUndo(text)
-    class Cancelled(val episodeId: String?, text: String) : DownloadUndo(text)
+internal sealed class PageUndo(val text: String) {
+    class Downloads(
+        val account: ActiveAccount,
+        val deferred: List<DownloadEntity>,
+        /** Episode ids, with null for the book itself. */
+        val cancelled: List<String?>,
+        text: String,
+    ) : PageUndo(text)
+
+    class Progress(val before: List<ProgressBefore>, text: String) : PageUndo(text)
 }
+
+/**
+ * One item's progress before a change; a null [progress] means it had none. [after] is the
+ * row's `lastUpdateMs` right after the change: undo applies only while nothing newer has
+ * written the row.
+ */
+internal data class ProgressBefore(
+    val episodeId: String?,
+    val progress: MediaProgress?,
+    val after: Long? = null,
+)
 
 /**
  * The page's facts that come from neither the mirror nor the list controls.
@@ -233,12 +264,21 @@ class ItemDetailViewModel @Inject constructor(
     // now, and a box still full of last week's word is a list that looks broken on open.
     private val query = MutableStateFlow("")
 
+    /**
+     * The search box's own text, straight from the source. [state] is built off the main
+     * thread, and a text field fed from an async copy drops keystrokes.
+     */
+    internal val queryText: StateFlow<String> = query
+
     private val selection = MutableStateFlow(Selection())
 
-    private val downloadUndo = MutableStateFlow<DownloadUndo?>(null)
+    private val pendingUndo = MutableStateFlow<PageUndo?>(null)
 
-    /** The last download delete or cancel, while it can still be taken back. */
-    internal val undo: StateFlow<DownloadUndo?> = downloadUndo
+    /** True once the detail sync on open has ended, with or without an answer. */
+    private val detailSyncEnded = MutableStateFlow(false)
+
+    /** The last change that can be taken back, while it still can. */
+    internal val undo: StateFlow<PageUndo?> = pendingUndo
 
     /**
      * How long a download undo stays offered, from the same setting the player's own
@@ -255,20 +295,21 @@ class ItemDetailViewModel @Inject constructor(
     private val content: Flow<ItemDetailUiState> = account
         .flatMapLatest { current ->
             if (current == null) {
-                flowOf(ItemDetailUiState())
+                detailSyncEnded.map { ItemDetailUiState(loaded = it) }
             } else {
                 combine(
                     libraryRepository.observeItem(current, itemId),
                     libraryRepository.observeEpisodes(current, itemId),
                     progressRepository.observeAll(current),
                     downloadRepository.observeForItem(current, itemId),
-                    message,
-                ) { item, episodes, progress, downloads, note ->
+                    combine(message, detailSyncEnded) { note, ended -> note to ended },
+                ) { item, episodes, progress, downloads, (note, syncEnded) ->
                     val byKey = progress.associateBy { "${it.libraryItemId}#${it.episodeId.orEmpty()}" }
                     val downloadsByEpisode = downloads.associateBy { it.episodeId.orEmpty() }
                     val itemProgress = byKey["$itemId#"]
                     ItemDetailUiState(
                         item = item,
+                        loaded = item != null || syncEnded,
                         episodes = episodes.map {
                             EpisodeRow(it, byKey["$itemId#${it.id}"], downloadsByEpisode[it.id])
                         },
@@ -383,7 +424,11 @@ class ItemDetailViewModel @Inject constructor(
             // what the listener happens to have typed or picked.
             playTarget = podcastPlayTarget(base.episodes),
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
+    }
+        // Sorting and filtering a feed of a thousand episodes is real work, and all of it
+        // is plain Kotlin, so none of it has to hold up the main thread.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ItemDetailUiState())
 
     fun setQuery(value: String) {
         query.value = value
@@ -402,6 +447,12 @@ class ItemDetailViewModel @Inject constructor(
 
     fun setFilter(filter: ListFilter) {
         viewModelScope.launch { libraryPrefs.setEpisodeFilter(filter) }
+    }
+
+    /** The way out of an empty list: clears the search and the filter together. */
+    fun showAllEpisodes() {
+        query.value = ""
+        setFilter(ListFilter.ALL)
     }
 
     fun toggleSelection(episodeId: String) {
@@ -460,43 +511,94 @@ class ItemDetailViewModel @Inject constructor(
             val account = authRepository.account() ?: return@launch
             if (row?.isComplete == true) {
                 val snapshot = downloadRepository.deferDelete(account, itemId, episodeId)
-                if (snapshot != null) downloadUndo.value = DownloadUndo.Deferred(snapshot, "Deleted $title".trim())
+                if (snapshot != null) {
+                    offerUndo(PageUndo.Downloads(account, listOf(snapshot), emptyList(), "Deleted $title".trim()))
+                }
             } else {
                 downloadRepository.remove(account, itemId, episodeId)
-                downloadUndo.value = DownloadUndo.Cancelled(episodeId, "Cancelled $title".trim())
-            }
-        }
-    }
-
-    /** Puts back whatever the last delete or cancel took away. */
-    fun undoDownload() {
-        val pending = downloadUndo.value ?: return
-        downloadUndo.value = null
-        viewModelScope.launch {
-            val account = authRepository.account() ?: return@launch
-            when (pending) {
-                is DownloadUndo.Deferred -> downloadRepository.restoreDeferred(account, pending.snapshot)
-                is DownloadUndo.Cancelled ->
-                    downloadRepository.download(account, itemId, pending.episodeId)
-                        .onFailure { message.value = it.message ?: "Could not start the download" }
+                offerUndo(PageUndo.Downloads(account, emptyList(), listOf(episodeId), "Cancelled $title".trim()))
             }
         }
     }
 
     /**
-     * Lets a delete or cancel stand once the notice window closes with no undo.
-     *
-     * A cancelled download already left nothing behind, so there is nothing left to do
-     * for it. A deferred delete still has its files on disk, so this is where they
-     * finally go.
+     * Shows [next] as the change to undo. One still on offer is settled after, as a timeout
+     * would settle it: its snackbar goes away, and its deleted files must still go. The
+     * swap comes first, so an Undo tap on the old snackbar cannot pass while it settles.
      */
-    fun dismissDownloadUndo() {
-        val pending = downloadUndo.value ?: return
-        downloadUndo.value = null
-        if (pending !is DownloadUndo.Deferred) return
+    private fun offerUndo(next: PageUndo) {
+        val older = pendingUndo.getAndUpdate { next }
+        older?.let { settle(it) }
+    }
+
+    /**
+     * Puts back exactly what [shown] took away, if it is still the pending change. A tap on
+     * an old snackbar after a newer change does nothing, rather than undo the newer one.
+     */
+    internal fun undo(shown: PageUndo) {
+        if (!pendingUndo.compareAndSet(shown, null)) return
         viewModelScope.launch {
             val account = authRepository.account() ?: return@launch
-            downloadRepository.finalizeDeferred(account, pending.snapshot)
+            when (shown) {
+                is PageUndo.Downloads -> {
+                    shown.deferred.forEach { downloadRepository.restoreDeferred(account, it) }
+                    // Only the first refusal is said: the rest give the same answer.
+                    var refusal: String? = null
+                    shown.cancelled.forEach { episodeId ->
+                        downloadRepository.download(account, itemId, episodeId)
+                            .onFailure { refusal = refusal ?: (it.message ?: "Could not start the download") }
+                    }
+                    refusal?.let { message.value = it }
+                }
+
+                // A row written since (playback, a sync) keeps its newer state.
+                is PageUndo.Progress -> shown.before.forEach {
+                    progressRepository.restore(
+                        account,
+                        itemId,
+                        it.episodeId,
+                        it.progress,
+                        ifUnchangedSince = it.after,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Lets [shown] stand once its notice window closes with no undo. */
+    internal fun dismissUndo(shown: PageUndo) {
+        if (!pendingUndo.compareAndSet(shown, null)) return
+        settle(shown)
+    }
+
+    /**
+     * Playback started from this page, so a finished-mark undo for what plays would put an
+     * old position over it. [episodeId] is null for the book itself.
+     */
+    fun onPlayStarted(episodeId: String?) {
+        val pending = pendingUndo.value as? PageUndo.Progress ?: return
+        if (pending.before.none { it.episodeId == episodeId }) return
+        pendingUndo.compareAndSet(pending, null)
+    }
+
+    /**
+     * The page is going away with an undo still on offer: the change stands, and a deferred
+     * delete is finished on a scope that outlives this view model.
+     */
+    override fun onCleared() {
+        val pending = pendingUndo.getAndUpdate { null } as? PageUndo.Downloads ?: return
+        downloadRepository.finalizeDeferredLater(pending.account, pending.deferred)
+    }
+
+    /**
+     * A cancelled download left nothing behind, and a finished mark is already written, so
+     * neither has more to do. A deferred delete still has its files on disk, so this is
+     * where they finally go.
+     */
+    private fun settle(pending: PageUndo) {
+        if (pending !is PageUndo.Downloads || pending.deferred.isEmpty()) return
+        viewModelScope.launch {
+            pending.deferred.forEach { downloadRepository.finalizeDeferred(pending.account, it) }
         }
     }
 
@@ -531,8 +633,8 @@ class ItemDetailViewModel @Inject constructor(
      * cent of nothing — the shelves and the filters would both disbelieve it.
      *
      * Un-finishing also puts the position back to the start, which is what the server's own
-     * web client does. Worth knowing before pressing it: someone who un-finishes a book to
-     * get it back into their in-progress list loses their place in it.
+     * web client does. The position before the change is kept, and Undo in the snackbar
+     * puts it back, so a mark made by mistake costs nobody their place.
      */
     fun setFinished(isFinished: Boolean, episodeId: String? = null) {
         viewModelScope.launch {
@@ -542,8 +644,15 @@ class ItemDetailViewModel @Inject constructor(
             } else {
                 state.value.episodes.firstOrNull { it.episode.id == episodeId }?.episode?.durationSec ?: 0.0
             }
+            val before = progressRepository.snapshot(current, itemId, episodeId)
             progressRepository.setFinished(current, itemId, episodeId, isFinished, duration)
-            message.value = if (isFinished) "Marked as finished" else "Marked as not finished"
+            val after = progressRepository.snapshot(current, itemId, episodeId)?.lastUpdateMs
+            offerUndo(
+                PageUndo.Progress(
+                    listOf(ProgressBefore(episodeId, before, after)),
+                    if (isFinished) "Marked as finished" else "Marked as not finished",
+                ),
+            )
         }
     }
 
@@ -559,6 +668,9 @@ class ItemDetailViewModel @Inject constructor(
         if (chosen.isEmpty()) return
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
+            val before = chosen.map {
+                ProgressBefore(it.episode.id, progressRepository.snapshot(current, itemId, it.episode.id))
+            }
             chosen.forEach {
                 progressRepository.setFinished(
                     current,
@@ -568,11 +680,19 @@ class ItemDetailViewModel @Inject constructor(
                     it.episode.durationSec,
                 )
             }
-            message.value = if (isFinished) {
-                "Marked ${countOf(chosen.size)} as finished"
-            } else {
-                "Marked ${countOf(chosen.size)} as not finished"
+            val written = before.map {
+                it.copy(after = progressRepository.snapshot(current, itemId, it.episodeId)?.lastUpdateMs)
             }
+            offerUndo(
+                PageUndo.Progress(
+                    written,
+                    if (isFinished) {
+                        "Marked ${countOf(chosen.size)} as finished"
+                    } else {
+                        "Marked ${countOf(chosen.size)} as not finished"
+                    },
+                ),
+            )
             clearSelection()
         }
     }
@@ -599,13 +719,32 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The batch form of [removeDownload], with the same way back: completed files are only
+     * marked for deletion until the notice closes, and running ones are cancelled and
+     * asked for again on undo.
+     */
     fun removeSelectedDownloads() {
         val chosen = selectedRows().filter { it.download != null }
         if (chosen.isEmpty()) return
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
-            chosen.forEach { downloadRepository.remove(current, itemId, it.episode.id) }
-            message.value = "Removed ${countOf(chosen.size)}"
+            val deferred = mutableListOf<DownloadEntity>()
+            val cancelled = mutableListOf<String?>()
+            chosen.forEach { row ->
+                val snapshot = if (row.download?.isComplete == true) {
+                    downloadRepository.deferDelete(current, itemId, row.episode.id)
+                } else {
+                    null
+                }
+                if (snapshot != null) {
+                    deferred += snapshot
+                } else {
+                    downloadRepository.remove(current, itemId, row.episode.id)
+                    cancelled += row.episode.id
+                }
+            }
+            offerUndo(PageUndo.Downloads(current, deferred, cancelled, removedDownloadsLine(chosen.size)))
             clearSelection()
         }
     }
@@ -745,8 +884,17 @@ class ItemDetailViewModel @Inject constructor(
         // The list payload is minified; chapters and episodes only arrive with the
         // expanded fetch, so pull it once on open and let Room feed the screen.
         viewModelScope.launch {
-            val current = authRepository.account() ?: return@launch
-            libraryRepository.syncItemDetail(current, itemId)
+            var found = false
+            try {
+                val current = authRepository.account() ?: return@launch
+                libraryRepository.syncItemDetail(current, itemId)
+                // An item the sync wrote reaches the screen through Room. Only a real miss
+                // ends the wait, so the not-found line cannot flash before Room re-emits.
+                found = libraryRepository.observeItem(current, itemId).first() != null
+            } finally {
+                // In finally, so that no account or a sync that throws still ends the wait.
+                if (!found) detailSyncEnded.value = true
+            }
         }
         viewModelScope.launch { trimIsOwn.value = playbackPrefs.hasOwnTrim(itemId) }
     }
@@ -778,6 +926,10 @@ internal fun collectionChangeLine(name: String?, added: Boolean): String {
     val target = name?.takeIf { it.isNotBlank() } ?: "the collection"
     return if (added) "Added to $target" else "Removed from $target"
 }
+
+/** The receipt for a batch of removed downloads, offered with Undo. */
+internal fun removedDownloadsLine(count: Int): String =
+    if (count == 1) "Removed 1 download" else "Removed $count downloads"
 
 /**
  * What the server answered, in words.

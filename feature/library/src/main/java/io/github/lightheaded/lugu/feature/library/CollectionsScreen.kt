@@ -215,7 +215,8 @@ fun CollectionScreen(
             ) {
                 Text(
                     if (state.loaded) {
-                        "Nothing in this collection. Add a book to it from the book's own page."
+                        "Nothing in this collection. Add books from a book's page, or select " +
+                            "them in the Library tab."
                     } else {
                         "Loading…"
                     },

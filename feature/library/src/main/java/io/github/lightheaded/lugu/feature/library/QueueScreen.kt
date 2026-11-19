@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -45,8 +46,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -133,16 +141,16 @@ fun QueueScreen(
             }
         },
     ) { padding ->
+        // Nothing at all until Room has answered: an empty list before then is not news.
+        if (!state.loaded) return@Scaffold
         if (state.items.isEmpty()) {
             Box(
                 Modifier.fillMaxSize().padding(padding).padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "Nothing queued.\n\nAdd a book or an episode from its page and it plays when " +
-                        "this one finishes. With the queue empty, lugu carries on with the next " +
-                        "book in the series or the next episode instead — both can be turned off " +
-                        "in Settings.",
+                    "Nothing queued.\n\nAdd a book or an episode from its menu, and it plays " +
+                        "after the one that is playing.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -186,6 +194,7 @@ private fun ReorderableQueue(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    val haptics = LocalHapticFeedback.current
 
     // Keyed on the queue itself, so an external change (playing through, a removal)
     // replaces the working copy — but never mid-drag, since nothing writes until release.
@@ -212,6 +221,8 @@ private fun ReorderableQueue(
                     dragFrom = hit?.index
                     dragTo = hit?.index
                     dragOffset = 0f
+                    // Felt, so the finger knows the row is held before it moves.
+                    if (hit != null) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 },
                 onDrag = { change, amount ->
                     change.consume()
@@ -229,6 +240,7 @@ private fun ReorderableQueue(
                     // Keep the row under the finger after the list reflows around it.
                     dragOffset -= (target.offset - dragged.offset)
                     dragTo = target.index
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                 },
                 onDragEnd = {
                     val from = dragFrom
@@ -249,8 +261,22 @@ private fun ReorderableQueue(
         contentPadding = PaddingValues(bottom = 32.dp),
         modifier = modifier.then(dragging),
     ) {
+        // Wide enough for the largest ordinal in the list, so every row starts its title at
+        // the same place.
+        val widestOrdinal = "0".repeat(order.size.toString().length)
         itemsIndexed(order, key = { _, it -> it.rowKey }) { index, item ->
             val isDragging = index == dragTo
+            // TalkBack cannot drag, so each row also offers the moves one step at a time.
+            val moves = if (selectionActive) {
+                emptyList<CustomAccessibilityAction>()
+            } else {
+                listOfNotNull(
+                    CustomAccessibilityAction("Move up") { onMove(index, index - 1); true }
+                        .takeIf { index > 0 },
+                    CustomAccessibilityAction("Move down") { onMove(index, index + 1); true }
+                        .takeIf { index < order.lastIndex },
+                )
+            }
             QueueRowView(
                 item = item,
                 position = index + 1,
@@ -259,8 +285,13 @@ private fun ReorderableQueue(
                 },
                 onRemove = { onRemove(item) },
                 modifier = Modifier
+                    // The held row follows the finger through its own offset; a placement
+                    // animation on it would pull it away from the finger at each swap.
+                    .then(if (isDragging) Modifier else Modifier.animateItem())
                     .zIndex(if (isDragging) 1f else 0f)
                     .graphicsLayer { translationY = if (isDragging) dragOffset else 0f },
+                moves = moves,
+                widestOrdinal = widestOrdinal,
                 isDragging = isDragging,
                 selectionActive = selectionActive,
                 isSelected = item.rowKey in selectedIds,
@@ -276,6 +307,9 @@ private fun QueueRowView(
     onPlay: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
+    /** "Move up" and "Move down" for TalkBack, on the node it focuses. */
+    moves: List<CustomAccessibilityAction> = emptyList(),
+    widestOrdinal: String = "00",
     isDragging: Boolean = false,
     selectionActive: Boolean = false,
     isSelected: Boolean = false,
@@ -293,6 +327,7 @@ private fun QueueRowView(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onPlay)
+                .semantics { customActions = moves }
                 .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -302,12 +337,22 @@ private fun QueueRowView(
             if (selectionActive) {
                 Checkbox(checked = isSelected, onCheckedChange = null)
             } else {
-                Text(
-                    "$position",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
+                // An invisible copy of the widest number sets the width, so it follows the
+                // font size and no row shifts against the next.
+                Box(Modifier.widthIn(min = 20.dp), contentAlignment = Alignment.CenterEnd) {
+                    Text(
+                        widestOrdinal,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        modifier = Modifier.alpha(0f).clearAndSetSemantics {},
+                    )
+                    Text(
+                        "$position",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
             }
             Column(Modifier.weight(1f)) {
                 Text(

@@ -11,10 +11,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -22,8 +24,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,8 +40,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.lightheaded.lugu.core.model.ListFilter
 
@@ -89,10 +98,12 @@ fun ListControlsBar(
      * obvious thing.
      */
     searchDescription: String? = null,
+    /** Side padding of the bar. A caller inside an already padded list passes 0. */
+    horizontalPadding: Dp = 16.dp,
 ) {
     Column(modifier) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -130,7 +141,7 @@ fun ListControlsBar(
         }
 
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
+            contentPadding = PaddingValues(horizontal = horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(filters, key = { it.id }) { filter ->
@@ -172,12 +183,20 @@ private fun SortMenu(options: List<SortOption>, selectedId: String, onSelected: 
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { option ->
+                val isCurrent = option.id == current?.id
                 DropdownMenuItem(
                     text = { Text(option.label) },
                     onClick = {
                         expanded = false
                         onSelected(option.id)
                     },
+                    // The tick is for the eye; the reader hears "selected" instead.
+                    trailingIcon = if (isCurrent) {
+                        { Icon(Icons.Default.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.semantics { selected = isCurrent },
                 )
             }
         }
@@ -203,6 +222,7 @@ data class SelectionAction(
  * getting out of selection mode has to be the easiest thing on the bar, because the most
  * common way into it is by accident.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SelectionBar(
     selectedCount: Int,
@@ -233,8 +253,17 @@ fun SelectionBar(
                 }
             }
             actions.forEach { action ->
-                IconButton(onClick = action.onClick, enabled = action.enabled) {
-                    Icon(action.icon, contentDescription = action.label)
+                // An icon alone does not say what it does; a long press shows the name.
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                        TooltipAnchorPosition.Above,
+                    ),
+                    tooltip = { PlainTooltip { Text(action.label) } },
+                    state = rememberTooltipState(),
+                ) {
+                    IconButton(onClick = action.onClick, enabled = action.enabled) {
+                        Icon(action.icon, contentDescription = action.label)
+                    }
                 }
             }
         }

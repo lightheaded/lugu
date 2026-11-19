@@ -7,9 +7,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.QueueItem
-import io.github.lightheaded.lugu.core.sync.QueuePrefs
 import io.github.lightheaded.lugu.core.sync.QueueRepository
-import io.github.lightheaded.lugu.core.sync.QueueSettings
 import io.github.lightheaded.lugu.core.sync.QueueSnapshot
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,9 +31,10 @@ internal val QueueItem.rowKey: String get() = "$libraryItemId#${episodeId.orEmpt
 
 data class QueueUiState(
     val items: List<QueueItem> = emptyList(),
-    val settings: QueueSettings = QueueSettings(),
     val selectionActive: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
+    /** False until Room has answered once, so "Nothing queued" does not flash on the way in. */
+    val loaded: Boolean = false,
 )
 
 /**
@@ -56,7 +55,6 @@ data class QueueUndo(
 class QueueViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val queueRepository: QueueRepository,
-    private val queuePrefs: QueuePrefs,
     playbackPrefs: PlaybackPrefs,
 ) : ViewModel() {
 
@@ -78,23 +76,21 @@ class QueueViewModel @Inject constructor(
         .map { it.noticeSeconds.coerceAtLeast(1) * 1_000L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10_000L)
 
-    private val account: StateFlow<ActiveAccount?> =
-        authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val state: StateFlow<QueueUiState> = account
+    // Read from the source, not from a state flow whose first null means "not known yet":
+    // here a null must mean "no account", which is an answer.
+    val state: StateFlow<QueueUiState> = authRepository.observeAccount()
         .flatMapLatest { current ->
             if (current == null) {
-                flowOf(QueueUiState())
+                flowOf(QueueUiState(loaded = true))
             } else {
                 combine(
                     queueRepository.observe(current),
-                    queuePrefs.settings,
                     selection,
-                ) { items, settings, picked ->
+                ) { items, picked ->
                     // Playing through removes rows underneath the selection, so what is
                     // ticked is reconciled against what is still queued on every emission.
                     val onScreen = picked.retaining(items.map { it.rowKey })
-                    QueueUiState(items, settings, onScreen.active, onScreen.ids)
+                    QueueUiState(items, onScreen.active, onScreen.ids, loaded = true)
                 }
             }
         }
@@ -173,12 +169,6 @@ class QueueViewModel @Inject constructor(
             offerUndo("Removed ${entryCount(chosen.size)}", before)
         }
     }
-
-    fun setContinueSeries(enabled: Boolean) = viewModelScope.launch { queuePrefs.setContinueSeries(enabled) }
-
-    fun setContinuePodcast(enabled: Boolean) = viewModelScope.launch { queuePrefs.setContinuePodcast(enabled) }
-
-    fun setAskFirst(enabled: Boolean) = viewModelScope.launch { queuePrefs.setAskBeforeSuggestion(enabled) }
 
     private fun withAccount(block: suspend (ActiveAccount) -> Unit) {
         viewModelScope.launch { authRepository.account()?.let { block(it) } }

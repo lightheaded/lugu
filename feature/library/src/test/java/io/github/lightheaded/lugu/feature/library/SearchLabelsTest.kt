@@ -67,6 +67,12 @@ class SearchLabelsTest {
     }
 
     @Test
+    fun `a group found by the search counts titles, not books`() {
+        assertThat(searchGroupCountLine(1)).isEqualTo("1 title")
+        assertThat(searchGroupCountLine(1204)).isEqualTo("1,204 titles")
+    }
+
+    @Test
     fun `an episode is named with its podcast and its date`() {
         val hit = EpisodeHit("p1", "e1", "Harbour lights", "Night Shift Radio", publishedAtMs = 0L, durationSec = 60.0)
 

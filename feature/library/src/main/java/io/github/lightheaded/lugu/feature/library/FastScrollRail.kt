@@ -24,8 +24,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -118,6 +120,11 @@ fun FastScrollRail(
     var railHeightPx by remember { mutableIntStateOf(0) }
     var touchYPx by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
+    // The letter under the finger. The list's own top letter can differ from it: a letter
+    // with three rows cannot scroll to the top of the viewport near the end of the list,
+    // and the bubble must name what the finger points at, not where the list stopped.
+    var pointedLetter by remember { mutableStateOf<Char?>(null) }
+    val haptics = LocalHapticFeedback.current
 
     // The gesture detectors outlive a recomposition, so the callback and the letter list
     // are read through the latest values rather than the ones captured when they started.
@@ -128,7 +135,13 @@ fun FastScrollRail(
         if (height > 0) {
             touchYPx = y.coerceIn(0f, height.toFloat())
             val slot = (touchYPx / height * latestLetters.size).toInt()
-            latestSelected(latestLetters[slot.coerceIn(0, latestLetters.lastIndex)])
+            val letter = latestLetters[slot.coerceIn(0, latestLetters.lastIndex)]
+            // A light tick for each new letter, so the hand feels the steps it cannot see.
+            if (dragging && letter != pointedLetter) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            pointedLetter = letter
+            latestSelected(letter)
         }
     }
 
@@ -148,11 +161,18 @@ fun FastScrollRail(
                 .pointerInput(Unit) {
                     detectVerticalDragGestures(
                         onDragStart = { start ->
+                            pointedLetter = null
                             dragging = true
                             select(start.y)
                         },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
+                        onDragEnd = {
+                            dragging = false
+                            pointedLetter = null
+                        },
+                        onDragCancel = {
+                            dragging = false
+                            pointedLetter = null
+                        },
                         onVerticalDrag = { change, _ ->
                             change.consume()
                             select(change.position.y)
@@ -184,7 +204,8 @@ fun FastScrollRail(
         // Under the finger, not on the rail: on a phone the letter being pointed at is the
         // one the hand is covering, which is the whole reason a contacts list shows it in a
         // bubble beside the thumb.
-        if (dragging && currentLetter != null) {
+        val bubbleLetter = pointedLetter
+        if (dragging && bubbleLetter != null) {
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -196,7 +217,7 @@ fun FastScrollRail(
                     .size(BUBBLE_SIZE),
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text(currentLetter.toString(), style = MaterialTheme.typography.titleLarge)
+                    Text(bubbleLetter.toString(), style = MaterialTheme.typography.titleLarge)
                 }
             }
         }

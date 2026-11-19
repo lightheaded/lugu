@@ -37,13 +37,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +66,8 @@ import io.github.lightheaded.lugu.core.sync.QueueItem
 import io.github.lightheaded.lugu.core.sync.SearchResults
 import io.github.lightheaded.lugu.core.sync.ShelfEntry
 import io.github.lightheaded.lugu.core.sync.ShelfKind
+import io.github.lightheaded.lugu.core.ui.LuguDarkColors
+import io.github.lightheaded.lugu.core.ui.LuguLightColors
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -227,9 +226,9 @@ class LibraryScreensScreenshotTest {
 @Composable
 private fun ScreenshotTheme(dark: Boolean, content: @Composable () -> Unit) {
     val colors = if (dark) {
-        darkColorScheme(primary = Color(0xFFEDC08B), secondary = Color(0xFFD6C3AE))
+        LuguDarkColors
     } else {
-        lightColorScheme(primary = Color(0xFF7A5A36), secondary = Color(0xFF6B5D4D))
+        LuguLightColors
     }
     MaterialTheme(colorScheme = colors) {
         Surface(color = MaterialTheme.colorScheme.background, content = content)
@@ -522,9 +521,10 @@ private fun HomeTabPreview() {
             // Every card here is part-heard, so every cover wears the play badge — the
             // warning that a tap starts audio. The header chevron is on every shelf,
             // because every shelf links to the Library tab.
+            // Without its head: the card above shows that one, as `homeShelves` rules.
             ShelfRowView(
                 title = ShelfKind.CONTINUE.label,
-                cards = CONTINUE_CARDS,
+                cards = CONTINUE_CARDS.drop(1),
                 coverUrlFor = { null },
                 onOpenCard = {},
                 onMore = {},
@@ -595,6 +595,7 @@ private fun ContinueCardStatesPreview() {
 private fun LibraryTabPreview() {
     LibraryContent(
         state = LIBRARY_STATE,
+        queryText = LIBRARY_STATE.query,
         coverUrlFor = { null },
         controls = INERT_CONTROLS,
         selection = INERT_SELECTION,
@@ -623,6 +624,7 @@ private fun LibrarySelectionPreview() {
             selectionActive = true,
             selectedIds = setOf("li_1", "li_3", "li_4"),
         ),
+        queryText = LIBRARY_STATE.query,
         coverUrlFor = { null },
         controls = INERT_CONTROLS,
         selection = INERT_SELECTION,
@@ -650,6 +652,7 @@ private val LIBRARY_STATE = LibraryUiState(
     items = GRID_BOOKS,
     sort = ItemSort.TITLE,
     filter = ListFilter.ALL,
+    loaded = true,
 )
 
 /** Every control wired to nothing: a picture takes no input. */
@@ -685,37 +688,24 @@ private val INERT_SELECTION = LibrarySelectionActions(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BookPagePreview() {
+    val position = 0.42 * LIGHTHOUSE.durationSec
     ItemPageScaffold(LIGHTHOUSE.title) {
-        item { ItemHeaderPreview(LIGHTHOUSE) }
+        item { ItemHeader(LIGHTHOUSE, coverUrl = null, series = emptyList(), onBrowseGroup = { _, _ -> }) }
+        item { LinearProgressIndicator(progress = { 0.42f }, modifier = Modifier.fillMaxWidth()) }
+        // The label comes from the real rule, so the picture shows what a listener sees.
         item {
-            Column {
-                GroupLinkPreview(null, "James T. R. Corven")
-                GroupLinkPreview("Read by", "Jefferson Vale")
-                GroupLinkPreview("Book 1 of", "The Breakwater")
-            }
-        }
-        item {
-            Column {
-                LinearProgressIndicator(progress = { 0.42f }, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "${formatLengthCompact(0.42 * LIGHTHOUSE.durationSec)} of " +
-                        formatLengthCompact(LIGHTHOUSE.durationSec),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {}, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Resume")
-                }
-                DownloadButton(download = null, onDownload = {}, onRemove = {})
-                RowActionsMenu(onPlayNext = {}, onAddToQueue = {}, isFinished = false, onSetFinished = {})
-            }
+            BookActionRow(
+                playLabel = playLabel(isFinished = false, positionSec = position, durationSec = LIGHTHOUSE.durationSec),
+                download = null,
+                isFinished = false,
+                onPlay = {},
+                onDownload = {},
+                onRemoveDownload = {},
+                onPlayNext = {},
+                onAddToQueue = {},
+                onSetFinished = {},
+                onOpenCollections = {},
+            )
         }
         item { Text(LIGHTHOUSE.description.orEmpty(), style = MaterialTheme.typography.bodyMedium) }
     }
@@ -725,8 +715,7 @@ private fun BookPagePreview() {
 @Composable
 private fun PodcastPagePreview() {
     ItemPageScaffold(PODCAST.title) {
-        item { ItemHeaderPreview(PODCAST) }
-        item { GroupLinkPreview(null, PODCAST.authorName.orEmpty()) }
+        item { ItemHeader(PODCAST, coverUrl = null, series = emptyList(), onBrowseGroup = { _, _ -> }) }
         // The label comes from the real rule and not from a literal string, so the picture
         // shows what a listener sees. The fixture holds one episode in progress, which is
         // the first branch of podcastPlayTarget: "Continue" plus that episode's title.
@@ -754,7 +743,8 @@ private fun PodcastPagePreview() {
                 ListControlsBar(
                     query = "",
                     onQueryChange = {},
-                    searchPlaceholder = "Search episodes",
+                    searchPlaceholder = "Search",
+                    searchDescription = "Search episodes",
                     sortOptions = EpisodeSort.entries.map { SortOption(it.id, it.label) },
                     selectedSortId = EpisodeSort.NEWEST.id,
                     onSortSelected = {},
@@ -762,12 +752,13 @@ private fun PodcastPagePreview() {
                     selectedFilter = ListFilter.ALL,
                     onFilterSelected = {},
                     modifier = Modifier.padding(top = 8.dp),
+                    horizontalPadding = 0.dp,
                 )
                 Text(
                     episodeCountLine(EPISODES.size, PODCAST.numEpisodes),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(vertical = 8.dp),
                 )
             }
         }
@@ -861,51 +852,6 @@ private fun ItemPageScaffold(title: String, content: androidx.compose.foundation
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
-    }
-}
-
-@Composable
-private fun ItemHeaderPreview(item: LibraryItem) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Box(
-            Modifier
-                .size(140.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        )
-        Column {
-            Text(item.title, style = MaterialTheme.typography.titleLarge)
-            item.subtitle?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun GroupLinkPreview(prefix: String?, name: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        prefix?.let {
-            Text(
-                "$it ",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
 

@@ -15,11 +15,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -31,7 +36,7 @@ import io.github.lightheaded.lugu.core.model.EpisodeSort
 import io.github.lightheaded.lugu.core.model.ListFilter
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The episodes of every podcast in the library, in one list.
@@ -41,7 +46,8 @@ import kotlinx.coroutines.delay
  * many shows.
  *
  * The status strip sits in the [Box] that wraps the list, below the search and the chips,
- * never over them. See the Compose overlay rule in `CLAUDE.md`.
+ * never over them. See the Compose overlay rule in `CLAUDE.md`. The strip carries the
+ * fetch's state; a confirmation, and anything with Undo, goes to the snackbar instead.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,18 +59,36 @@ fun AllEpisodesScreen(
     viewModel: AllEpisodesViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val queryText by viewModel.queryText.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    val pendingUndo by viewModel.undo.collectAsStateWithLifecycle()
+    val noticeMillis by viewModel.noticeMillis.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    // A confirmation says what it did and then stops. A note that stays reads as a state the
-    // screen is in.
-    LaunchedEffect(state.status) {
-        if (state.status is Status.Done) {
-            delay(NOTE_MS)
-            viewModel.dismissStatus()
+    LaunchedEffect(message) {
+        val note = message ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(note)
+        viewModel.dismissMessage()
+    }
+
+    // The change has already happened; this is the way back, for as long as the notice
+    // setting says. A timeout keeps the change, as on the podcast page.
+    LaunchedEffect(pendingUndo, noticeMillis) {
+        val pending = pendingUndo ?: return@LaunchedEffect
+        val result = withTimeoutOrNull(noticeMillis) {
+            snackbarHostState.showSnackbar(
+                message = pending.text,
+                actionLabel = "Undo",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            )
         }
+        if (result == SnackbarResult.ActionPerformed) viewModel.undo(pending) else viewModel.dismissUndo(pending)
     }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -91,9 +115,9 @@ fun AllEpisodesScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             ListControlsBar(
-                query = state.query,
+                query = queryText,
                 onQueryChange = viewModel::setQuery,
-                searchPlaceholder = "Search episodes",
+                searchPlaceholder = "Search",
                 searchDescription = "Search by episode title or podcast",
                 sortOptions = EpisodeSort.entries.map { SortOption(it.id, it.label) },
                 selectedSortId = state.sort.id,
@@ -102,14 +126,15 @@ fun AllEpisodesScreen(
                 selectedFilter = state.filter,
                 onFilterSelected = viewModel::setFilter,
             )
-            if (state.episodeCount > 0) {
-                Text(
-                    episodeCountLine(state.episodes.size, state.episodeCount),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
+            // Always drawn, empty until there is a count, so the list does not move down
+            // when the count arrives.
+            Text(
+                if (state.episodeCount > 0) episodeCountLine(state.episodes.size, state.episodeCount) else "",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
 
             Box(modifier = Modifier.fillMaxSize()) {
                 if (state.episodes.isEmpty()) {
@@ -135,13 +160,17 @@ fun AllEpisodesScreen(
                                 selectionActive = false,
                                 isSelected = false,
                                 onOpen = { onOpenEpisode(entry.itemId, entry.episodeId) },
-                                onPlay = { onPlay(entry.itemId, entry.episodeId) },
+                                onPlay = {
+                                    viewModel.onPlayStarted(entry)
+                                    onPlay(entry.itemId, entry.episodeId)
+                                },
                                 onToggle = {},
                                 onDownload = { viewModel.download(entry) },
                                 onRemoveDownload = { viewModel.removeDownload(entry) },
                                 onPlayNext = { viewModel.playNext(entry) },
                                 onAddToQueue = { viewModel.addToQueue(entry) },
                                 onSetFinished = { viewModel.setFinished(entry, it) },
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -159,12 +188,10 @@ fun AllEpisodesScreen(
 
 /** Why the list is empty: the search, the filter, the first fetch, or no episodes at all. */
 private fun emptyLine(state: AllEpisodesUiState): String = when {
-    !state.loaded -> "Loading…"
+    // Nothing until the first answer: the list usually follows within a frame.
+    !state.loaded -> ""
     state.query.isNotBlank() -> "No episodes match “${state.query}”."
     state.filter != ListFilter.ALL && state.episodeCount > 0 -> "No episodes match “${state.filter.label}”."
     state.status is Status.Working -> "Fetching episodes…"
     else -> "No episodes in this library yet."
 }
-
-/** Long enough to read a short sentence, short enough not to become part of the screen. */
-private const val NOTE_MS = 4_000L

@@ -74,6 +74,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -109,6 +113,7 @@ fun ItemDetailScreen(
     viewModel: ItemDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val queryText by viewModel.queryText.collectAsStateWithLifecycle()
     val item = state.item
     val snackbarHostState = remember { SnackbarHostState() }
     var showCollections by remember { mutableStateOf(false) }
@@ -132,15 +137,15 @@ fun ItemDetailScreen(
         viewModel.dismissMessage()
     }
 
-    val downloadUndo by viewModel.undo.collectAsStateWithLifecycle()
+    val pendingUndo by viewModel.undo.collectAsStateWithLifecycle()
     val noticeMillis by viewModel.noticeMillis.collectAsStateWithLifecycle()
 
-    // The delete or cancel has already happened; this is the way back, offered for as
-    // long as the notice setting says and no longer. Letting it time out keeps the
-    // change, which is what the tap asked for — the same shape as the player's own
-    // notices, because it is the same promise.
-    LaunchedEffect(downloadUndo, noticeMillis) {
-        val pending = downloadUndo ?: return@LaunchedEffect
+    // The delete, cancel or finished mark has already happened; this is the way back,
+    // offered for as long as the notice setting says and no longer. Letting it time out
+    // keeps the change, which is what the tap asked for — the same shape as the player's
+    // own notices, because it is the same promise.
+    LaunchedEffect(pendingUndo, noticeMillis) {
+        val pending = pendingUndo ?: return@LaunchedEffect
         val result = withTimeoutOrNull(noticeMillis) {
             snackbarHostState.showSnackbar(
                 message = pending.text,
@@ -149,7 +154,7 @@ fun ItemDetailScreen(
                 duration = SnackbarDuration.Indefinite,
             )
         }
-        if (result == SnackbarResult.ActionPerformed) viewModel.undoDownload() else viewModel.dismissDownloadUndo()
+        if (result == SnackbarResult.ActionPerformed) viewModel.undo(pending) else viewModel.dismissUndo(pending)
     }
 
     // Getting out of selection mode is the commonest thing to want, and back is where
@@ -176,8 +181,18 @@ fun ItemDetailScreen(
         },
     ) { padding ->
         if (item == null) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("Loading…", style = MaterialTheme.typography.bodyMedium)
+            // Blank until Room answers, which is quick enough that a "Loading…" would only
+            // flash. Once it has answered with nothing, say so instead of waiting for ever.
+            if (state.loaded) {
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    Text(
+                        "This item is not on this phone. It may have been removed from the server.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(32.dp),
+                    )
+                }
             }
             return@Scaffold
         }
@@ -192,97 +207,51 @@ fun ItemDetailScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    AsyncImage(
-                        model = state.coverUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(140.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                    )
-                    Column {
-                        Text(item.title, style = MaterialTheme.typography.titleLarge)
-                        item.subtitle?.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            // The dash is this line's decision rather than the formatter's:
-                            // a podcast carries no item-level duration at all, and "0s"
-                            // under the cover reads as a show with no audio in it instead
-                            // of as a length there was never a figure for.
-                            item.durationSec.takeIf { it > 0 }?.let(::formatLengthCompact) ?: "—",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                ItemHeader(item = item, coverUrl = state.coverUrl, series = state.series, onBrowseGroup = onBrowseGroup)
             }
 
-            // Skipped entirely rather than left to render nothing: the list spaces its
-            // items apart, so an empty row still leaves a gap where it was.
-            if (item.hasBrowseLinks) {
-                item {
-                    BrowseGroupLinks(item = item, series = state.series, onBrowseGroup = onBrowseGroup)
-                }
-            }
-
+            // The bar alone: the time left is in the play button below, so an "x of y" line
+            // here would say the same thing twice.
             if (state.progressFraction > 0f) {
                 item {
-                    Column {
-                        LinearProgressIndicator(
-                            progress = { state.progressFraction },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            // No dash here: this line only exists once there is progress to
-                            // draw, so both figures are known by construction.
-                            "${formatLengthCompact(state.positionSec)} of " +
-                                formatLengthCompact(item.durationSec),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    LinearProgressIndicator(
+                        progress = { state.progressFraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
 
             if (item.mediaType == MediaType.BOOK) {
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { onPlay(item.id, null) },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.size(8.dp))
-                            Text(if (state.progressFraction > 0f) "Resume" else "Play")
-                        }
-                        DownloadButton(
-                            download = state.download,
-                            onDownload = { viewModel.download() },
-                            onRemove = { viewModel.removeDownload() },
-                        )
-                        RowActionsMenu(
-                            onPlayNext = { viewModel.playNext() },
-                            onAddToQueue = { viewModel.addToQueue() },
-                            isFinished = state.isFinished,
-                            onSetFinished = { viewModel.setFinished(it) },
-                            onOpenCollections = { showCollections = true },
-                        )
-                    }
+                    BookActionRow(
+                        playLabel = playLabel(state.isFinished, state.positionSec, item.durationSec),
+                        download = state.download,
+                        isFinished = state.isFinished,
+                        onPlay = {
+                            viewModel.onPlayStarted(null)
+                            onPlay(item.id, null)
+                        },
+                        onDownload = { viewModel.download() },
+                        onRemoveDownload = { viewModel.removeDownload() },
+                        onPlayNext = { viewModel.playNext() },
+                        onAddToQueue = { viewModel.addToQueue() },
+                        onSetFinished = { viewModel.setFinished(it) },
+                        onOpenCollections = { showCollections = true },
+                    )
                 }
             }
 
             if (item.mediaType == MediaType.PODCAST) {
                 state.playTarget?.let { target ->
-                    item { PodcastPlayRow(target = target, onPlay = { onPlay(item.id, it) }) }
+                    item {
+                        PodcastPlayRow(
+                            target = target,
+                            onPlay = {
+                                viewModel.onPlayStarted(it)
+                                onPlay(item.id, it)
+                            },
+                        )
+                    }
                 }
                 // Below the play row and not beside it, and present even when the play row
                 // is not: a feed the server holds no episodes of is exactly the feed that
@@ -300,7 +269,13 @@ fun ItemDetailScreen(
                     // A show's description is markup exactly as an episode's is, and it was
                     // drawn with a plain Text until the episode page needed the answer — so
                     // a podcast whose description uses <p> was showing its tags here.
-                    ShowNotesText(html = description, style = MaterialTheme.typography.bodyMedium)
+                    // Folded to four lines: a long blurb otherwise pushes the episode list
+                    // a screen down on every visit.
+                    ShowNotesText(
+                        html = description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        collapsedMaxLines = 4,
+                    )
                 }
             }
 
@@ -325,9 +300,11 @@ fun ItemDetailScreen(
                     Column {
                         Text("Episodes", style = MaterialTheme.typography.titleMedium)
                         ListControlsBar(
-                            query = state.query,
+                            query = queryText,
                             onQueryChange = viewModel::setQuery,
-                            searchPlaceholder = "Search episodes",
+                            // One short word, so the box never cuts it. The spoken name says more.
+                            searchPlaceholder = "Search",
+                            searchDescription = "Search episodes",
                             sortOptions = EpisodeSort.entries.map { SortOption(it.id, it.label) },
                             selectedSortId = state.episodeSort.id,
                             onSortSelected = { viewModel.setSort(EpisodeSort.fromId(it)) },
@@ -335,6 +312,8 @@ fun ItemDetailScreen(
                             selectedFilter = state.episodeFilter,
                             onFilterSelected = viewModel::setFilter,
                             modifier = Modifier.padding(top = 8.dp),
+                            // The list already pads 16 dp, so the bar adds none.
+                            horizontalPadding = 0.dp,
                         )
                         // The count is the receipt for the filter: without it, a chip that
                         // removes nine hundred rows and a chip that removes none look the same.
@@ -342,25 +321,31 @@ fun ItemDetailScreen(
                             episodeCountLine(state.episodes.size, state.episodeCount),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            modifier = Modifier.padding(vertical = 8.dp),
                         )
                     }
                 }
             }
 
             if (state.episodeCount > 0 && state.episodes.isEmpty()) {
-                item {
-                    Text(
-                        "No episodes match that.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                item(key = "no-match") {
+                    Column {
+                        Text(
+                            noMatchingEpisodesLine(state.query, state.episodeFilter),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = viewModel::showAllEpisodes) { Text("Show all") }
+                    }
                 }
             }
 
-            items(state.episodes, key = { it.episode.id }) { row ->
+            items(state.episodes, key = { it.episode.id }, contentType = { "episode" }) { row ->
                 EpisodeRowView(
                     row = row,
+                    // Rows slide to their new place on a sort, a filter or a finish,
+                    // so the eye can follow what moved instead of seeing a hard cut.
+                    modifier = Modifier.animateItem(),
                     selectionActive = state.selectionActive,
                     isSelected = row.episode.id in state.selectedIds,
                     onOpen = { onOpenEpisode(item.id, row.episode.id) },
@@ -368,7 +353,10 @@ fun ItemDetailScreen(
                     // The caller starts playback and opens the player, and the transport's
                     // optimistic Play/Pause state is settled in PlaybackConnection, so
                     // there is nothing for this row to confirm afterwards.
-                    onPlay = { onPlay(item.id, row.episode.id) },
+                    onPlay = {
+                        viewModel.onPlayStarted(row.episode.id)
+                        onPlay(item.id, row.episode.id)
+                    },
                     onToggle = { viewModel.toggleSelection(row.episode.id) },
                     onDownload = { viewModel.download(row.episode.id) },
                     onRemoveDownload = { viewModel.removeDownload(row.episode.id) },
@@ -542,7 +530,12 @@ internal fun EpisodeRowView(
      */
     podcastTitle: String? = null,
 ) {
-    val subline = remember(row.episode) { episodeSubline(row.episode) }
+    // "Finished" leads the line, in words: a full 2 dp bar alone is easy to miss and says
+    // nothing to a screen reader. First, so a narrow row cuts the date before it.
+    val subline = remember(row.episode, row.isFinished) {
+        listOfNotNull("Finished".takeIf { row.isFinished }, episodeSubline(row.episode).ifEmpty { null })
+            .joinToString(" · ")
+    }
     val background = if (isSelected) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
@@ -896,10 +889,11 @@ private val LibraryItem.hasBrowseLinks: Boolean
 /**
  * The author, the narrator and the series, as links to their own pages.
  *
- * A block of its own below the cover rather than three lines squeezed beside it: a link
- * has to be hittable, and there is no room for three forty-eight-dip targets in a column
- * next to a hundred-and-forty-dip cover. Keeping the three together also makes them look
- * like what they are — the same kind of thing, leading to the same kind of page.
+ * Drawn beside the cover, under the title. As a block below it they left the space next
+ * to the cover half empty and pushed the play button down by three tall rows. Each link
+ * keeps a 48 dp row, so it stays easy to hit, and a long name wraps to a second line.
+ * Keeping the three together also makes them look like what they are — the same kind of
+ * thing, leading to the same kind of page.
  *
  * The series is linked by its *title*, never by the string the server sends: that string
  * has the volume number baked into it, so linking with it would lead to a page holding
@@ -958,6 +952,90 @@ private fun BrowseGroupLinks(
 }
 
 /**
+ * The top of a book or podcast page: the cover, and beside it the title, the length and
+ * the links to the author, the narrator and the series.
+ *
+ * One composable for the screen and for its screenshot test, so that the picture cannot
+ * drift from the page.
+ */
+@Composable
+internal fun ItemHeader(
+    item: LibraryItem,
+    coverUrl: String?,
+    series: List<SeriesRef>,
+    onBrowseGroup: (kind: String, name: String) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        AsyncImage(
+            model = coverUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(140.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(item.title, style = MaterialTheme.typography.titleLarge)
+            item.subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Left out when there is no figure: a podcast carries no item-level
+            // duration, and a lone dash under the title reads as a fault.
+            item.durationSec.takeIf { it > 0 }?.let { duration ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    formatLengthCompact(duration),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Beside the cover, in the space the title leaves, rather than as a
+            // block of tall rows below it.
+            if (item.hasBrowseLinks) {
+                Spacer(Modifier.height(4.dp))
+                BrowseGroupLinks(item = item, series = series, onBrowseGroup = onBrowseGroup)
+            }
+        }
+    }
+}
+
+/** The book page's actions: play, the download control and the menu. Shared with the test. */
+@Composable
+internal fun BookActionRow(
+    playLabel: String,
+    download: DownloadStatus?,
+    isFinished: Boolean,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+    onRemoveDownload: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onSetFinished: (Boolean) -> Unit,
+    onOpenCollections: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = onPlay, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text(playLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        DownloadButton(download = download, onDownload = onDownload, onRemove = onRemoveDownload)
+        RowActionsMenu(
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
+            isFinished = isFinished,
+            onSetFinished = onSetFinished,
+            onOpenCollections = onOpenCollections,
+        )
+    }
+}
+
+/**
  * One link out of the item page.
  *
  * Coloured with the primary colour and given a full-width row to be tapped in, because a
@@ -972,26 +1050,27 @@ private fun BrowseGroupLink(
     modifier: Modifier = Modifier,
     prefix: String? = null,
 ) {
-    Row(
+    // One text rather than two in a row, so a long name beside the cover wraps under its
+    // prefix instead of squeezing into the space the prefix leaves.
+    val prefixColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val nameColor = MaterialTheme.colorScheme.primary
+    val text = remember(prefix, name, prefixColor, nameColor) {
+        buildAnnotatedString {
+            prefix?.let { withStyle(SpanStyle(color = prefixColor)) { append("$it ") } }
+            withStyle(SpanStyle(color = nameColor)) { append(name) }
+        }
+    }
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        prefix?.let {
-            Text(
-                "$it ",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         Text(
-            name,
+            text,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
     }
@@ -1230,6 +1309,16 @@ internal fun formatPublished(
         published.year == today.year -> published.format(SAME_YEAR)
         else -> published.format(OTHER_YEAR)
     }
+}
+
+/**
+ * Why the list is empty, naming what hides the rows: the search first, since it is what
+ * was typed last, then the filter. Same wording as the Episodes view.
+ */
+internal fun noMatchingEpisodesLine(query: String, filter: ListFilter): String = when {
+    query.isNotBlank() -> "No episodes match “${query.trim()}”."
+    filter != ListFilter.ALL -> "No episodes match “${filter.label}”."
+    else -> "No episodes match."
 }
 
 /** "48 of 1,204 episodes", and just the total when nothing is hidden. */

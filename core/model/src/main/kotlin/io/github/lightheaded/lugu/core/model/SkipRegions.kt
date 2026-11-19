@@ -48,7 +48,7 @@ data class PodcastTrim(
         val NONE = PodcastTrim()
 
         /** Offered as one-tap choices; any value in range can still be typed. */
-        val TRIM_CHOICES_SEC = listOf(0, 5, 10, 15, 20, 30, 45, 60, 90)
+        val TRIM_CHOICES_SEC = listOf(0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180)
         const val MAX_TRIM_SEC = 600
     }
 }

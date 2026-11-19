@@ -9,6 +9,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,11 +31,14 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveDone
@@ -53,10 +58,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -102,6 +110,9 @@ fun LibraryScreen(
     gridState: LazyGridState = rememberLazyGridState(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Straight from the query flow: the grid state is built off the main thread, and a box
+    // fed from it would lose keys typed while a sort runs.
+    val queryText by viewModel.queryText.collectAsStateWithLifecycle()
 
     // Getting out of selection mode is the commonest thing to want, and back is where
     // people reach for it first — before they find the cross on the bar.
@@ -118,6 +129,7 @@ fun LibraryScreen(
 
     LibraryContent(
         state = state,
+        queryText = queryText,
         coverUrlFor = { viewModel.coverUrl(it) },
         controls = LibraryControlActions(
             onSelectLibrary = viewModel::selectLibrary,
@@ -200,6 +212,8 @@ internal data class LibrarySelectionActions(
 @Composable
 internal fun LibraryContent(
     state: LibraryUiState,
+    /** The search box's text, which must not wait for [state] to catch up. */
+    queryText: String,
     coverUrlFor: (String) -> String?,
     controls: LibraryControlActions,
     selection: LibrarySelectionActions,
@@ -240,6 +254,19 @@ internal fun LibraryContent(
         derivedStateOf { letterKeys.getOrNull(gridState.firstVisibleItemIndex)?.let(::initialOf) }
     }
 
+    // A new sort makes the old scroll index a random place in the new order, so the grid
+    // goes back to the top. Only once the state is loaded, and only on a change: the first
+    // sort seen, a restored screen and a filter change keep the place. Saveable, so that a
+    // screen restored after the process died does not count its own sort as a change.
+    var shownSortId by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.loaded, state.sort) {
+        if (!state.loaded) return@LaunchedEffect
+        val sortId = state.sort.id
+        val before = shownSortId
+        shownSortId = sortId
+        if (before != null && before != sortId) gridState.scrollToItem(0)
+    }
+
     Column(modifier = modifier) {
         if (state.libraries.size > 1) {
             LazyRow(
@@ -275,7 +302,7 @@ internal fun LibraryContent(
             )
 
             ListControlsBar(
-                query = state.query,
+                query = queryText,
                 onQueryChange = controls.onQueryChange,
                 // One word, because this box is the only child of its row that carries a
                 // weight: the sort chip takes its natural width first, so "Recently added"
@@ -324,14 +351,18 @@ internal fun LibraryContent(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (state.items.isEmpty()) {
-                    LibraryEmptyState(
-                        content = libraryEmptyContent(
-                            state = state,
-                            onClearSearch = { controls.onQueryChange("") },
-                            onClearFilter = { controls.onFilterSelected(ListFilter.ALL) },
-                        ),
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    // Before Room answers, empty means unknown. Saying "nothing here" then
+                    // would be a false claim for the frame before the books appear.
+                    if (state.loaded) {
+                        LibraryEmptyState(
+                            content = libraryEmptyContent(
+                                state = state,
+                                onClearSearch = { controls.onQueryChange("") },
+                                onClearFilter = { controls.onFilterSelected(ListFilter.ALL) },
+                            ),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 } else {
                     LazyVerticalGrid(
                         state = gridState,
@@ -362,6 +393,7 @@ internal fun LibraryContent(
                                 },
                                 isSelected = row.item.id in state.selectedIds,
                                 onLongClick = { selection.onToggle(row.item.id) },
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -452,21 +484,33 @@ private fun libraryEmptyContent(
  */
 @Composable
 private fun LibraryEmptyState(content: LibraryEmptyContent, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.padding(32.dp), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+    // Scrollable, though it never needs to scroll: the pull-to-refresh gesture reaches the
+    // box around it only through a scrolling child. The minimum height keeps the text in
+    // the middle of the space.
+    BoxWithConstraints(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(32.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                content.line,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            val label = content.actionLabel
-            val onAction = content.onAction
-            if (label != null && onAction != null) {
-                TextButton(onClick = onAction) { Text(label) }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    content.line,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                val label = content.actionLabel
+                val onAction = content.onAction
+                if (label != null && onAction != null) {
+                    TextButton(onClick = onAction) { Text(label) }
+                }
             }
         }
     }
@@ -619,6 +663,9 @@ private const val SEARCH_FIELDS = "Search by title, author, narrator, series or 
  * either to say which; audio with no warning is a surprise, and a page where a play was
  * expected is a broken promise. The badge is the warning, and the click label says the
  * same thing to TalkBack, which cannot see a badge.
+ *
+ * [isDownloaded] puts a small badge in the top corner: the item plays without a network.
+ * It defaults to the row's own flag, which only the Library grid fills in today.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -632,6 +679,7 @@ internal fun ItemCard(
     subtitle: String? = row.item.authorName,
     onLongClick: (() -> Unit)? = null,
     playsOnTap: Boolean = false,
+    isDownloaded: Boolean = row.isDownloaded,
 ) {
     Column(
         modifier = modifier.combinedClickable(
@@ -650,11 +698,26 @@ internal fun ItemCard(
         ) {
             AsyncImage(
                 model = coverUrl,
+                // Kept, although TalkBack then reads the title two times. The card is one
+                // node for a screen reader, and this description is how the harness and
+                // other tools find a title in it. Without it the harness tests found no
+                // title on both emulators. A merged description for the whole card is
+                // the better form, and it is in the issue on reading order.
                 contentDescription = title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            if (row.progressFraction > 0f) {
+            if (row.isFinished) {
+                // A finished book gets a tick, not a bar: a full bar and a 97% bar look
+                // the same at this size. Bottom start, clear of the play badge.
+                CoverBadge(
+                    icon = Icons.Default.Check,
+                    description = row.progressDescription,
+                    background = MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                )
+            } else if (row.progressFraction > 0f) {
                 // Three device-independent pixels of colour is the whole of what a sighted
                 // reader gets, and TalkBack got nothing at all — a bar with no description
                 // is skipped, so the one fact that distinguishes a part-heard book from an
@@ -666,6 +729,16 @@ internal fun ItemCard(
                         .fillMaxWidth()
                         .height(3.dp)
                         .semantics { contentDescription = row.progressDescription },
+                )
+            }
+            if (isDownloaded) {
+                // A scrim behind the glyph, so it reads on a light cover and a dark one.
+                CoverBadge(
+                    icon = Icons.Default.DownloadDone,
+                    description = "Downloaded",
+                    background = MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f),
+                    tint = Color.White,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
                 )
             }
             if (playsOnTap) {
@@ -725,6 +798,25 @@ internal fun ItemCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/** A small round mark in a corner of a cover. */
+@Composable
+private fun CoverBadge(
+    icon: ImageVector,
+    description: String,
+    background: Color,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(24.dp)
+            .background(background, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(16.dp))
     }
 }
 

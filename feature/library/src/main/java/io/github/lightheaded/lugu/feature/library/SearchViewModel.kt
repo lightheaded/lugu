@@ -100,8 +100,12 @@ class SearchViewModel @Inject constructor(
         query.value = value
     }
 
-    /** Plain server URLs; the shared OkHttp interceptor attaches auth for Coil. */
-    fun coverUrl(itemId: String, width: Int = 200): String? =
+    /**
+     * Plain server URLs; the shared OkHttp interceptor attaches auth for Coil.
+     *
+     * The width is the grid's, so a cover the grid already loaded comes from the cache.
+     */
+    fun coverUrl(itemId: String, width: Int = 400): String? =
         account.value?.let { "${it.baseUrl}/api/items/$itemId/cover?width=$width" }
 
     /**

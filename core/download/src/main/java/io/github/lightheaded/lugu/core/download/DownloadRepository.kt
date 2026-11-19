@@ -20,7 +20,10 @@ import io.github.lightheaded.lugu.core.sync.Clock
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
@@ -157,6 +160,12 @@ class DownloadRepository @Inject constructor(
     private val coverStore: CoverStore,
     private val clock: Clock,
 ) {
+    /**
+     * Outlives every screen, for [finalizeDeferredLater] only. A screen closed inside its
+     * undo window still owes the delete, and its own scope is already cancelled by then.
+     */
+    private val lateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     fun observeAll(account: ActiveAccount): Flow<List<DownloadStatus>> =
         downloadDao.observeAll(account.serverId, account.userId).map { rows -> rows.map { it.toStatus() } }
 
@@ -392,6 +401,19 @@ class DownloadRepository @Inject constructor(
         val current = downloadDao.get(account.serverId, account.userId, snapshot.libraryItemId, snapshot.episodeKey)
         if (current?.state != DownloadState.PENDING_DELETE) return
         removeRow(current)
+    }
+
+    /**
+     * [finalizeDeferred] for a screen that is going away with its undo still on offer.
+     *
+     * The undo dies with the screen, so the delete is due now. People remove downloads to
+     * free space and then leave, and waiting for the next cold start would keep the files.
+     */
+    fun finalizeDeferredLater(account: ActiveAccount, snapshots: List<DownloadEntity>) {
+        if (snapshots.isEmpty()) return
+        lateScope.launch {
+            snapshots.forEach { runCatching { finalizeDeferred(account, it) } }
+        }
     }
 
     /**

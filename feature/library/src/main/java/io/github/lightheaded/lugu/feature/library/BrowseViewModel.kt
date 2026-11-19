@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.db.BrowseGroup
+import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.model.Library
 import io.github.lightheaded.lugu.core.model.ListControls
 import io.github.lightheaded.lugu.core.model.ListFacts
@@ -42,6 +43,11 @@ data class BrowseUiState(
     val query: String = "",
     /** What the library holds, so a count can say "12 books" or "12 podcasts" honestly. */
     val mediaType: MediaType = MediaType.BOOK,
+    /**
+     * False until the mirror has answered, so the first frame does not claim the library
+     * has no authors. The initial value of the state is not an answer.
+     */
+    val loaded: Boolean = false,
 )
 
 /**
@@ -76,11 +82,12 @@ class BrowseViewModel @Inject constructor(
      * grid does. A null id means nothing has been chosen yet — on that one frame the
      * repository spans every library, which is a fuller answer rather than a wrong one.
      */
-    private val groups: Flow<List<BrowseGroup>> =
+    // Null while no account is known yet: that is "not asked", not "none".
+    private val groups: Flow<List<BrowseGroup>?> =
         combine(account, selectedLibraryId) { current, libraryId -> current to libraryId }
             .flatMapLatest { (current, libraryId) ->
                 if (current == null) {
-                    flowOf(emptyList())
+                    flowOf(null)
                 } else {
                     libraryRepository.observeGroups(current, kind, libraryId)
                 }
@@ -96,7 +103,8 @@ class BrowseViewModel @Inject constructor(
     }
 
     val state: StateFlow<BrowseUiState> =
-        combine(groups, query, selectedLibrary) { all, text, library ->
+        combine(groups, query, selectedLibrary) { answer, text, library ->
+            val all = answer.orEmpty()
             BrowseUiState(
                 kind = kind,
                 // Sorted here rather than left to the query's alphabetical ordering: a
@@ -108,6 +116,7 @@ class BrowseViewModel @Inject constructor(
                 totalGroups = all.size,
                 query = text,
                 mediaType = library?.mediaType ?: MediaType.BOOK,
+                loaded = answer != null,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BrowseUiState(kind = kind))
 
@@ -139,6 +148,7 @@ class BrowseGroupViewModel @Inject constructor(
     authRepository: AuthRepository,
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
+    private val downloadRepository: DownloadRepository,
 ) : ViewModel() {
 
     private val kind: BrowseKind = BrowseKind.fromId(savedStateHandle["kind"])
@@ -167,12 +177,14 @@ class BrowseGroupViewModel @Inject constructor(
                 combine(
                     libraryRepository.observeGroupItems(current, kind, name),
                     progressRepository.observeAll(current),
-                ) { items, progress ->
+                    downloadRepository.observeAll(current),
+                ) { items, progress, downloads ->
                     val byItem = ItemProgress.byItem(progress)
+                    val downloaded = ItemProgress.downloadedItemIds(downloads)
                     BrowseGroupUiState(
                         kind = kind,
                         name = name,
-                        rows = items.map { LibraryRow(it, byItem[it.id]) },
+                        rows = items.map { LibraryRow(it, byItem[it.id], isDownloaded = it.id in downloaded) },
                         loaded = true,
                     )
                 }

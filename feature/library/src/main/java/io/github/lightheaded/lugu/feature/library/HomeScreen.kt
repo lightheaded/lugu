@@ -41,9 +41,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,6 +64,7 @@ import io.github.lightheaded.lugu.core.sync.ShelfKind
 import io.github.lightheaded.lugu.core.sync.StartTab
 import io.github.lightheaded.lugu.core.ui.Status
 import io.github.lightheaded.lugu.core.ui.StatusStrip
+import kotlinx.coroutines.launch
 
 /**
  * The buttons at the end of Home's top bar, in one place so that the screenshot test
@@ -141,6 +144,16 @@ fun HomeScreen(
     bottomBar: @Composable (tabBar: @Composable () -> Unit) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel(),
+    /**
+     * The shell's snackbar host. Placed in this Scaffold's slot, a shell snackbar sits above
+     * the tab bar and the mini player instead of under them.
+     */
+    snackbarHost: @Composable () -> Unit = {},
+    /**
+     * Opens the player for what is already loaded. A tap on the Continue card for the
+     * loaded thing comes here instead of [onPlay], which would start it again.
+     */
+    onOpenPlayer: () -> Unit = {},
 ) {
     // The Library tab's view model is resolved here as well as inside LibraryScreen, and is
     // the same instance: both resolve against the destination that hosts them. The shell
@@ -166,9 +179,11 @@ fun HomeScreen(
     // grid. Both remember across a rotation, which is what rememberLazy*State already does.
     val homeListState = rememberLazyListState()
     val libraryGridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = snackbarHost,
         topBar = {
             TopAppBar(
                 title = { Text("lugu") },
@@ -205,20 +220,34 @@ fun HomeScreen(
             null -> Unit
 
             HomeTab.HOME -> Box(Modifier.fillMaxSize()) {
-                HomeTabContent(
-                    state = state,
-                    playingNow = playingNow,
-                    coverUrlFor = { viewModel.coverUrl(it) },
-                    onOpenItem = onOpenItem,
-                    onPlay = onPlay,
-                    onTogglePlayPause = viewModel::togglePlayPause,
-                    onOpenShelf = { kind ->
-                        libraryViewModel.setFilter(kind.libraryFilter())
-                        chosen = HomeTab.LIBRARY
-                    },
-                    listState = homeListState,
+                // The same gesture and the same sync as the Library tab. Home is read from
+                // the same mirror, so a pull here was the one place it did nothing.
+                PullToRefreshBox(
+                    isRefreshing = libraryState.isPulling,
+                    onRefresh = libraryViewModel::pullToRefresh,
                     modifier = Modifier.fillMaxSize().padding(padding),
-                )
+                ) {
+                    HomeTabContent(
+                        state = state,
+                        playingNow = playingNow,
+                        coverUrlFor = { viewModel.coverUrl(it) },
+                        onOpenItem = onOpenItem,
+                        onPlay = onPlay,
+                        onTogglePlayPause = viewModel::togglePlayPause,
+                        onOpenPlayer = onOpenPlayer,
+                        onOpenShelf = { kind ->
+                            // "See all" lands on the shelf's kind of thing and nothing else:
+                            // an old search would narrow it without saying so, and an old
+                            // scroll position would start it in the middle.
+                            libraryViewModel.onQueryChange("")
+                            libraryViewModel.setFilter(kind.libraryFilter())
+                            scope.launch { libraryGridState.scrollToItem(0) }
+                            chosen = HomeTab.LIBRARY
+                        },
+                        listState = homeListState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 StatusStrip(
                     status = libraryState.statusLine(),
                     onDismiss = libraryViewModel::dismissStatus,
@@ -293,6 +322,7 @@ private fun HomeTabContent(
     onOpenItem: (String) -> Unit,
     onPlay: (itemId: String, episodeId: String?) -> Unit,
     onTogglePlayPause: () -> Unit,
+    onOpenPlayer: () -> Unit,
     onOpenShelf: (ShelfKind) -> Unit,
     listState: LazyListState,
     modifier: Modifier = Modifier,
@@ -325,7 +355,17 @@ private fun HomeTabContent(
                     card = card,
                     coverUrl = coverUrlFor(card.itemId),
                     isPlaying = loaded?.isPlaying == true,
-                    onResume = { onPlay(card.itemId, card.episodeId) },
+                    // The body still means "carry on with this". For the thing already
+                    // loaded, carrying on is a resume if it is paused and the player either
+                    // way, never a new start: that would buffer it again from the resume.
+                    onResume = {
+                        if (loaded == null) {
+                            onPlay(card.itemId, card.episodeId)
+                        } else {
+                            if (!loaded.isPlaying) onTogglePlayPause()
+                            onOpenPlayer()
+                        }
+                    },
                     // A card that is already loaded gets the transport; anything else gets
                     // a start. Sending a start to what is already playing would resolve the
                     // session again and buffer from the beginning of the resume.
@@ -353,6 +393,7 @@ private fun HomeTabContent(
 
         items(state.shelves, key = { it.kind.name }) { shelf ->
             ShelfRowView(
+                modifier = Modifier.animateItem(),
                 title = shelf.kind.label,
                 cards = shelf.cards,
                 coverUrlFor = coverUrlFor,
@@ -362,7 +403,9 @@ private fun HomeTabContent(
             )
         }
 
-        if (state.continueCard == null && state.shelves.isEmpty()) {
+        // Not before the shelves have answered: the first frame is empty because nothing has
+        // been read yet, and saying "nothing to pick up" then is a false claim.
+        if (state.loaded && state.continueCard == null && state.shelves.isEmpty()) {
             item {
                 Text(
                     // Two different emptinesses, and pointing at the Library tab is only

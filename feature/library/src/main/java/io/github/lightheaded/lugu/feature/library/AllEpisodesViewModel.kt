@@ -14,10 +14,12 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.LibraryPrefs
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
+import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueueRepository
 import io.github.lightheaded.lugu.core.ui.Status
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -91,12 +94,39 @@ class AllEpisodesViewModel @Inject constructor(
     private val downloadRepository: DownloadRepository,
     private val queueRepository: QueueRepository,
     private val libraryPrefs: LibraryPrefs,
+    playbackPrefs: PlaybackPrefs,
 ) : ViewModel() {
 
     // Not persisted, unlike the sort and the filter: a search is a question about right now.
     private val query = MutableStateFlow("")
 
+    /**
+     * The search box's own text, straight from the source. [state] is built off the main
+     * thread, and a text field fed from an async copy drops keystrokes.
+     */
+    internal val queryText: StateFlow<String> = query
+
+    /** Progress of the fetch, and its failures: a state, so it is the strip's. */
     private val status = MutableStateFlow<Status?>(null)
+
+    private val note = MutableStateFlow<String?>(null)
+
+    /** A short confirmation for the snackbar, which shows it over the list. */
+    internal val message: StateFlow<String?> = note
+
+    private val undos = RowUndos(
+        viewModelScope,
+        authRepository,
+        downloadRepository,
+        progressRepository,
+        onMessage = { note.value = it },
+    )
+
+    /** The last change that can be taken back, while it still can. */
+    internal val undo: StateFlow<RowUndo?> = undos.current
+
+    internal val noticeMillis: StateFlow<Long> = noticeMillisOf(playbackPrefs)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10_000L)
 
     private val account: StateFlow<ActiveAccount?> =
         authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -107,8 +137,10 @@ class AllEpisodesViewModel @Inject constructor(
      * Otherwise the first podcast library. The link that opens this screen shows only in a
      * podcast library, so the fallback matters only if the picker moves while this is open.
      */
+    // Read from the repository, not from [account]: that one starts as null before the
+    // real answer, and a null there would count as "loaded, and empty".
     private val library: Flow<Library?> = combine(
-        account.flatMapLatest { current ->
+        authRepository.observeAccount().flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else libraryRepository.observeLibraries(current)
         },
         libraryPrefs.settings.map { it.selectedLibraryId }.distinctUntilChanged(),
@@ -118,7 +150,7 @@ class AllEpisodesViewModel @Inject constructor(
     }.distinctUntilChanged()
 
     private val rows: Flow<Pair<Library?, List<AllEpisodesRow>>> =
-        combine(account, library) { current, lib -> current to lib }
+        combine(authRepository.observeAccount(), library) { current, lib -> current to lib }
             .flatMapLatest { (current, lib) ->
                 if (current == null || lib == null) {
                     flowOf(lib to emptyList())
@@ -165,7 +197,11 @@ class AllEpisodesViewModel @Inject constructor(
             status = line,
             loaded = true,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AllEpisodesUiState())
+    }
+        // Filtering and sorting a whole library's episodes is too much work for the main
+        // thread on every keystroke.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AllEpisodesUiState())
 
     init {
         viewModelScope.launch {
@@ -214,11 +250,11 @@ class AllEpisodesViewModel @Inject constructor(
         }
     }
 
+    /** Takes the download away at once, as on the podcast page; the snackbar offers it back. */
     fun removeDownload(row: AllEpisodesRow) {
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
-            downloadRepository.remove(current, row.itemId, row.episodeId)
-            status.value = Status.Done("Removed ${row.row.episode.title}".trim())
+            undos.removeDownload(current, row.itemId, row.episodeId, row.row.download)
         }
     }
 
@@ -226,7 +262,7 @@ class AllEpisodesViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             queueRepository.addNext(current, row.itemId, row.episodeId)
-            status.value = Status.Done("Playing next")
+            note.value = "Playing next"
         }
     }
 
@@ -234,22 +270,31 @@ class AllEpisodesViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             queueRepository.addLast(current, row.itemId, row.episodeId)
-            status.value = Status.Done("Added to the queue")
+            note.value = "Added to the queue"
         }
     }
 
+    /** Undo in the snackbar puts the position back too, not only the mark. */
     fun setFinished(row: AllEpisodesRow, isFinished: Boolean) {
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
-            progressRepository.setFinished(
-                current,
-                row.itemId,
-                row.episodeId,
-                isFinished,
-                row.row.episode.durationSec,
-            )
-            status.value = Status.Done(if (isFinished) "Marked as finished" else "Marked as not finished")
+            undos.setFinished(current, row.itemId, row.episodeId, isFinished, row.row.episode.durationSec)
         }
+    }
+
+    internal fun undo(shown: RowUndo) = undos.undo(shown)
+
+    internal fun dismissUndo(shown: RowUndo) = undos.dismiss(shown)
+
+    /** Starting an episode here settles a finished-mark undo for it. */
+    fun onPlayStarted(row: AllEpisodesRow) = undos.dropProgressUndo(row.itemId, row.episodeId)
+
+    override fun onCleared() {
+        undos.settleOnClose()
+    }
+
+    fun dismissMessage() {
+        note.value = null
     }
 
     fun dismissStatus() {

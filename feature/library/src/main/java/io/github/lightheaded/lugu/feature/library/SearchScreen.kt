@@ -42,6 +42,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,8 +79,16 @@ fun SearchScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val focus = remember { FocusRequester() }
 
-    // The screen is opened to type into, so the keyboard comes up with it.
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    // The screen is opened to type into, so the keyboard comes up with it — but only the
+    // first time. Back from a result, the results are what is wanted, and a keyboard over
+    // them hides the list that was being read.
+    var focusedOnce by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!focusedOnce) {
+            focusedOnce = true
+            focus.requestFocus()
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -136,7 +146,23 @@ internal fun SearchContent(
         OutlinedTextField(
             value = state.query,
             onValueChange = onQueryChange,
-            label = { Text("Books, episodes, authors, narrators…", maxLines = 1) },
+            // A short label, because a focused label shrinks onto the border and a long one
+            // is cut there. The breadth goes in the placeholder, and TalkBack hears it from the
+            // label's description, since it does not read a placeholder that is not drawn.
+            label = {
+                Text(
+                    "Search",
+                    maxLines = 1,
+                    modifier = Modifier.semantics { contentDescription = SEARCH_FIELD_DESCRIPTION },
+                )
+            },
+            placeholder = {
+                Text(
+                    "Books, episodes, authors, narrators…",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
             singleLine = true,
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
@@ -261,10 +287,14 @@ private fun ItemResultRow(item: LibraryItem, subline: String?, coverUrl: String?
 private fun GroupResultRow(group: BrowseGroup, onClick: () -> Unit) {
     ListItem(
         headlineContent = { Text(group.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(groupCountLine(group.itemCount, MediaType.BOOK)) },
+        supportingContent = { Text(searchGroupCountLine(group.itemCount)) },
         modifier = Modifier.clickable(onClick = onClick),
     )
 }
+
+/** What TalkBack says for the search field: everything it searches. */
+private const val SEARCH_FIELD_DESCRIPTION =
+    "Search books, podcasts, episodes, authors, narrators, series and collections"
 
 /** How many rows a section shows before "Show all". */
 internal const val SECTION_PREVIEW = 4
@@ -281,6 +311,15 @@ internal fun searchHint(state: SearchUiState): String? = when {
     state.nothingFound -> "Nothing matches “${state.query.trim()}”."
     else -> null
 }
+
+/**
+ * "12 titles" for an author, narrator or series found by the search.
+ *
+ * The search spans every library, and a group's count does not say which kind of thing it
+ * counts, so "books" would be false for the author of a podcast.
+ */
+internal fun searchGroupCountLine(count: Int): String =
+    "%,d %s".format(Locale.UK, count, if (count == 1) "title" else "titles")
 
 /** "Books", "Podcasts", or both when the search found both. */
 internal fun itemSectionLabel(items: List<LibraryItem>): String {

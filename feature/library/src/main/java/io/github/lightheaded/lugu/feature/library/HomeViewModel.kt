@@ -3,6 +3,8 @@ package io.github.lightheaded.lugu.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.lightheaded.lugu.core.download.DownloadRepository
+import io.github.lightheaded.lugu.core.download.DownloadStatus
 import io.github.lightheaded.lugu.core.model.ContinueLabel
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.ProgressKey
@@ -38,6 +40,8 @@ import kotlinx.coroutines.flow.stateIn
 data class ShelfCard(
     val entry: ShelfEntry,
     val progress: MediaProgress?,
+    /** A finished download of the item is on the phone; the card wears the badge for it. */
+    val isDownloaded: Boolean = false,
 ) {
     val key: String get() = entry.key
     val itemId: String get() = entry.item.id
@@ -66,7 +70,7 @@ data class ShelfCard(
     val remainingSec: Double get() = playedDurationSec * (1f - progressFraction)
 
     /** What the grid's card wants, since a shelf card is drawn by the same component. */
-    val row: LibraryRow get() = LibraryRow(entry.item, progress)
+    val row: LibraryRow get() = LibraryRow(entry.item, progress, isDownloaded = isDownloaded)
 
     /**
      * Whether a tap on this card resumes playback rather than opening the item's page.
@@ -128,7 +132,48 @@ data class HomeUiState(
      * honestly means nothing is part-heard.
      */
     val libraryHasArrived: Boolean = true,
+    /**
+     * False until the shelves have answered. Before that, empty means unknown, and the
+     * screen draws no empty line.
+     */
+    val loaded: Boolean = false,
 )
+
+/**
+ * The resume card and the shelves under it, from the shelves in the order they are shown.
+ *
+ * The continue query is ordered by most recent progress already, so the single most
+ * recently played thing is the head of that shelf. Working it out a second time here would
+ * be a second definition of "most recent" to disagree with the first. It is read from the
+ * arranged list, so hiding "Continue listening" takes the resume card with it.
+ *
+ * The card is not repeated on the shelf below it: the same book twice, one above the other,
+ * reads as a fault. A continue shelf with nothing else on it is not shown at all.
+ */
+internal fun homeShelves(
+    visible: List<Shelf>,
+    progress: Map<ProgressKey, MediaProgress>,
+    downloaded: Set<String>,
+): Pair<ShelfCard?, List<ShelfRow>> {
+    fun cardOf(entry: ShelfEntry) = ShelfCard(
+        entry,
+        progress[ProgressKey(entry.item.id, entry.episodeId)],
+        isDownloaded = entry.item.id in downloaded,
+    )
+
+    val continueCard = visible.firstOrNull { it.kind == ShelfKind.CONTINUE }
+        ?.entries?.firstOrNull()?.let(::cardOf)
+    val rows = visible.mapNotNull { shelf ->
+        val entries = if (shelf.kind == ShelfKind.CONTINUE) shelf.entries.drop(1) else shelf.entries
+        if (shelf.kind == ShelfKind.CONTINUE && entries.isEmpty()) return@mapNotNull null
+        ShelfRow(
+            shelf.kind,
+            entries.take(SHELF_ROW_MAX).map(::cardOf),
+            hasMore = entries.size > SHELF_ROW_MAX,
+        )
+    }
+    return continueCard to rows
+}
 
 /**
  * What to play now.
@@ -157,6 +202,7 @@ class HomeViewModel @Inject constructor(
     progressRepository: ProgressRepository,
     libraryPrefs: LibraryPrefs,
     private val playback: PlaybackConnection,
+    private val downloadRepository: DownloadRepository,
 ) : ViewModel() {
 
     private val account: StateFlow<ActiveAccount?> =
@@ -210,11 +256,13 @@ class HomeViewModel @Inject constructor(
      * than being handed across by the shell. Two owners of one value disagree for a frame,
      * and the visible symptom is shelves that span every library and then snap.
      */
-    private val shelves: StateFlow<List<Shelf>> =
+    // Null until the repository has answered. An initial value or a missing account is not
+    // an answer, and treating it as one drew "Nothing to pick up yet" for the first frame.
+    private val shelves: StateFlow<List<Shelf>?> =
         combine(account, settings) { current, prefs -> current to prefs }
             .flatMapLatest { (current, prefs) ->
                 if (current == null) {
-                    flowOf(emptyList())
+                    flowOf(null)
                 } else {
                     libraryRepository.observeShelves(
                         account = current,
@@ -226,7 +274,7 @@ class HomeViewModel @Inject constructor(
                         hidden = ShelfKind.entries.filter { it.name in prefs.hiddenShelves }.toSet(),
                     )
                 }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val libraryHasArrived: StateFlow<Boolean> = account
         .flatMapLatest { current ->
@@ -234,33 +282,29 @@ class HomeViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
+    /** Items with a finished download, for the downloaded badge on a shelf card. */
+    private val downloadedItemIds: StateFlow<Set<String>> = account
+        .flatMapLatest { current ->
+            if (current == null) flowOf(emptyList()) else downloadRepository.observeAll(current)
+        }
+        .map(ItemProgress::downloadedItemIds)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
     val state: StateFlow<HomeUiState> =
-        combine(shelves, progressByThing, settings, libraryHasArrived) { shelfList, progress, prefs, mirrored ->
+        combine(shelves, progressByThing, settings, libraryHasArrived, downloadedItemIds) {
+                shelfList, progress, prefs, mirrored, downloaded ->
+            // Null until the shelves have answered: no card and no empty line before then.
+            if (shelfList == null) return@combine HomeUiState()
             // Hidden shelves never reach here — the repository is told not to query them —
             // so this only puts what is left into the order somebody asked for.
             val visible = prefs.arrangeShelves(shelfList) { it.kind.name }
-            val rows = visible.map { shelf ->
-                ShelfRow(
-                    shelf.kind,
-                    shelf.entries.take(SHELF_ROW_MAX).map { entry ->
-                        ShelfCard(entry, progress[ProgressKey(entry.item.id, entry.episodeId)])
-                    },
-                    hasMore = shelf.entries.size > SHELF_ROW_MAX,
-                )
-            }
+            val (continueCard, rows) = homeShelves(visible, progress, downloaded)
             HomeUiState(
-                // The continue query is ordered by most recent progress already, so the
-                // single most recently played thing is the head of that shelf. Working it
-                // out a second time here would be a second definition of "most recent"
-                // to disagree with the first.
-                //
-                // Read from the arranged list, so hiding "Continue listening" takes the
-                // resume card with it. Leaving a card of that name on a screen where the
-                // shelf was explicitly turned off would look like the setting failed.
-                continueCard = rows.firstOrNull { it.kind == ShelfKind.CONTINUE }?.cards?.firstOrNull(),
+                continueCard = continueCard,
                 shelves = rows,
                 shelvesSpanEverything = !prefs.shelvesFollowLibrary,
                 libraryHasArrived = mirrored,
+                loaded = true,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 
@@ -312,4 +356,13 @@ internal object ItemProgress {
      */
     fun lastPlayedByItem(rows: List<MediaProgress>): Map<String, Long> =
         rows.groupBy { it.libraryItemId }.mapValues { (_, forItem) -> forItem.maxOf { it.lastUpdateMs } }
+
+    /**
+     * The items with a finished download on the phone, for the downloaded badge on a card.
+     *
+     * The same rule as the Library grid: a download still in flight does not yet play
+     * without a network, so it does not count.
+     */
+    fun downloadedItemIds(rows: List<DownloadStatus>): Set<String> =
+        rows.filter { it.isComplete }.map { it.libraryItemId }.toSet()
 }

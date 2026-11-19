@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.lightheaded.lugu.core.db.CollectionSummary
+import io.github.lightheaded.lugu.core.download.DownloadRepository
 import io.github.lightheaded.lugu.core.model.ListControls
 import io.github.lightheaded.lugu.core.model.ListFacts
 import io.github.lightheaded.lugu.core.sync.ActiveAccount
@@ -151,6 +152,7 @@ class CollectionViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val collectionRepository: CollectionRepository,
     progressRepository: ProgressRepository,
+    downloadRepository: DownloadRepository,
 ) : ViewModel() {
 
     private val collectionId: String = checkNotNull(savedStateHandle["collectionId"])
@@ -170,11 +172,13 @@ class CollectionViewModel @Inject constructor(
                     // so a rename made on the server reaches the title bar on the next sync
                     // without a fetch of its own.
                     collectionRepository.observeCollections(current),
-                ) { items, progress, collections ->
+                    downloadRepository.observeAll(current),
+                ) { items, progress, collections, downloads ->
                     val byItem = ItemProgress.byItem(progress)
+                    val downloaded = ItemProgress.downloadedItemIds(downloads)
                     CollectionUiState(
                         name = collections.firstOrNull { it.id == collectionId }?.name.orEmpty(),
-                        rows = items.map { LibraryRow(it, byItem[it.id]) },
+                        rows = items.map { LibraryRow(it, byItem[it.id], isDownloaded = it.id in downloaded) },
                         loaded = true,
                     )
                 }

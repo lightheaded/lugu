@@ -445,6 +445,46 @@ class ProgressRepository @Inject constructor(
         )
     }
 
+    /** The progress as it stands now, kept by a caller that may need to undo a change. */
+    suspend fun snapshot(account: ActiveAccount, itemId: String, episodeId: String?): MediaProgress? =
+        get(account, itemId, episodeId)
+
+    /**
+     * Undo for [setFinished] and other explicit changes: puts back the position and the
+     * finished flag from [snapshot]. A null snapshot means there was no progress, so the
+     * item goes back to the start, not finished.
+     *
+     * Goes out with `force` for the same reason as [setFinished]: finished is sticky in
+     * [record], and an undo of "mark finished" must be able to clear it.
+     *
+     * [ifUnchangedSince] is the row's `lastUpdateMs` right after the change being undone.
+     * When the row has been written since (playback, a sync), the undo would put an old
+     * position and flag over newer listening, so nothing is written and the result is false.
+     */
+    suspend fun restore(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        snapshot: MediaProgress?,
+        ifUnchangedSince: Long? = null,
+    ): Boolean {
+        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+        if (ifUnchangedSince != null && existing?.lastUpdateMs != ifUnchangedSince) return false
+        val duration = snapshot?.durationSec?.takeIf { it > 0 }
+            ?: existing?.durationSec
+            ?: 0.0
+        record(
+            account = account,
+            itemId = itemId,
+            episodeId = episodeId,
+            positionSec = snapshot?.currentTimeSec ?: 0.0,
+            durationSec = duration,
+            isFinished = snapshot?.isFinished ?: false,
+            force = true,
+        )
+        return true
+    }
+
     private suspend fun enqueue(account: ActiveAccount, progress: MediaProgress) {
         val payload = ProgressOutboxPayload(
             libraryItemId = progress.libraryItemId,

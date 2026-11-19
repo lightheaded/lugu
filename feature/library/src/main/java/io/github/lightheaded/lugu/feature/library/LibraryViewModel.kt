@@ -21,15 +21,27 @@ import io.github.lightheaded.lugu.core.sync.LibrarySettings
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.QueueRepository
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -37,6 +49,8 @@ import kotlinx.coroutines.launch
 data class LibraryRow(
     val item: LibraryItem,
     val progress: MediaProgress?,
+    /** A finished download of the item is on the phone, so it plays without a network. */
+    val isDownloaded: Boolean = false,
 ) {
     val progressFraction: Float
         get() = progress?.progress?.toFloat()?.coerceIn(0f, 1f) ?: 0f
@@ -61,6 +75,8 @@ data class LibraryRow(
      */
     val progressDescription: String
         get() {
+            // A finished book reads as finished, not as "97% listened".
+            if (isFinished) return "Finished"
             val percent = (progressFraction * 100).toInt()
             return if (progressIsEpisode) {
                 "Latest episode $percent% listened"
@@ -113,6 +129,14 @@ data class LibraryUiState(
      * one item, and a selection is many.
      */
     val collections: List<CollectionChoice> = emptyList(),
+    /**
+     * False until Room has answered for the library in view.
+     *
+     * The state before that is empty because nothing is known yet, not because the library
+     * is. The grid draws no empty state until this is true, so the first frame does not say
+     * "Nothing in this library yet" about a library that has books in it.
+     */
+    val loaded: Boolean = false,
 )
 
 /**
@@ -123,7 +147,7 @@ data class LibraryUiState(
  * the shelves above it were not. This one is only ever about the selected library, which
  * makes the picker mean exactly one thing.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val authRepository: AuthRepository,
@@ -142,32 +166,63 @@ class LibraryViewModel @Inject constructor(
     private val error = MutableStateFlow<String?>(null)
     private val message = MutableStateFlow<String?>(null)
 
+    /**
+     * True once a library sync has ended, with or without an answer.
+     *
+     * Until then an account with no library may only be one whose libraries are not
+     * mirrored yet, so the grid stays unloaded rather than saying it is empty.
+     */
+    private val librariesChecked = MutableStateFlow(false)
+
+    /** The search box's text, read by the box itself and never through [state]. */
+    val queryText: StateFlow<String> = query
+
+    // Declared before `init`, which starts the first sync: a property declared below it
+    // would be reset to null after that sync had stored itself here.
+    /** The newest sync. Only it may say that syncing has ended. */
+    private var syncJob: Job? = null
+
     // The same reducer the episode list uses. Selection is a property of a list rather than
     // of a screen, and a second implementation here is how two lists end up disagreeing
     // about what select-all means.
     private val selection = MutableStateFlow(Selection())
 
+    // The shared flows below hold no made-up first value. The grid's state is built from
+    // them, so that its first emission is what Room and the preferences really hold, and
+    // `loaded` can mean that. The state flows beside them keep a default for everything else.
+    private val accountUpdates = authRepository.observeAccount()
+        .shareIn(viewModelScope, SharingStarted.Eagerly, replay = 1)
+
     private val account: StateFlow<ActiveAccount?> =
-        authRepository.observeAccount().stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        accountUpdates.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** Hidden media types are already filtered out here, so the picker cannot offer one. */
-    private val libraries: StateFlow<List<Library>> = account
+    private val libraryUpdates = accountUpdates
         .flatMapLatest { current ->
             if (current == null) flowOf(emptyList()) else libraryRepository.observeLibraries(current)
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
-    private val settings: StateFlow<LibrarySettings> = libraryPrefs.settings
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibrarySettings())
+    // Eagerly, for the same reason as [selectedLibraryId]: `setSort` reads `.value`.
+    private val libraries: StateFlow<List<Library>> =
+        libraryUpdates.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val settingsUpdates = libraryPrefs.settings
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    private val settings: StateFlow<LibrarySettings> =
+        settingsUpdates.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibrarySettings())
 
     /**
      * Stored rather than held here, because the shelves on the other tab are scoped by the
      * same value. One screen owning it and telling the other leaves a frame where the two
      * disagree, which shows up as shelves that span every library and then snap.
      */
-    private val selectedLibraryId: StateFlow<String?> = settings
+    // Eagerly, because actions read `.value`: shared only while collected, it stayed at
+    // null when nothing collected it, and a null here reads as "no library chosen yet".
+    private val selectedLibraryId: StateFlow<String?> = settingsUpdates
         .map { it.selectedLibraryId }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
      * Progress per item, falling back to the item's most recent episode where it has no
@@ -223,18 +278,33 @@ class LibraryViewModel @Inject constructor(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val items: StateFlow<List<LibraryItem>> =
-        combine(account, selectedLibraryId, query) { current, libraryId, text ->
+    /**
+     * What the search runs on: the box's text after a short pause in typing, so that each
+     * key does not re-query and re-sort the library. The box itself reads [queryText] and shows
+     * each key at once. Clearing is not delayed, because the full grid is already known.
+     */
+    private val searchQuery: Flow<String> =
+        query.debounce { text -> if (text.isBlank()) 0L else TYPING_PAUSE_MS }
+
+    /** `null` while there is no answer yet: no library is selected so far. */
+    private val items: Flow<List<LibraryItem>?> =
+        combine(
+            accountUpdates,
+            settingsUpdates.map { it.selectedLibraryId }.distinctUntilChanged(),
+            searchQuery,
+        ) { current, libraryId, text ->
             Triple(current, libraryId, text)
         }.flatMapLatest { (current, libraryId, text) ->
             when {
-                current == null || libraryId == null -> flowOf(emptyList())
+                current == null -> flowOf<List<LibraryItem>?>(emptyList())
+                // The picker chooses a default once the libraries are mirrored.
+                libraryId == null -> flowOf<List<LibraryItem>?>(null)
                 // Search stays on the full-text index: it matches metadata the grid does
                 // not render, which the in-memory substring pass could not.
                 text.isBlank() -> libraryRepository.observeItems(current, libraryId)
                 else -> libraryRepository.search(current, libraryId, text)
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        }
 
     /**
      * Everything the grid shows that is not the grid.
@@ -250,34 +320,58 @@ class LibraryViewModel @Inject constructor(
         message,
         selection,
         collections,
-    ) { base, note, picked, choices -> base.copy(note = note, selection = picked, collections = choices) }
+        librariesChecked,
+    ) { base, note, picked, choices, checked ->
+        base.copy(note = note, selection = picked, collections = choices, librariesChecked = checked)
+    }
 
+    /**
+     * The grid's state, filtered and sorted.
+     *
+     * Built from the real first values of the library list, the items and the preferences,
+     * so the first emission is already true and sets [LibraryUiState.loaded]. It runs off
+     * the main thread, because it filters and sorts the whole library again each time a
+     * playback position is written.
+     */
     val state: StateFlow<LibraryUiState> = combine(
-        libraries,
-        selectedLibraryId,
+        libraryUpdates,
         items,
         combine(
             progressByItem,
             downloadedItemIds,
             latestEpisodeDates,
-            settings,
+            settingsUpdates,
         ) { progress, downloaded, latest, prefs ->
-            Shaping(progress, downloaded, latest, prefs.itemSort, prefs.podcastSort, prefs.itemFilter)
+            Shaping(
+                progress = progress,
+                downloaded = downloaded,
+                latestEpisodes = latest,
+                selectedLibraryId = prefs.selectedLibraryId,
+                bookSort = prefs.itemSort,
+                podcastSort = prefs.podcastSort,
+                filter = prefs.itemFilter,
+            )
         },
         extras,
-    ) { libs, selected, itemList, shaping, extras ->
+    ) { libs, itemList, shaping, extras ->
+        val selected = shaping.selectedLibraryId
         val isPodcastLibrary = libs.firstOrNull { it.id == selected }?.mediaType == MediaType.PODCAST
         // Book libraries and podcast libraries each keep their own choice. The book key can
         // still hold "Latest episode" from the time when one key served both, and a book
         // library has no episodes to sort by.
         val stored = if (isPodcastLibrary) shaping.podcastSort else shaping.bookSort
         val sort = if (stored == ItemSort.LATEST_EPISODE && !isPodcastLibrary) ItemSort.TITLE else stored
-        val rows = itemList.map { LibraryRow(it, shaping.progress.shown[it.id]) }
+        // No library selected yet. That is "unknown" until a library sync has ended with
+        // nothing to pick, and only then an empty grid.
+        val known = itemList != null || (libs.isEmpty() && extras.librariesChecked)
+        val rows = itemList.orEmpty().map {
+            LibraryRow(it, shaping.progress.shown[it.id], isDownloaded = it.id in shaping.downloaded)
+        }
         // Facts are built once per row rather than inside the comparator, which would
         // rebuild them O(n log n) times on every emission of a large library.
         val facts = rows.associate {
             it.item.id to it.facts(
-                isDownloaded = it.item.id in shaping.downloaded,
+                isDownloaded = it.isDownloaded,
                 latestEpisodeAtMs = shaping.latestEpisodes[it.item.id] ?: 0L,
                 lastPlayedAtMs = shaping.progress.lastPlayed[it.item.id] ?: 0L,
             )
@@ -304,8 +398,11 @@ class LibraryViewModel @Inject constructor(
             selectedIds = onScreen.ids,
             message = extras.note,
             collections = extras.collections,
+            loaded = known,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
     private data class ProgressByItem(
         /** The one row each card shows; see [ItemProgress.byItem]. */
@@ -317,6 +414,7 @@ class LibraryViewModel @Inject constructor(
         val progress: ProgressByItem,
         val downloaded: Set<String>,
         val latestEpisodes: Map<String, Long>,
+        val selectedLibraryId: String?,
         val bookSort: ItemSort,
         val podcastSort: ItemSort,
         val filter: ListFilter,
@@ -331,22 +429,31 @@ class LibraryViewModel @Inject constructor(
         val note: String? = null,
         val selection: Selection = Selection(),
         val collections: List<CollectionChoice> = emptyList(),
+        val librariesChecked: Boolean = false,
     )
 
     init {
         // The selection has to stay inside the set the picker can show. Hiding a media
         // type removes its library from that set, and a selection left pointing at it
         // would scope the grid to something with no chip to change it back.
+        //
+        // Built from the flows with no made-up first value. Read through `.value`, the
+        // stored selection was still null at a cold start, so this replaced the listener's
+        // library with the default one each time the app opened.
         viewModelScope.launch {
-            libraries.collect { available ->
-                if (available.isEmpty()) return@collect
-                val current = selectedLibraryId.value
-                if (current != null && available.any { it.id == current }) return@collect
-                val wanted = account.value?.defaultLibraryId
-                    ?.takeIf { id -> available.any { it.id == id } }
-                    ?: available.first().id
-                libraryPrefs.setSelectedLibraryId(wanted)
-            }
+            combine(
+                libraryUpdates,
+                settingsUpdates.map { it.selectedLibraryId }.distinctUntilChanged(),
+                accountUpdates,
+            ) { available, current, signedIn -> Triple(available, current, signedIn) }
+                .collect { (available, current, signedIn) ->
+                    if (available.isEmpty()) return@collect
+                    if (current != null && available.any { it.id == current }) return@collect
+                    val wanted = signedIn?.defaultLibraryId
+                        ?.takeIf { id -> available.any { it.id == id } }
+                        ?: available.first().id
+                    libraryPrefs.setSelectedLibraryId(wanted)
+                }
         }
         refresh()
     }
@@ -392,7 +499,7 @@ class LibraryViewModel @Inject constructor(
                 text = "Checking episode dates in $what — $done of $total",
                 fraction = done.toFloat() / total,
             )
-        }.onFailure { error.value = it.message ?: "Could not check the episode dates" }
+        }.onFailure { reportUnlessCancelled(it, "Could not check the episode dates") }
         if (shown) syncNote.value = null
     }
 
@@ -550,71 +657,105 @@ class LibraryViewModel @Inject constructor(
         error.value = null
     }
 
+    /**
+     * Starts a sync and cancels the one before it.
+     *
+     * Each library chip tap starts one, and two at once used to race: the first to end
+     * cleared the indicator while the other still ran.
+     */
     private fun sync(pulled: Boolean) {
-        viewModelScope.launch {
-            val current = authRepository.account() ?: return@launch
-            syncing.value = true
-            pulling.value = pulled
-            error.value = null
-            // Named from the start, so the line never appears saying nothing while the
-            // first request is in flight.
-            syncNote.value = SyncNote("Checking the server")
-
-            val libraries = libraryRepository.syncLibraries(current)
-                .onFailure { error.value = it.message ?: "Could not reach the server" }
-                .getOrDefault(emptyList())
-
-            // Sync the library in view first; the rest catch up on the periodic sweep.
-            //
-            // The fallback is what makes a fresh sign-in work at all. There is no selection
-            // yet the first time this runs: the picker's default is chosen by the collector
-            // above, which cannot have run before this line, because the libraries it waits
-            // on are fetched on the line above it. With `listOfNotNull(selectedLibraryId)`
-            // alone the list was empty, so the very first sync after signing in mirrored the
-            // libraries and **none of their items** — measured on a device: `library` held 2
-            // rows and `library_item` held 0, and it stayed 0 through opening the Library
-            // tab, because nothing calls this again. Only restarting the app fixed it, by
-            // which point the selection had been persisted.
-            //
-            // Which meant a new account's first sight of lugu was an empty grid, and
-            // anything reading Room in the meantime — Home's shelves, the car's browse tree,
-            // "play X on lugu" — found nothing there either.
-            val targets = listOfNotNull(
-                selectedLibraryId.value
-                    ?: current.defaultLibraryId?.takeIf { id -> libraries.any { it.id == id } }
-                    ?: libraries.firstOrNull()?.id,
-            )
-            targets.forEach { id ->
-                // Named where the name is known. "Syncing Audiobooks" answers the question
-                // somebody watching the line is actually asking, which is what is being
-                // fetched — and on a server with several libraries it also says which.
-                val name = libraries.firstOrNull { it.id == id }?.name
-                val what = if (name.isNullOrBlank()) "your library" else name
-                syncNote.value = SyncNote("Syncing $what")
-                // The library in view is one the user has opened, which is the only kind
-                // that may later say a new book arrived in it.
-                runCatching { libraryRepository.markOpened(current, id) }
-                libraryRepository.syncLibraryItems(current, id) { synced, total ->
-                    syncNote.value = SyncNote(
-                        text = "Syncing $what — $synced of $total",
-                        // A total of zero is a library with nothing in it, not a job that is
-                        // finished, and dividing by it would say so in the worst way.
-                        fraction = if (total > 0) synced.toFloat() / total else null,
-                    )
-                }.onFailure { error.value = it.message ?: "Could not sync the library" }
-
-                val library = libraries.firstOrNull { it.id == id }
-                if (library != null && libraryPrefs.current().podcastSort == ItemSort.LATEST_EPISODE) {
-                    fillEpisodeDates(current, library)
+        val previous = syncJob
+        // A pull stays answered when a chip tap replaces the sync it started.
+        val keepPulling = previous?.isActive == true && pulling.value
+        previous?.cancel()
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                runSync(pulled = pulled || keepPulling)
+            } finally {
+                if (syncJob === currentCoroutineContext()[Job]) {
+                    syncNote.value = null
+                    syncing.value = false
+                    pulling.value = false
                 }
             }
-
-            syncNote.value = SyncNote("Syncing where you got to")
-            progressRepository.reconcile(current)
-            syncNote.value = null
-            syncing.value = false
-            pulling.value = false
         }
+        syncJob = job
+        job.start()
+    }
+
+    private suspend fun runSync(pulled: Boolean) {
+        val current = authRepository.account() ?: return
+        syncing.value = true
+        pulling.value = pulled
+        error.value = null
+        // Named from the start, so the line never appears saying nothing while the
+        // first request is in flight.
+        syncNote.value = SyncNote("Checking the server")
+
+        val libraries = libraryRepository.syncLibraries(current)
+            .onFailure { reportUnlessCancelled(it, "Could not reach the server") }
+            .getOrDefault(emptyList())
+        currentCoroutineContext().ensureActive()
+        librariesChecked.value = true
+
+        // Sync the library in view first; the rest catch up on the periodic sweep.
+        //
+        // The fallback is what makes a fresh sign-in work at all. There is no selection
+        // yet the first time this runs: the picker's default is chosen by the collector
+        // above, which cannot have run before this line, because the libraries it waits
+        // on are fetched on the line above it. With `listOfNotNull(selectedLibraryId)`
+        // alone the list was empty, so the very first sync after signing in mirrored the
+        // libraries and **none of their items** — measured on a device: `library` held 2
+        // rows and `library_item` held 0, and it stayed 0 through opening the Library
+        // tab, because nothing calls this again. Only restarting the app fixed it, by
+        // which point the selection had been persisted.
+        //
+        // Which meant a new account's first sight of lugu was an empty grid, and
+        // anything reading Room in the meantime — Home's shelves, the car's browse tree,
+        // "play X on lugu" — found nothing there either.
+        val targets = listOfNotNull(
+            // The stored value, waited for: at a cold start `.value` is not there yet.
+            settingsUpdates.first().selectedLibraryId
+                ?: current.defaultLibraryId?.takeIf { id -> libraries.any { it.id == id } }
+                ?: libraries.firstOrNull()?.id,
+        )
+        targets.forEach { id ->
+            // Named where the name is known. "Syncing Audiobooks" answers the question
+            // somebody watching the line is actually asking, which is what is being
+            // fetched — and on a server with several libraries it also says which.
+            val name = libraries.firstOrNull { it.id == id }?.name
+            val what = if (name.isNullOrBlank()) "your library" else name
+            syncNote.value = SyncNote("Syncing $what")
+            // The library in view is one the user has opened, which is the only kind
+            // that may later say a new book arrived in it.
+            runCatching { libraryRepository.markOpened(current, id) }
+            libraryRepository.syncLibraryItems(current, id) { synced, total ->
+                syncNote.value = SyncNote(
+                    text = "Syncing $what — $synced of $total",
+                    // A total of zero is a library with nothing in it, not a job that is
+                    // finished, and dividing by it would say so in the worst way.
+                    fraction = if (total > 0) synced.toFloat() / total else null,
+                )
+            }.onFailure { reportUnlessCancelled(it, "Could not sync the library") }
+            currentCoroutineContext().ensureActive()
+
+            val library = libraries.firstOrNull { it.id == id }
+            if (library != null && libraryPrefs.current().podcastSort == ItemSort.LATEST_EPISODE) {
+                fillEpisodeDates(current, library)
+            }
+        }
+
+        syncNote.value = SyncNote("Syncing where you got to")
+        progressRepository.reconcile(current)
+    }
+
+    /**
+     * The repository wraps its work in `runCatching`, which also catches the cancellation
+     * of a sync that a newer one replaced. That is not a failure to show.
+     */
+    private fun reportUnlessCancelled(failure: Throwable, fallback: String) {
+        if (failure is CancellationException) return
+        error.value = failure.message ?: fallback
     }
 
     /**
@@ -685,6 +826,9 @@ internal fun collectionBatchLine(name: String?, plan: CollectionAddPlan, held: I
     val podcasts = if (skipped == 1) "1 podcast" else "$skipped podcasts"
     return "$added. Collections hold books only, so $podcasts stayed out"
 }
+
+/** Long enough to skip the keystrokes in a word, short enough to feel instant. */
+private const val TYPING_PAUSE_MS = 150L
 
 private fun booksOf(count: Int): String = if (count == 1) "1 book" else "$count books"
 

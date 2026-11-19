@@ -1,5 +1,6 @@
 package io.github.lightheaded.lugu.feature.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
@@ -22,25 +24,32 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import io.github.lightheaded.lugu.core.model.PodcastEpisode
-import io.github.lightheaded.lugu.core.model.formatLengthCompact
 import io.github.lightheaded.lugu.core.model.parseShowNotes
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * One episode: what it is about, and the two things worth doing about it.
@@ -83,13 +92,31 @@ fun EpisodeScreen(
         viewModel.dismissMessage()
     }
 
+    val pendingUndo by viewModel.undo.collectAsStateWithLifecycle()
+    val noticeMillis by viewModel.noticeMillis.collectAsStateWithLifecycle()
+
+    // The change has already happened; this is the way back, for as long as the notice
+    // setting says. A timeout keeps the change, as on the podcast page.
+    LaunchedEffect(pendingUndo, noticeMillis) {
+        val pending = pendingUndo ?: return@LaunchedEffect
+        val result = withTimeoutOrNull(noticeMillis) {
+            snackbarHostState.showSnackbar(
+                message = pending.text,
+                actionLabel = "Undo",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            )
+        }
+        if (result == SnackbarResult.ActionPerformed) viewModel.undo(pending) else viewModel.dismissUndo(pending)
+    }
+
     Scaffold(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             EpisodeTopBar(
                 showTitle = state.showTitle,
-                showItemId = state.episode?.libraryItemId,
+                showItemId = state.showItemId,
                 onBack = onBack,
                 onOpenShow = onOpenShow,
             )
@@ -97,22 +124,30 @@ fun EpisodeScreen(
     ) { padding ->
         val episode = state.episode
         if (episode == null) {
+            // Nothing until the sync attempt ends: a show never opened on this phone has no
+            // rows yet, and "gone" said before the sync would be false.
+            if (!state.loaded) return@Scaffold
             Box(
                 Modifier.fillMaxSize().padding(padding).padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    if (state.loaded) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
                         // A notification can outlive the episode it names — a feed can
                         // withdraw one, and a re-mirror then takes the row away underneath
                         // the tap. Saying so is better than an empty page.
-                        "This episode is no longer in the feed."
-                    } else {
-                        "Loading…"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                        "This episode is no longer in the feed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // The show is still there, and is where the reader goes next.
+                    state.showItemId?.let { showId ->
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedButton(onClick = { onOpenShow(showId) }) {
+                            Text("Open the show")
+                        }
+                    }
+                }
             }
             return@Scaffold
         }
@@ -120,7 +155,10 @@ fun EpisodeScreen(
         EpisodeDetail(
             state = state,
             episode = episode,
-            onPlay = { onPlay(episode.libraryItemId, episode.id) },
+            onPlay = {
+                viewModel.onPlayStarted()
+                onPlay(episode.libraryItemId, episode.id)
+            },
             onDownload = viewModel::download,
             onRemoveDownload = viewModel::removeDownload,
             onPlayNext = viewModel::playNext,
@@ -140,8 +178,8 @@ fun EpisodeScreen(
  * notification has no show page under this one, and the name is where they look for it.
  * It looks the same as before, so the bar does not change, and TalkBack says what it does.
  *
- * [showItemId] is null until the episode has loaded, and stays null when the feed no
- * longer has it. The name is then plain text.
+ * [showItemId] comes from the route, so the link works before the episode loads and after
+ * the feed has withdrawn it. With no id the name is plain text.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,10 +196,13 @@ internal fun EpisodeTopBar(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = if (showItemId != null) {
-                    Modifier.clickable(
-                        onClickLabel = "Open the show",
-                        role = Role.Button,
-                    ) { onOpenShow(showItemId) }
+                    // 48 dp tall, so the name is as easy to hit as the back arrow.
+                    Modifier
+                        .clickable(
+                            onClickLabel = "Open the show",
+                            role = Role.Button,
+                        ) { onOpenShow(showItemId) }
+                        .minimumInteractiveComponentSize()
                 } else {
                     Modifier
                 },
@@ -202,32 +243,45 @@ internal fun EpisodeDetail(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Column {
-                Text(episode.title, style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    subline,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row {
+                // Small, beside the title: it says which show at a glance, and the notes
+                // stay as high on the page as before.
+                state.coverUrl?.let { url ->
+                    Box(
+                        Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    Spacer(Modifier.size(12.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(episode.title, style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        subline,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
         if (state.progressFraction > 0f) {
             item {
-                Column {
-                    LinearProgressIndicator(
-                        progress = { state.progressFraction },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${formatLengthCompact(state.positionSec)} of " +
-                            formatLengthCompact(episode.durationSec),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // The bar alone: the time left is in the play button, so an "x of y" line
+                // here would say the same thing twice.
+                LinearProgressIndicator(
+                    progress = { state.progressFraction },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
@@ -240,7 +294,11 @@ internal fun EpisodeDetail(
                 Button(onClick = onPlay, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text(if (state.progressFraction > 0f) "Resume" else "Play")
+                    Text(
+                        playLabel(state.isFinished, state.positionSec, episode.durationSec),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 DownloadButton(
                     download = state.download,

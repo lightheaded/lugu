@@ -86,32 +86,41 @@ fun BrowseScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = viewModel::setQuery,
-                label = { Text("Search ${state.kind.label.lowercase(Locale.UK)}", maxLines = 1) },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (state.query.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.setQuery("") }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+            // The same rule as the collections list: a box for three names costs a row and
+            // finds nothing the eye does not. Kept while it holds words, so that a list that
+            // shrinks under a search never hides the search that shrank it.
+            if (searchEarnsItsPlace(state.totalGroups) || state.query.isNotEmpty()) {
+                OutlinedTextField(
+                    value = state.query,
+                    onValueChange = viewModel::setQuery,
+                    label = { Text("Search ${state.kind.label.lowercase(Locale.UK)}", maxLines = 1) },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (state.query.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.setQuery("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            }
                         }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
 
             if (state.groups.isEmpty()) {
-                Box(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    contentAlignment = Alignment.TopCenter,
-                ) {
-                    Text(
-                        emptyBrowseLine(state.kind, state.totalGroups, state.query),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // Before the mirror answers, empty means unknown, and "nothing has author
+                // information" would be a false claim for that frame.
+                if (state.loaded) {
+                    Box(
+                        Modifier.fillMaxSize().padding(32.dp),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
+                        Text(
+                            emptyBrowseLine(state.kind, state.totalGroups, state.query),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 return@Column
             }
