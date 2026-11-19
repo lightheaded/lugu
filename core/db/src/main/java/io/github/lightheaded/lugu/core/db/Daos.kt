@@ -1580,6 +1580,9 @@ interface OutboxDao {
     @Query("DELETE FROM outbox WHERE rowId = :rowId")
     suspend fun delete(rowId: Long)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM outbox WHERE rowId = :rowId)")
+    suspend fun exists(rowId: Long): Boolean
+
     @Query("UPDATE outbox SET attempts = attempts + 1, lastAttemptAtMs = :nowMs, lastError = :error WHERE rowId = :rowId")
     suspend fun recordFailure(rowId: Long, nowMs: Long, error: String?)
 

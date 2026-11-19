@@ -24,6 +24,8 @@ data class NowPlaying(
     val chapters: List<Chapter>,
     val ledgerId: String,
     val isTranscoded: Boolean,
+    /** Set when the item started before the server was asked about its position. */
+    val positionCheck: PositionCheck? = null,
 )
 
 /** Why the player is holding something the listener did not pick. */

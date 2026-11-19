@@ -69,6 +69,9 @@ import io.github.lightheaded.lugu.core.sync.PlaybackDiary
 import io.github.lightheaded.lugu.core.sync.PlaybackEvent
 import io.github.lightheaded.lugu.core.sync.PlaybackPrefs
 import io.github.lightheaded.lugu.core.sync.PlayerSettings
+import io.github.lightheaded.lugu.core.model.ProgressConflictResolver
+import io.github.lightheaded.lugu.core.model.ProgressResolution
+import io.github.lightheaded.lugu.core.sync.ProgressJump
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import io.github.lightheaded.lugu.core.sync.StreamSettings
@@ -95,6 +98,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The one playback brain.
@@ -139,6 +144,20 @@ class LuguPlaybackService : MediaLibraryService() {
 
     private var lastPersistedSec = -1.0
     private var lastTickWallClockMs = 0L
+
+    /**
+     * Puts the position writes in the order they were taken, with the late position check
+     * among them. Taken on the main thread before the first suspension, and a [Mutex]
+     * hands itself out first come, first served. See [checkPositionLate].
+     */
+    private val progressWrites = Mutex()
+
+    /**
+     * Raised when the late check moves the player. A write of a position read before
+     * the move is dropped: it holds the old position, and a push of it would overwrite
+     * the other device's. Read and written on the main thread only.
+     */
+    private var positionEpoch = 0
 
     private val stopAttributor = StopAttributor()
     private val retryPolicy = PlaybackRetryPolicy()
@@ -465,6 +484,15 @@ class LuguPlaybackService : MediaLibraryService() {
         // Kept in a field rather than read on the tick, because building it means walking
         // an episode's chapters and the tick runs twice a second for the whole of a book.
         scope.launch { skipPlans().collect { skipPlan = it } }
+
+        // A downloaded item starts before the server is asked about its position. Each
+        // such start carries its own check, which runs once the item is in the player.
+        scope.launch {
+            stateHolder.nowPlaying.collect { now ->
+                val check = now?.positionCheck ?: return@collect
+                launch { checkPositionLate(now, check) }
+            }
+        }
 
         // The car's bookmark button appears, disappears and fills with what is playing, so
         // every emission is pushed. An emission that changes nothing costs nothing: Media3
@@ -1894,26 +1922,89 @@ class LuguPlaybackService : MediaLibraryService() {
         lastTickWallClockMs = now
         lastPersistedSec = absolute
 
+        val epoch = positionEpoch
         scope.launch {
-            val account = authRepository.account() ?: return@launch
-            withContext(Dispatchers.IO) {
-                progressRepository.record(
-                    account = account,
-                    itemId = context.libraryItemId,
-                    episodeId = context.episodeId,
-                    positionSec = absolute,
-                    durationSec = context.durationSec,
-                    isFinished = absolute >= context.durationSec - FINISHED_TAIL_SEC &&
-                        context.durationSec > 0,
-                )
-                sessionLedgerRepository.update(
-                    id = context.ledgerId,
-                    currentTimeSec = absolute,
-                    listenedDeltaSec = if (reason == "tick") listenedSec else 0.0,
-                )
+            progressWrites.withLock {
+                // The late check moved the player after this position was read.
+                if (epoch != positionEpoch) return@withLock
+                val account = authRepository.account() ?: return@launch
+                withContext(Dispatchers.IO) {
+                    progressRepository.record(
+                        account = account,
+                        itemId = context.libraryItemId,
+                        episodeId = context.episodeId,
+                        positionSec = absolute,
+                        durationSec = context.durationSec,
+                        isFinished = absolute >= context.durationSec - FINISHED_TAIL_SEC &&
+                            context.durationSec > 0,
+                    )
+                    sessionLedgerRepository.update(
+                        id = context.ledgerId,
+                        currentTimeSec = absolute,
+                        listenedDeltaSec = if (reason == "tick") listenedSec else 0.0,
+                    )
+                }
             }
             // After the write, not beside it: a run that starts first finds nothing to send.
             if (pushes) SyncScheduler.flushNow(this@LuguPlaybackService)
+        }
+    }
+
+    /**
+     * Pull-before-push for an item that is already playing.
+     *
+     * A downloaded item starts from Room at once, so nobody waits for the server. This
+     * asks the server afterwards. If another device is ahead, the player moves there and
+     * the jump notice offers the way back — the same notice a start that waited showed.
+     *
+     * Three things keep the other device's position safe while the answer is out:
+     *  - the item's pushes are held until this ends (see `ProgressRepository.holdPushes`);
+     *  - the decision, the move and the write happen under [progressWrites], so no
+     *    position write lands between them;
+     *  - [positionEpoch] goes up before the move, so a write of a position read before
+     *    the move is dropped rather than written over the adopted one.
+     */
+    private suspend fun checkPositionLate(context: NowPlaying, check: PositionCheck) {
+        try {
+            val account = authRepository.account() ?: return
+            val server = withContext(Dispatchers.IO) {
+                progressRepository.fetchServerCopy(context.libraryItemId, context.episodeId)
+            }
+            progressWrites.withLock {
+                // Another item, or another start of this one, owns the player now.
+                if (stateHolder.nowPlaying.value?.positionCheck !== check) return
+                val resolution = withContext(Dispatchers.IO) {
+                    progressRepository.resolveAgainst(account, context.libraryItemId, context.episodeId, server)
+                }
+                if (resolution is ProgressResolution.AdoptServer) {
+                    val fromSec = currentAbsoluteSec()
+                    val toSec = resolution.server.currentTimeSec
+                    positionEpoch += 1
+                    lastPersistedSec = toSec
+                    seekToAbsolute(toSec, SeekReasons.OTHER_DEVICE)
+                    diary.record(
+                        POSITION_ADOPTED,
+                        playbackDetail("moved to ${toSec.toLong()}s from another device"),
+                    )
+                    if (fromSec != null &&
+                        kotlin.math.abs(toSec - fromSec) >= ProgressConflictResolver.DEFAULT_MATERIAL_JUMP_SEC
+                    ) {
+                        stateHolder.setJump(
+                            ProgressJump(
+                                libraryItemId = context.libraryItemId,
+                                episodeId = context.episodeId,
+                                fromSec = fromSec,
+                                toSec = toSec,
+                            ),
+                        )
+                    }
+                }
+                withContext(Dispatchers.IO) {
+                    progressRepository.settle(account, context.libraryItemId, context.episodeId, server, resolution)
+                }
+            }
+        } finally {
+            progressRepository.releasePushes(check.hold)
         }
     }
 
@@ -2990,6 +3081,13 @@ class LuguPlaybackService : MediaLibraryService() {
          * setting is a plausible answer to "it jumped and I do not know why".
          */
         const val SKIPPED_REGION = "skipped a region"
+
+        /**
+         * The check after a downloaded item started found another device ahead, and the
+         * player moved there. Recorded because a move the listener did not make is the
+         * first thing "it jumped" is asked about.
+         */
+        const val POSITION_ADOPTED = "moved to another device's position"
 
         /**
          * Whether a foreground service's notification can be swiped away.

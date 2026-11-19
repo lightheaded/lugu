@@ -2,6 +2,7 @@ package io.github.lightheaded.lugu.core.sync
 
 import io.github.lightheaded.lugu.core.model.ProgressKey
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -130,6 +131,8 @@ class RealtimeSync @Inject constructor(
     private val clock: Clock,
 ) {
     private val started = AtomicBoolean(false)
+    private val scope = AtomicReference<CoroutineScope?>(null)
+    private val lastCatchUpMs = AtomicLong(0L)
     private val playing = AtomicReference<ProgressKey?>(null)
     private val itemFetches = RealtimeRateLimit(MAX_ITEM_FETCHES_PER_WINDOW, RATE_WINDOW_MS)
     private val progressFetches = RealtimeRateLimit(MAX_PROGRESS_FETCHES_PER_WINDOW, RATE_WINDOW_MS)
@@ -143,9 +146,40 @@ class RealtimeSync @Inject constructor(
         playing.set(libraryItemId?.let { ProgressKey(it, episodeId) })
     }
 
+    /**
+     * Pulls every position from the server now, so that a play press finds them in Room.
+     *
+     * The socket only reports changes while it is connected, and it is connected only
+     * while the app is on screen or something plays. A position changed on another device
+     * while the phone slept arrives through nothing else until the six-hourly sweep. So
+     * this runs when the app comes on screen and when the socket connects: the moments
+     * just before somebody can press play. A downloaded book then plays from Room at once
+     * and still starts where the other device left it.
+     *
+     * One request for the whole table, at most once a minute. The item in the player is
+     * left out, for the reason [setNowPlaying] gives.
+     */
+    fun catchUp() {
+        val scope = scope.get() ?: return
+        val now = clock.nowMs()
+        val last = lastCatchUpMs.get()
+        if (last != 0L && now - last in 0 until CATCH_UP_EVERY_MS) return
+        if (!lastCatchUpMs.compareAndSet(last, now)) return
+        scope.launch {
+            val account = authRepository.account() ?: return@launch
+            progressRepository.reconcile(account, except = playing.get())
+        }
+    }
+
     /** Safe to call more than once; only the first call does anything. */
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
+        this.scope.set(scope)
+        scope.launch {
+            // A rising edge only: a socket that drops and comes back has missed whatever
+            // was sent while it was down.
+            realtime.connected.collect { connected -> if (connected) catchUp() }
+        }
         scope.launch {
             realtime.events.collect { event ->
                 try {
@@ -184,7 +218,7 @@ class RealtimeSync @Inject constructor(
                 }
 
             RealtimeWork.ReconcileProgress ->
-                if (progressFetches.allow(clock.nowMs())) progressRepository.reconcile(account)
+                if (progressFetches.allow(clock.nowMs())) progressRepository.reconcile(account, except = playing.get())
 
             RealtimeWork.Nothing -> Unit
         }
@@ -203,5 +237,6 @@ class RealtimeSync @Inject constructor(
         const val RATE_WINDOW_MS = 60_000L
         const val MAX_ITEM_FETCHES_PER_WINDOW = 60
         const val MAX_PROGRESS_FETCHES_PER_WINDOW = 30
+        const val CATCH_UP_EVERY_MS = 60_000L
     }
 }

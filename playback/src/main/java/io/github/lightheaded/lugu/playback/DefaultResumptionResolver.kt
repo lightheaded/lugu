@@ -58,6 +58,7 @@ class DefaultResumptionResolver @Inject constructor(
             chapters = chapters.ifEmpty { resolved.session.chapters },
             ledgerId = resolved.ledgerId,
             isTranscoded = resolved.session.isTranscoded,
+            positionCheck = resolved.positionCheck,
         )
         stateHolder.setJump(resolved.jump)
 

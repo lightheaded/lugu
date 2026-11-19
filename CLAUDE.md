@@ -140,6 +140,15 @@ Before you call the change done, search for `ListControlsBar(`, `SortOption(` an
 
 Each list remembers its own sort and filter in `LibraryPrefs`. A new list gets its own keys.
 
+## Play never waits on the network for a downloaded item
+
+**A downloaded book or episode starts from Room at once. Nothing on the play path waits
+for the server** (maintainer, 19 November 2026: "it should sync the book before we start,
+so we never wait"). Bring the data up to date *before* the press — `RealtimeSync.catchUp`
+runs when the app comes on screen and when the socket connects. Anything that must still
+ask the server runs after the start, as `checkPositionLate` does, and must keep
+pull-before-push safe: hold the item's pushes until the answer is in.
+
 ## Compose overlay rule
 
 **A clickable overlay must not cover fixed interactive controls.** `StatusStrip` is

@@ -171,6 +171,8 @@ class OfflineResolutionTest {
         assertThat(resolved.isOffline).isTrue()
         assertThat(resolved.session.playMethod).isEqualTo(PlayMethod.LOCAL)
         assertThat(resolved.session.title).isEqualTo(TITLE)
+        // Played before the server was asked, so the service asks afterwards.
+        assertThat(resolved.positionCheck).isNotNull()
         assertThat(resolved.mediaItems.map { it.localConfiguration!!.customCacheKey })
             .containsExactly(
                 DownloadKeys.cacheKey(ITEM, "", 0),

@@ -362,6 +362,7 @@ class PlaybackConnection @Inject constructor(
                     chapters = chapters.ifEmpty { resolved.session.chapters },
                     ledgerId = resolved.ledgerId,
                     isTranscoded = resolved.session.isTranscoded,
+                    positionCheck = resolved.positionCheck,
                 ),
                 jump = resolved.jump,
                 mediaItems = resolved.mediaItems,

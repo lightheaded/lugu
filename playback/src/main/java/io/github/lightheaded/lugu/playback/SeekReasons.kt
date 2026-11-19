@@ -69,6 +69,9 @@ internal class SeekReasons(private val nowMs: () -> Long = System::currentTimeMi
         /** A position picked from the history, or the undo on a jump notice. */
         const val RESTORE = "restore"
 
+        /** A newer position from another device, found just after a downloaded item started. */
+        const val OTHER_DEVICE = "other-device"
+
         /**
          * How long a note waits for its seek. A seek from the app reaches the service
          * through the media controller, which takes milliseconds, not seconds.

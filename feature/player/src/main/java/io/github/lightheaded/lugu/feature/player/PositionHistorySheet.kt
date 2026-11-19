@@ -186,6 +186,7 @@ private fun jumpLabel(reason: String): String = when (reason) {
     "skipped-region" -> "Skipped a trimmed part"
     "rewind-on-resume" -> "Rewind on resume"
     "restore" -> "Restored from history"
+    "other-device" -> "From another device"
     else -> reason
 }
 

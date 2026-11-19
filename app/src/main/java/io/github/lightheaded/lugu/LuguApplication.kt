@@ -146,6 +146,9 @@ class LuguApplication : Application(), Configuration.Provider, SingletonImageLoa
         registerActivityLifecycleCallbacks(
             ForegroundWatcher { onScreen ->
                 realtime.setForeground(onScreen)
+                // The moment before a play press: bring every position up to date, so
+                // play reads Room and never waits on the server. See RealtimeSync.catchUp.
+                if (onScreen) realtimeSync.catchUp()
                 // Coming to the foreground is also when the last thing played is loaded
                 // into the player, ready for a play press — but only if that was asked
                 // for, and never playing on its own. The connection reads the setting

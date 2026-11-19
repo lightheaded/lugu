@@ -17,12 +17,16 @@ import io.github.lightheaded.lugu.core.db.episodeKeyOf
 import io.github.lightheaded.lugu.core.db.toEpisodeIdOrNull
 import io.github.lightheaded.lugu.core.model.MediaProgress
 import io.github.lightheaded.lugu.core.model.ProgressConflictResolver
+import io.github.lightheaded.lugu.core.model.ProgressKey
 import io.github.lightheaded.lugu.core.model.ProgressResolution
 import io.github.lightheaded.lugu.core.model.ServerCopySeen
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 
 /**
@@ -48,6 +52,11 @@ data class ProgressJump(
     val reason: String? = null,
 )
 
+/** A hold on one item's pushes, from [ProgressRepository.holdPushes]. */
+class PushHold internal constructor(internal val key: String) {
+    internal val done = CompletableDeferred<Unit>()
+}
+
 @Serializable
 internal data class ProgressOutboxPayload(
     val libraryItemId: String,
@@ -64,7 +73,8 @@ internal data class ProgressOutboxPayload(
  *
  * Writes land in Room immediately and in the outbox second; nothing waits on the
  * network. Reads come from Room. The one network-first moment is [startSession],
- * which pulls before it pushes — the rule that stops lugu doing what the official app
+ * which pulls before it pushes (a downloaded item pulls just after it starts, with its
+ * pushes held — see [holdPushes]) — the rule that stops lugu doing what the official app
  * does and overwriting a newer position from another device with a stale local one.
  */
 @Singleton
@@ -150,13 +160,26 @@ class ProgressRepository @Inject constructor(
     suspend fun get(account: ActiveAccount, itemId: String, episodeId: String?): MediaProgress? =
         progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))?.toDomain()
 
-    /** Bulk seed from a login or a full reconciliation sweep. Never clobbers dirty local rows. */
-    suspend fun seedFromServer(account: ActiveAccount, remote: List<MediaProgressDto>) {
+    /**
+     * Bulk seed from a login or a full reconciliation sweep. Never clobbers dirty local rows.
+     *
+     * [except] is the item in the player. Its position moves only through a session start,
+     * which can seek the player and show the jump. A row written under a playing item is
+     * overwritten by the next tick, which then pushes the old position over the new one.
+     */
+    suspend fun seedFromServer(
+        account: ActiveAccount,
+        remote: List<MediaProgressDto>,
+        except: ProgressKey? = null,
+    ) {
         if (remote.isEmpty()) return
         val existing = progressDao.dirty(account.serverId, account.userId)
             .associateBy { it.libraryItemId to it.episodeKey }
 
         val rows = remote.mapNotNull { dto ->
+            if (except != null && except.libraryItemId == dto.libraryItemId && except.episodeId == dto.episodeId) {
+                return@mapNotNull null
+            }
             val key = dto.libraryItemId to episodeKeyOf(dto.episodeId)
             val local = existing[key]
             // A dirty local row is a change the server has not accepted yet. Leave it
@@ -185,14 +208,47 @@ class ProgressRepository @Inject constructor(
      * Returns a [ProgressJump] when the server's position won and moved us materially,
      * so the UI can say so and offer an undo — an automatic correction the user cannot
      * see is indistinguishable from a bug.
+     *
+     * A downloaded item does not call this before it plays: it starts at once and asks
+     * afterwards, through [fetchServerCopy], [resolveAgainst] and [settle], with its
+     * pushes held until then — see [holdPushes].
      */
     suspend fun startSession(account: ActiveAccount, itemId: String, episodeId: String?): ProgressJump? {
-        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
-        val local = existing?.toDomain()
-        val server = runCatching { client.progress(itemId, episodeId)?.toDomain() }.getOrNull()
-        val seen = existing.seenCopy()
+        val server = fetchServerCopy(itemId, episodeId)
+        return settle(account, itemId, episodeId, server, resolveAgainst(account, itemId, episodeId, server))
+    }
 
-        return when (val resolution = ProgressConflictResolver.resolve(local, server, seen)) {
+    /** The server's copy of one item's progress. Null when it has none or cannot be reached. */
+    suspend fun fetchServerCopy(itemId: String, episodeId: String?): MediaProgress? =
+        runCatching { client.progress(itemId, episodeId)?.toDomain() }.getOrNull()
+
+    /** What the conflict rules say about [server] against the row in Room now. Writes nothing. */
+    suspend fun resolveAgainst(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        server: MediaProgress?,
+    ): ProgressResolution {
+        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+        return ProgressConflictResolver.resolve(existing?.toDomain(), server, existing.seenCopy())
+    }
+
+    /**
+     * Writes what [resolveAgainst] decided.
+     *
+     * An adopted server copy also drops the push queued for the item. That push holds the
+     * position the server's copy has just replaced, and sending it would undo the adoption
+     * on the server — the other device's listening, lost after all.
+     */
+    suspend fun settle(
+        account: ActiveAccount,
+        itemId: String,
+        episodeId: String?,
+        server: MediaProgress?,
+        resolution: ProgressResolution,
+    ): ProgressJump? {
+        val existing = progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))
+        return when (resolution) {
             is ProgressResolution.AdoptServer -> {
                 // The server's revision goes in the column that holds server revisions,
                 // so the *next* conflict is decided against a number from the same clock.
@@ -204,6 +260,12 @@ class ProgressRepository @Inject constructor(
                         pushedTimeSec = existing?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
                         pushedFinished = existing?.pushedFinished ?: false,
                     ),
+                )
+                outboxDao.deleteByDedupeKey(
+                    serverId = account.serverId,
+                    userId = account.userId,
+                    kind = OutboxKind.PROGRESS_UPDATE,
+                    dedupeKey = dedupeKeyOf(itemId, episodeId),
                 )
                 resolution.replacedLocal?.let { replaced ->
                     ProgressJump(
@@ -242,6 +304,41 @@ class ProgressRepository @Inject constructor(
             }
         }
     }
+
+    /**
+     * Stops this device pushing a position for one item until [releasePushes].
+     *
+     * A downloaded item plays before the server is asked where the listener got to. Until
+     * that answer is in, every position this device holds for the item can be older than
+     * one from another device, and a push of it — a pause in the first second is enough —
+     * would overwrite that. Positions still go into Room and the outbox; only the send
+     * waits. A hold that nobody releases ends by itself after [PUSH_HOLD_MAX_MS], so a
+     * start that was dropped halfway cannot stop sync for good.
+     */
+    fun holdPushes(account: ActiveAccount, itemId: String, episodeId: String?): PushHold {
+        val hold = PushHold(holdKeyOf(account.serverId, account.userId, dedupeKeyOf(itemId, episodeId)))
+        // A newer start of the same item replaces the older hold. The older one is
+        // released, because a flush waiting on it re-reads the map and waits for this one.
+        pushHolds.put(hold.key, hold.done)?.complete(Unit)
+        return hold
+    }
+
+    fun releasePushes(hold: PushHold) {
+        hold.done.complete(Unit)
+        pushHolds.remove(hold.key, hold.done)
+    }
+
+    private suspend fun awaitPushHold(serverId: String, userId: String, dedupeKey: String) {
+        val key = holdKeyOf(serverId, userId, dedupeKey)
+        withTimeoutOrNull(PUSH_HOLD_MAX_MS) {
+            while (true) {
+                val held = pushHolds[key] ?: break
+                held.await()
+            }
+        }
+    }
+
+    private val pushHolds = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
 
     /** What this device knows about the server's copy, read off the stored row. */
     private fun ProgressEntity?.seenCopy(): ServerCopySeen {
@@ -365,7 +462,7 @@ class ProgressRepository @Inject constructor(
                 kind = OutboxKind.PROGRESS_UPDATE,
                 // One pending entry per item: after a week offline we owe the server
                 // the final position, not every tick along the way.
-                dedupeKey = "${progress.libraryItemId}#${episodeKeyOf(progress.episodeId)}",
+                dedupeKey = dedupeKeyOf(progress.libraryItemId, progress.episodeId),
                 payloadJson = AbsJson.encodeToString(ProgressOutboxPayload.serializer(), payload),
                 createdAtMs = clock.nowMs(),
                 attempts = 0,
@@ -375,12 +472,21 @@ class ProgressRepository @Inject constructor(
         )
     }
 
-    /** Drains one outbox entry. Returns true when the server accepted it. */
-    internal suspend fun flushEntry(entry: OutboxEntity): Boolean {
+    /**
+     * Drains one outbox entry. Returns true when the entry is done with: the server
+     * accepted it, or it no longer needs sending. [OutboxFlusher] is the caller. Public so
+     * that the push hold can be tested over real Room, which lives in another module.
+     */
+    suspend fun flushEntry(entry: OutboxEntity): Boolean {
         if (entry.kind != OutboxKind.PROGRESS_UPDATE) return false
         val payload = runCatching {
             AbsJson.decodeFromString(ProgressOutboxPayload.serializer(), entry.payloadJson)
         }.getOrNull() ?: return true // Undecodable payload: drop it rather than retry forever.
+
+        awaitPushHold(entry.serverId, entry.userId, entry.dedupeKey)
+        // The check that held the push can have adopted another device's position and
+        // dropped this entry. Sending it anyway would undo that on the server.
+        if (!outboxDao.exists(entry.rowId)) return true
 
         client.updateProgress(
             itemId = payload.libraryItemId,
@@ -404,14 +510,24 @@ class ProgressRepository @Inject constructor(
     }
 
     private companion object {
+        /**
+         * The longest a push waits for a held item's check. Long enough for one slow
+         * request on a bad network, short enough that a lost release costs one late push.
+         */
+        const val PUSH_HOLD_MAX_MS = 30_000L
+
+        fun dedupeKeyOf(itemId: String, episodeId: String?): String = "$itemId#${episodeKeyOf(episodeId)}"
+
+        fun holdKeyOf(serverId: String, userId: String, dedupeKey: String): String = "$serverId|$userId|$dedupeKey"
+
         /** Below this, a position change is ordinary listening rather than a jump. */
         const val MIN_NOTABLE_JUMP_SEC = 45.0
         const val HISTORY_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
     }
 
     /** Full reconciliation sweep: the server's whole progress table, merged in. */
-    suspend fun reconcile(account: ActiveAccount): Result<Unit> = runCatching {
-        seedFromServer(account, client.allProgress())
+    suspend fun reconcile(account: ActiveAccount, except: ProgressKey? = null): Result<Unit> = runCatching {
+        seedFromServer(account, client.allProgress(), except)
     }
 }
 

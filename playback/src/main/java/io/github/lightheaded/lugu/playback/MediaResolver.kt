@@ -22,6 +22,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.LibraryRepository
 import io.github.lightheaded.lugu.core.sync.ProgressJump
 import io.github.lightheaded.lugu.core.sync.ProgressRepository
+import io.github.lightheaded.lugu.core.sync.PushHold
 import io.github.lightheaded.lugu.core.sync.SessionLedgerRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -35,15 +36,30 @@ data class ResolvedMedia(
     val jump: ProgressJump?,
     /** True when nothing on this path needed the network. */
     val isOffline: Boolean = false,
+    /** Set when the item plays before the server was asked about its position. */
+    val positionCheck: PositionCheck? = null,
 )
+
+/**
+ * A start that played before the server was asked where the listener got to.
+ *
+ * The service asks once the item is loaded, and moves the player if another device is
+ * ahead. Until then the item's pushes are held, so this device cannot overwrite the other
+ * one's position. A class rather than a data class: each start is its own check, even
+ * when the same book starts twice.
+ */
+class PositionCheck(val hold: PushHold)
 
 /**
  * Turns "play this item" into a playlist ExoPlayer can take.
  *
  * Order matters here and is the point of the class:
- *  1. pull-before-push, so another device's newer position wins before we touch anything;
- *  2. if the item is downloaded, resolve entirely from disk and never touch the network;
- *  3. otherwise open the server session, which decides direct play versus transcode;
+ *  1. if the item is downloaded, resolve entirely from disk and never touch the network.
+ *     Play starts at once from Room. The pull happens after the start, with the item's
+ *     pushes held until it is done — see [PositionCheck];
+ *  2. otherwise pull-before-push, so another device's newer position wins before we
+ *     touch anything;
+ *  3. then open the server session, which decides direct play versus transcode;
  *  4. open a ledger row, so the listening is recorded even if the network dies next.
  */
 // setCustomCacheKey is still marked unstable in Media3 1.11, and it is the mechanism the
@@ -63,13 +79,15 @@ class MediaResolver @Inject constructor(
         itemId: String,
         episodeId: String?,
     ): Result<ResolvedMedia> = runCatching {
-        val jump = runCatching { progressRepository.startSession(account, itemId, episodeId) }.getOrNull()
+        // A downloaded item never streams, never opens a server session, and does not
+        // wait for the progress pull either. The pull used to come first, so a book that
+        // was all on the phone waited for the server before a sound came out: seconds on a
+        // slow network, ten on one that is connected but not working. The app keeps Room
+        // up to date before a play press (RealtimeSync.catchUp), and the service asks the
+        // server again just after the start, with this item's pushes held until it has.
+        resolveFromDownload(account, itemId, episodeId)?.let { return@runCatching it }
 
-        // A downloaded item never streams and never opens a server session. Doing this
-        // before the network call is what makes playback work in airplane mode, and it
-        // also means pressing play on a downloaded book is instant rather than waiting
-        // on a round trip that can only produce URLs we already have.
-        resolveFromDownload(account, itemId, episodeId, jump)?.let { return@runCatching it }
+        val jump = runCatching { progressRepository.startSession(account, itemId, episodeId) }.getOrNull()
 
         val dto = client.play(
             itemId = itemId,
@@ -149,7 +167,6 @@ class MediaResolver @Inject constructor(
         account: ActiveAccount,
         itemId: String,
         episodeId: String?,
-        jump: ProgressJump?,
     ): ResolvedMedia? {
         val row = downloadRepository.completedRow(account, itemId, episodeId) ?: return null
         val manifest = downloadRepository.completedManifest(account, itemId, episodeId) ?: return null
@@ -222,8 +239,11 @@ class MediaResolver @Inject constructor(
             mediaItems = items,
             startPositionSec = startSec,
             ledgerId = ledgerId,
-            jump = jump,
+            jump = null,
             isOffline = true,
+            // Taken last, after everything that can fail: a hold with no start to
+            // release it would delay this item's pushes for nothing.
+            positionCheck = PositionCheck(progressRepository.holdPushes(account, itemId, episodeId)),
         )
     }
 
