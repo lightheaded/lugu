@@ -48,7 +48,7 @@ in the order chosen there, with icons that match the configured skip — a 30-se
 gets the icon that says 30, and a duration with no matching icon gets the generic one,
 because a button labelled 30 that moves 15 is worse than one with no number at all.
 
-The order is set by the order of taps in Settings → Buttons, which is a slightly odd
+The order is set by the order of taps in Settings → Skipping and buttons, which is a slightly odd
 interaction and the right trade for a list of four things: it answers "which" and "in what
 order" with one gesture instead of adding a second control. The layout is pushed to live
 sessions when the setting changes, which is the part the earlier attempt got wrong — a
@@ -254,7 +254,7 @@ its own.
 | Rewind notice as an overlay rather than inline content | done |
 | "Jumped" notice as an overlay too | done — this one was still inline and still reflowing the screen (reported 15 Aug) |
 | Notices disappear on their own | done — 10s by default |
-| Timeout configurable | done — 4/7/10/15/30s, under Settings → Notices |
+| Timeout configurable | done — 4/7/10/15/30s, under Settings → Notices and notifications |
 
 The "jumped" notice was missed the first time round: only the *rewound* notice was moved
 to a snackbar, while the jump banner stayed inline `Column` content and went on pushing

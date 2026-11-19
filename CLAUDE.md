@@ -164,6 +164,30 @@ library picker chips. `LibraryGridTest` guards this: it taps a library picker ch
 which fails when the strip covers the chips. See `StatusStrip.kt`'s doc comment for
 the full placement contract.
 
+## The UX target
+
+**The target is world-class UX: clear, modern, snappy and logical** (maintainer,
+19 November 2026). Judge a change to a screen against those four words before you call it
+done. `docs/UX-AUDIT.md` holds the findings and their status, and `docs/FEEDBACK.md` holds
+the design laws. The checkup of 19 November added these working rules:
+
+- **Every destructive action offers Undo, on every path to it.** A download removed on the
+  podcast page had Undo, and the same tick on the episode page, in the Episodes view and on
+  Downloads did not. When you add Undo to an action, search for every caller of that action.
+- **An Undo must not overwrite newer work.** Give the undo the state it expects to find, and
+  do nothing when the state moved on. `ProgressRepository.restore` is the pattern.
+- **No screen says "empty" before the database answered.** A state starts with
+  `loaded = false`, and a `stateIn` start value never counts as an answer.
+- **A text field reads its text from a flow that the field itself feeds.** State that is
+  built on a background dispatcher arrives late, and a field that reads it loses keys.
+- **List work runs off the main thread.** Sort and filter in a `combine` with
+  `flowOn(Dispatchers.Default)`. Playback writes progress every few seconds, and each write
+  shapes the list again.
+- **`PlayerUiState.isPlaying` is the intent to play, and `isAudible` is sound.** The button
+  follows intent, so a stream that stalls still shows Pause.
+- **A change that only reads well is not checked.** No emulator runs on the development
+  machine. Say what was not seen on a device, and let the maintainer look at it.
+
 ## Commit messages
 
 Follow the pattern in `git log`: `type(scope): what changed and why`.

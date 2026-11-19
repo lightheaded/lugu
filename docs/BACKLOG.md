@@ -6,6 +6,9 @@ cross-referenced here rather than duplicated. Items found by the UX audit of 20 
 live in [UX-AUDIT.md](UX-AUDIT.md), and the twelve highest of them have work items in
 [UX-FIX-PLAN.md](UX-FIX-PLAN.md); the audit marks which of its findings this file
 already records, so neither list repeats the other.
+The checkup of 19 November closed the small and medium audit findings, and the big jobs
+that it left are GitHub issues [#23](https://github.com/lightheaded/lugu/issues/23) to
+[#32](https://github.com/lightheaded/lugu/issues/32). The audit's status lines point at them.
 
 Each entry says *why* it is not done, because that is what decides whether it still
 matters later.
@@ -425,7 +428,7 @@ Each row is a consequence of the work on 22 October, or a part of that work that
 | **A change in title length still moves the player's controls** | While an item starts, the full player shows the requested item and "Starting…" in the author line (a18bc76, f19711a). The author line is one line with an ellipsis and keeps its space, so it has the same height for every item. The title can be one or two lines, so a start from a short title to a long one still moves the controls down. Not fixed, because this needs a layout decision: keep two lines of space for every title, or accept the move |
 | **A streamed start waits for the item-detail sync** | `MediaResolver` calls `libraryRepository.syncItemDetail` after it opens the play session and before it gives the item to the player. That adds one more network call to a start that is already slow. Not fixed yet, because the sync also caches the chapters for offline use, so a change must keep that cache filled |
 | **Removing from a collection is only on the item page** | The grid's selection bar can add to a collection, but it cannot remove from one. The server has `POST /api/collections/:id/batch/remove`, and lugu does not call it. Not done, because the October work built the add half only |
-| **The crash prompt is not anchored above the bottom content** | The prompt floats over the tab bar until the listener answers it. Its wording is done (6a09432). Not fixed, because the place of the prompt is a layout decision that the maintainer has not made |
+| ~~**The crash prompt is not anchored above the bottom content**~~ | **Done 19 November 2026.** The prompt is a snackbar in the shell's host: "lugu crashed last time.", with "Describe what happened" and a dismiss button. Material places a snackbar above the bottom content, so it no longer covers the tab bar or the transport. It gives way to a jump notice and comes back at the next launch. The earlier form was a `Popup` that floated over the tab bar until the listener answered it. |
 
 ## M4, built 2-3 September 2026
 

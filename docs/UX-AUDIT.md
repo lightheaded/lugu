@@ -14,6 +14,13 @@ not raise them again.
 [docs/UX-FIX-PLAN.md](UX-FIX-PLAN.md) turns the twelve highest findings into work
 items, with the file collisions that decide what can run in parallel.
 
+A second checkup ran on 19 November 2026 against commit `73369cb`. It read the code
+again, with one more review for speed, and fixed the small and medium findings. A finding
+that the checkup closed has its title struck through. A finding that stays open has a
+status line that names the issue that holds the work. The big jobs are issues
+[#23](https://github.com/lightheaded/lugu/issues/23) to
+[#32](https://github.com/lightheaded/lugu/issues/32).
+
 Method: six parallel code reviews (shell and navigation, browsing, item and queue
 pages, player, settings and sign-in, visual polish), one cross-check against
 `docs/BACKLOG.md`, `docs/FEEDBACK.md` and `docs/PLAN.md`, and manual inspection of
@@ -107,7 +114,9 @@ Where: `app/res/values/themes.xml:3` · `MainActivity.kt:207-211`
 
 Where: `HomeScreen.kt:160-181` · `LibraryScreen.kt:88`
 
-### A tap on the Continue card body rebuffers the playing book
+### ~~A tap on the Continue card body rebuffers the playing book~~
+
+**Done 19 November** in `fix(library)`. The card body resumes or opens the player and never starts a loaded item again.
 
 **Severity: medium.**
 
@@ -117,7 +126,9 @@ Where: `HomeScreen.kt:160-181` · `LibraryScreen.kt:88`
 
 Where: `HomeScreen.kt:257-262` · `PlaybackConnection.kt:261-283`
 
-### Player and item pages can stack duplicates
+### ~~Player and item pages can stack duplicates~~
+
+**Done 19 November** in `fix(app)`. The player opens single-top, and a tap during a transition does nothing.
 
 **Severity: medium.**
 
@@ -147,7 +158,9 @@ Where: `HomeScreen.kt:115` · `PlayerActionRow.kt`
 
 Where: `StatusStrip.kt:167-168` · `HomeScreen.kt:186-192`
 
-### The notification permission is requested on the login screen
+### ~~The notification permission is requested on the login screen~~
+
+**Done 19 November** in `fix(app)`. lugu asks when playback first starts.
 
 **Severity: low.**
 
@@ -169,6 +182,8 @@ Where: `MainActivity.kt:408-418` · `StartupViewModel.kt:30-34`
 
 ### The crash prompt speaks with two voices
 
+**Status 19 November.** Done: the prompt is a snackbar above the bottom content (`fix(app)`).
+
 **Partly done 22 October.** The voice is done in 6a09432 (`fix(ux): local dates and times, whole-row switches, and a link from an episode to its show`). The anchor above the bottom content is open, and [BACKLOG.md](BACKLOG.md) records it.
 
 **Severity: low.**
@@ -181,7 +196,9 @@ Where: `CrashPrompt.kt:110-125`
 
 ## 4. Home and library browsing
 
-### The Library grid has no empty state at all
+### ~~The Library grid has no empty state at all~~
+
+**Done before this checkup; see UX-FIX-PLAN.md item 7.**
 
 **Severity: high.**
 
@@ -193,6 +210,8 @@ Where: `LibraryScreen.kt:173-217` · `contrast BrowseScreen.kt:306, DownloadsScr
 
 ### Two identical shelf cards do different things on tap
 
+**Status 19 November.** The play badge is done. A way from a shelf card to its page is in [#26](https://github.com/lightheaded/lugu/issues/26).
+
 **Severity: medium.**
 
 **Current.** An in-progress card plays audio on tap; the card one shelf down opens a page. The only cue is a 3 dp progress sliver. An in-progress card also has *no* path to its detail page from Home — chapters and download live behind a Library search.
@@ -201,7 +220,9 @@ Where: `LibraryScreen.kt:173-217` · `contrast BrowseScreen.kt:306, DownloadsScr
 
 Where: `HomeScreen.kt:241-243` · `LibraryScreen.kt:328, 428-436`
 
-### Downloaded state is invisible on every cover
+### ~~Downloaded state is invisible on every cover~~
+
+**Done 19 November** in `fix(library)`. A badge shows on every grid and shelf.
 
 **Severity: medium.**
 
@@ -211,7 +232,9 @@ Where: `HomeScreen.kt:241-243` · `LibraryScreen.kt:328, 428-436`
 
 Where: `LibraryViewModel.kt:180-185, 227-231` · `LibraryScreen.kt:320-398`
 
-### A finished book looks like a 97% book
+### ~~A finished book looks like a 97% book~~
+
+**Done 19 November** in `fix(library)`. A tick replaces the bar, and TalkBack says "Finished".
 
 **Severity: medium.**
 
@@ -223,6 +246,8 @@ Where: `LibraryScreen.kt:347-360` · `LibraryViewModel.kt:52, 60-68`
 
 ### Long-press means select on two screens and nothing on three
 
+**Status 19 November.** Open, in [#26](https://github.com/lightheaded/lugu/issues/26).
+
 **Severity: medium.**
 
 **Current.** The gesture toggles selection on the Library grid and Downloads, and dies silently on Browse groups, Collections, and shelves — the same card, the same finger, no answer.
@@ -232,6 +257,8 @@ Where: `LibraryScreen.kt:347-360` · `LibraryViewModel.kt:52, 60-68`
 Where: `BrowseScreen.kt:230-235` · `CollectionsScreen.kt:236-242` · `LibraryScreen.kt:201`
 
 ### Entering selection mode jolts the whole screen
+
+**Status 19 November.** Open, in [#26](https://github.com/lightheaded/lugu/issues/26).
 
 **Severity: medium.**
 
@@ -243,6 +270,8 @@ Where: `LibraryScreen.kt:135-157`
 
 ### The selection bar lives in a different place on each screen
 
+**Status 19 November.** Open, in [#26](https://github.com/lightheaded/lugu/issues/26).
+
 **Severity: medium.**
 
 **Current.** In-content below the picker chips on Library; replacing the top app bar on Downloads; a third copy on episode lists. One vocabulary, two grammars.
@@ -251,7 +280,9 @@ Where: `LibraryScreen.kt:135-157`
 
 Where: `LibraryScreen.kt:136` · `DownloadsScreen.kt:102-115`
 
-### Home has no pull-to-refresh; its sibling tab has one
+### ~~Home has no pull-to-refresh; its sibling tab has one~~
+
+**Done 19 November** in `fix(library)`.
 
 **Severity: medium.**
 
@@ -262,6 +293,8 @@ Where: `LibraryScreen.kt:136` · `DownloadsScreen.kt:102-115`
 Where: `HomeScreen.kt:96, 245` · `LibraryScreen.kt:168-172`
 
 ### Four icon-only selection actions, two of them near-twins
+
+**Status 19 November.** The finished pair is one toggle, and each action shows its name on a long press (`fix(library)`). No overflow menu.
 
 **Severity: medium.**
 
@@ -281,7 +314,9 @@ Where: `LibraryScreen.kt:273-293` · `ListControlsUi.kt:197-201`
 
 Where: `DownloadsScreen.kt:281, 296-303`
 
-### Batch delete of downloads is instant and silent
+### ~~Batch delete of downloads is instant and silent~~
+
+**Done 19 November** in `fix(library)`. A delete offers Undo, and the files go when the notice closes.
 
 **Severity: medium.**
 
@@ -303,7 +338,9 @@ Where: `DownloadsViewModel.kt:174-182` · `contrast LibraryViewModel.kt:337`
 
 Where: `DownloadsScreen.kt:213` · `DownloadsViewModel.kt:31`
 
-### The search field misuses its label as a placeholder
+### ~~The search field misuses its label as a placeholder~~
+
+**Done 19 November** in `fix(library)`. Done for the Library grid earlier, and now for the search screen.
 
 **Severity: low.**
 
@@ -313,7 +350,9 @@ Where: `DownloadsScreen.kt:213` · `DownloadsViewModel.kt:31`
 
 Where: `ListControlsUi.kt:89` · `library_tab_dark.png`
 
-### "Continue listening" appears twice on the Home screen
+### ~~"Continue listening" appears twice on the Home screen~~
+
+**Done 19 November** in `fix(library)`. The shelf leaves out the item that the card shows.
 
 **Severity: low.**
 
@@ -323,7 +362,9 @@ Where: `ListControlsUi.kt:89` · `library_tab_dark.png`
 
 Where: `home_tab_dark.png` · `HomeScreen.kt`
 
-### The browse links row clips at large font scale
+### ~~The browse links row clips at large font scale~~
+
+**Done before this checkup: the row scrolls.**
 
 **Severity: low.**
 
@@ -333,7 +374,9 @@ Where: `home_tab_dark.png` · `HomeScreen.kt`
 
 Where: `LibraryScreen.kt:242-255`
 
-### The search box earns its place on one screen and squats on another
+### ~~The search box earns its place on one screen and squats on another~~
+
+**Done 19 November** in `fix(library)`.
 
 **Severity: low.**
 
@@ -343,7 +386,9 @@ Where: `LibraryScreen.kt:242-255`
 
 Where: `CollectionsScreen.kt:128` · `BrowseScreen.kt:89-103`
 
-### The fast-scroll bubble can contradict the finger
+### ~~The fast-scroll bubble can contradict the finger~~
+
+**Done 19 November** in `fix(library)`.
 
 **Severity: low.**
 
@@ -353,7 +398,9 @@ Where: `CollectionsScreen.kt:128` · `BrowseScreen.kt:89-103`
 
 Where: `FastScrollRail.kt:126-133, 187-200` · `LibraryScreen.kt:106-108`
 
-### Sort gives no feedback in the menu or the list
+### ~~Sort gives no feedback in the menu or the list~~
+
+**Done 19 November** in `fix(library)`. The menu ticks the active choice, and a new sort starts at the top.
 
 **Severity: low.**
 
@@ -365,6 +412,8 @@ Where: `ListControlsUi.kt:135-145` · `LibraryViewModel.kt:296-298`
 
 ### TalkBack reads every card title twice
 
+**Status 19 November.** Open, in [#31](https://github.com/lightheaded/lugu/issues/31). The checkup removed the cover's description, and the harness tests then found no title on both emulators, because that description is how a tool reads a title from a card. The description is back. The fix is one merged description for the whole card.
+
 **Severity: low.**
 
 **Current.** The cover image's description is the title, and the visible title text follows it.
@@ -375,7 +424,9 @@ Where: `LibraryScreen.kt:343, 382`
 
 ## 5. Book, podcast, episode and queue pages
 
-### A tap on the "downloaded" tick deletes the download
+### ~~A tap on the "downloaded" tick deletes the download~~
+
+**Done 19 November** in `fix(library)`. Every path offers Undo: the book, podcast and episode pages, the Episodes view, Downloads and the batch action. The glyph stays in BACKLOG.md.
 
 **Severity: high.**
 
@@ -407,6 +458,8 @@ Where: `ItemDetailScreen.kt:230-255`
 
 ### Queue reorder: a decoy handle, no autoscroll, no accessible path
 
+**Status 19 November.** TalkBack actions and haptics are done (`fix(library)`). The handle and the autoscroll are in [#27](https://github.com/lightheaded/lugu/issues/27).
+
 **Severity: medium.**
 
 **Current.** The drawn handle is decorative; the real detector is long-press anywhere on the list, so grabbing the handle and dragging does nothing (its own contentDescription admits it). The drop target only resolves among visible rows, so a drag stalls at the viewport edge. TalkBack users cannot reorder at all. No haptic marks pick-up.
@@ -415,7 +468,9 @@ Where: `ItemDetailScreen.kt:230-255`
 
 Where: `QueueScreen.kt:179-217, 246-333`
 
-### "Mark as not finished" silently throws the position away
+### ~~"Mark as not finished" silently throws the position away~~
+
+**Done 19 November** in `fix(library)`. Both marks offer Undo, which puts the position back.
 
 **Severity: medium.**
 
@@ -437,7 +492,9 @@ Where: `ItemDetailViewModel.kt:400-413` · `ItemDetailScreen.kt:653-668`
 
 Where: `ItemDetailScreen.kt:550, 619, 967`
 
-### Long descriptions never collapse
+### ~~Long descriptions never collapse~~
+
+**Done 19 November** in `fix(library)`.
 
 **Severity: medium.**
 
@@ -447,7 +504,9 @@ Where: `ItemDetailScreen.kt:550, 619, 967`
 
 Where: `ItemDetailScreen.kt:257-264`
 
-### "Resume" lies on finished items and hides its promise
+### ~~"Resume" lies on finished items and hides its promise~~
+
+**Done 19 November** in `fix(library)`. "Play", "Resume · time left" or "Play again".
 
 **Severity: medium.**
 
@@ -459,6 +518,8 @@ Where: `ItemDetailScreen.kt:218-225, 239` · `EpisodeScreen.kt:200`
 
 ### An episode filter left on one show reshapes every other show
 
+**Status 19 November.** The empty list names the filter and offers "Show all" (`fix(library)`). A filter per show is in [#26](https://github.com/lightheaded/lugu/issues/26).
+
 **Severity: medium.**
 
 **Current.** Episode sort and filter persist globally. "Downloaded" left on for show A makes show B look near-empty next week; the empty state does not name the control that hid the rows.
@@ -468,6 +529,8 @@ Where: `ItemDetailScreen.kt:218-225, 239` · `EpisodeScreen.kt:200`
 Where: `ItemDetailViewModel.kt:287-334` · `ItemDetailScreen.kt:300-318`
 
 ### The book page cannot say how the book is divided
+
+**Status 19 November.** Open.
 
 **Severity: low.**
 
@@ -479,6 +542,8 @@ Where: `ItemDetailScreen.kt` · `ChapterSheet.kt`
 
 ### The episode page has no artwork and no way to its show
 
+**Status 19 November.** Done: the cover is beside the title (`fix(library)`).
+
 **Partly done 22 October.** The show name in the top bar opens the show page: 6a09432 added the link, and bd45240 (`fix(feedback): a tap anywhere on the attach row flips the switch, and an episode links to its show`) connected it to the navigation. The cover beside the title is open.
 
 **Severity: low.**
@@ -489,7 +554,9 @@ Where: `ItemDetailScreen.kt` · `ChapterSheet.kt`
 
 Where: `EpisodeScreen.kt:57-64, 161-171`
 
-### The hero pages waste their upper half
+### ~~The hero pages waste their upper half~~
+
+**Done 19 November** in `fix(library)`. Author, narrator and series sit beside the cover, and absent metadata shows nothing.
 
 **Severity: low.**
 
@@ -501,6 +568,8 @@ Where: `item_book_dark.png` · `item_podcast_dark.png` · `BACKLOG.md ("— on t
 
 ### Small geometry drift on item and queue screens
 
+**Status 19 November.** The list controls align with the rows, and the ordinal fits three digits (`fix(library)`). The inset selection highlight is open.
+
 **Severity: low.**
 
 **Current.** The list controls pad 16 dp inside an already-16 dp-padded list, so the search field sits 32 dp from the edge while rows sit at 16. Selection highlights stop at the content padding and read as inset stripes. The queue ordinal clips at three digits.
@@ -509,7 +578,9 @@ Where: `item_book_dark.png` · `item_podcast_dark.png` · `BACKLOG.md ("— on t
 
 Where: `ListControlsUi.kt:82` · `ItemDetailScreen.kt:165, 500-509` · `QueueScreen.kt:278-283`
 
-### Trim offers presets only, capped at 90 s
+### ~~Trim offers presets only, capped at 90 s~~
+
+**Done 19 November** in `fix(library)`. The ladder goes to 120 and 180 s.
 
 **Severity: low.**
 
@@ -519,7 +590,9 @@ Where: `ListControlsUi.kt:82` · `ItemDetailScreen.kt:165, 500-509` · `QueueScr
 
 Where: `ItemDetailScreen.kt:779-806` · `SkipRegions.kt:51`
 
-### The queue screen carries dead settings plumbing
+### ~~The queue screen carries dead settings plumbing~~
+
+**Done 19 November** in `fix(library)`. The handlers are gone.
 
 **Severity: low.**
 
@@ -541,7 +614,9 @@ Where: `QueueViewModel.kt:116-120` · `QueueScreen.kt:115-118`
 
 Where: `PlayerScreen.kt:275-298`
 
-### The skip buttons draw two conflicting numbers
+### ~~The skip buttons draw two conflicting numbers~~
+
+**Done 19 November** in `fix(player)`. The glyph was done earlier. The number is now 11 dp and does not grow into the arc.
 
 **Severity: high.**
 
@@ -553,6 +628,8 @@ Where: `PlayerScreen.kt:416, 438, 679-691` · `player_dark.png`
 
 ### The trim-skip undo is visible only inside the full player
 
+**Status 19 November.** The shell shows it on every screen, above Home's tabs (`fix(app)`). The age of a late notice is in [#28](https://github.com/lightheaded/lugu/issues/28).
+
 **Severity: high.**
 
 **Current.** The undoable-jump flow's only consumer is the player screen's snackbar. On Home, on the lock screen, in another app, the listener hears the jump and sees nothing — and the notice can arrive minutes stale with no time attached. The README's promise ("every skip says so and can be undone") holds on one screen.
@@ -562,6 +639,8 @@ Where: `PlayerScreen.kt:416, 438, 679-691` · `player_dark.png`
 Where: `PlayerScreen.kt:147-166` · `SkipRegionEnforcer.kt:48-62`
 
 ### Two time systems sit 24 dp apart, unlabeled
+
+**Status 19 November.** The readout is labeled. Chapter ticks and the scrub preview are in [#28](https://github.com/lightheaded/lugu/issues/28).
 
 **Severity: medium.**
 
@@ -573,6 +652,8 @@ Where: `PlayerScreen.kt:343-383`
 
 ### The time labels are inert and ignore playback speed
 
+**Status 19 November.** Open, in [#28](https://github.com/lightheaded/lugu/issues/28).
+
 **Severity: medium.**
 
 **Current.** Elapsed and −remaining, not tappable, with no "ends at 22:41" and no speed-adjusted remaining — although `wallClockSecondsAt` exists and serves the sleep and bookmark sheets.
@@ -583,6 +664,8 @@ Where: `PlayerScreen.kt:374-383` · `PlayerTime.kt:20`
 
 ### No gestures anywhere in the player
 
+**Status 19 November.** Hold to scan is done. The swipes are in [#28](https://github.com/lightheaded/lugu/issues/28).
+
 **Severity: medium.**
 
 **Current.** No swipe-down to dismiss the full player, no swipe on the mini player, no hold-to-repeat on the skip buttons.
@@ -591,7 +674,9 @@ Where: `PlayerScreen.kt:374-383` · `PlayerTime.kt:20`
 
 Where: `PlayerScreen.kt:261-269, 584-622`
 
-### A speed change costs three interactions
+### ~~A speed change costs three interactions~~
+
+**Done 19 November** in `fix(player)`. A preset closes the sheet.
 
 **Severity: medium.**
 
@@ -601,7 +686,9 @@ Where: `PlayerScreen.kt:261-269, 584-622`
 
 Where: `PlayerScreen.kt:196-203` · `PlayerActionRow.kt:48-52`
 
-### The chapter readout does not look tappable
+### ~~The chapter readout does not look tappable~~
+
+**Done 19 November** in `fix(player)`.
 
 **Severity: medium.**
 
@@ -613,6 +700,8 @@ Where: `PlayerScreen.kt:327-334`
 
 ### The mini player's progress bar answers a question nobody asked
 
+**Status 19 November.** The bar is spoken (`fix(player)`). Chapter progress is in [#28](https://github.com/lightheaded/lugu/issues/28).
+
 **Severity: medium.**
 
 **Current.** The 2 dp bar shows whole-book progress while the subtitle names the chapter; on a long book the bar is visually static and unlabeled.
@@ -621,7 +710,9 @@ Where: `PlayerScreen.kt:327-334`
 
 Where: `PlayerScreen.kt:536, 580-583`
 
-### An armed sleep timer is invisible
+### ~~An armed sleep timer is invisible~~
+
+**Done 19 November** in `fix(player)`. The minutes left show as a badge on the icon.
 
 **Severity: medium.**
 
@@ -643,7 +734,9 @@ Where: `PlayerActionRow.kt:54-64` · `SleepSheet.kt:147-153`
 
 Where: `PlayerScreen.kt:650-668` · `PlaybackConnection.kt:66-71`
 
-### Bookmarks: the naming moment is three steps late
+### ~~Bookmarks: the naming moment is three steps late~~
+
+**Done 19 November** in `fix(player)`. The notice has a Name action, and the dialog opens with focus.
 
 **Severity: low.**
 
@@ -653,7 +746,9 @@ Where: `PlayerScreen.kt:650-668` · `PlaybackConnection.kt:66-71`
 
 Where: `PlayerScreen.kt:465-475` · `BookmarkSheet.kt:189-219`
 
-### Sheets disagree about how far they open
+### ~~Sheets disagree about how far they open~~
+
+**Done 19 November** in `fix(player)`. Every sheet opens fully.
 
 **Severity: low.**
 
@@ -689,6 +784,8 @@ Where: `SettingsScreen.kt:1110-1118` · `AuthRepository.kt:101-112`
 
 ### The login form ignores password managers and hides typos
 
+**Status 19 November.** Done: the certificate password fields have the eye toggle too (`fix(settings)`).
+
 **Severity: high.**
 
 **Current.** No autofill semantics on any field, so Google/1Password/Bitwarden never offer to fill or save — on the screen with the least-memorable password. No show-password toggle either (the file imports the icons and uses them elsewhere); the certificate dialogs share the gap.
@@ -697,7 +794,9 @@ Where: `SettingsScreen.kt:1110-1118` · `AuthRepository.kt:101-112`
 
 Where: `LoginScreen.kt:98-166, 331-342` · `ConnectionScreen.kt:381-392`
 
-### The sign-in flow drops small stitches
+### ~~The sign-in flow drops small stitches~~
+
+**Done 19 November** in `fix(settings)`.
 
 **Severity: medium.**
 
@@ -731,7 +830,9 @@ Where: `SettingsScreen.kt:1072-1078`
 
 Where: `SettingsScreen.kt:1225-1242, 1668-1673` · `FeedbackScreen.kt:352-370`
 
-### Connection errors leak machine text
+### ~~Connection errors leak machine text~~
+
+**Done 19 November** in `fix(settings)`.
 
 **Severity: medium.**
 
@@ -743,6 +844,8 @@ Where: `ConnectionViewModel.kt:153-155` · `AbsClient.kt:143` · `LoginViewModel
 
 ### Deleting a custom header or certificate is instant and unrecoverable
 
+**Status 19 November.** Open, in [#30](https://github.com/lightheaded/lugu/issues/30).
+
 **Severity: medium.**
 
 **Current.** The bin icon deletes a masked credential with no confirmation and no undo. Behind Cloudflare Access, losing it means being locked out until the secret is dug out of the dashboard.
@@ -753,6 +856,8 @@ Where: `ConnectionScreen.kt:271-273, 342` · `LoginScreen.kt:261-263`
 
 ### Seventeen categories, one long scroll, no way to jump
 
+**Status 19 November.** The categories are in a listener's order, each in one piece (`fix(settings)`). The jump strip is in [#30](https://github.com/lightheaded/lugu/issues/30).
+
 **Severity: medium.**
 
 **Current.** ~40 settings render inline across 17 categories. Search mitigates well, but a scanner without the right word faces screenfuls; Account — home of sign-out and Connection — is 15 categories down.
@@ -761,7 +866,9 @@ Where: `ConnectionScreen.kt:271-273, 342` · `LoginScreen.kt:261-263`
 
 Where: `SettingsScreen.kt:189-1207`
 
-### Feedback is one-way and never says so
+### ~~Feedback is one-way and never says so~~
+
+**Done 19 November** in `fix(app)`.
 
 **Severity: medium.**
 
@@ -785,6 +892,8 @@ Where: `PlaybackRecordScreen.kt:305` · `PlaybackRecord.kt:212` · `contrast Con
 
 ### Settings hidden by a parent toggle vanish from search
 
+**Status 19 November.** Open, in [#30](https://github.com/lightheaded/lugu/issues/30).
+
 **Severity: low.**
 
 **Current.** "Default podcast speed" and "How hard to shake" only exist in the index while their parents are on — against the file's own principle that "a switch you cannot find again is not a switch".
@@ -794,6 +903,8 @@ Where: `PlaybackRecordScreen.kt:305` · `PlaybackRecord.kt:212` · `contrast Con
 Where: `SettingsScreen.kt:363-378, 612-630, 1367`
 
 ### Quiet successes and dead ends
+
+**Status 19 November.** A tap copies the version (`fix(settings)`). The rest is in [#30](https://github.com/lightheaded/lugu/issues/30).
 
 **Severity: low.**
 
@@ -805,6 +916,8 @@ Where: `ConnectionViewModel.kt:108-121` · `SettingsScreen.kt:139-148, 1182` · 
 
 ### The default-speed chips ignore the user's own presets
 
+**Status 19 November.** One unit style on every chip (`fix(settings)`). The presets are in [#30](https://github.com/lightheaded/lugu/issues/30).
+
 **Severity: low.**
 
 **Current.** The row renders the fixed ladder only; edited presets from the entry directly below never appear, and a value that matches no chip shows nothing selected. Unit spacing also drifts across the screen ("30s", "5 s", "10 min").
@@ -813,7 +926,9 @@ Where: `ConnectionViewModel.kt:108-121` · `SettingsScreen.kt:139-148, 1182` · 
 
 Where: `SettingsScreen.kt:203, 574, 643, 751, 1435-1449`
 
-### The login screen sits under the system bars
+### ~~The login screen sits under the system bars~~
+
+**Done before this checkup: the shell pads it.**
 
 **Severity: low.**
 
@@ -829,6 +944,8 @@ The app is functionally deep and visually inert. Nothing here blocks use; togeth
 
 ### Dynamic color erases the brand on Android 12+, and the cover never colors anything
 
+**Status 19 November.** The brand scheme covers every role (`feat(theme)`). The setting and the cover color are in [#24](https://github.com/lightheaded/lugu/issues/24).
+
 **Severity: medium.**
 
 **Current.** SDK ≥ 31 always takes the wallpaper scheme; the warm amber/plum brand palette only survives on Android 8–11. Meanwhile the most natural color source in an audiobook app — the cover — seeds nothing.
@@ -838,6 +955,8 @@ The app is functionally deep and visually inert. Nothing here blocks use; togeth
 Where: `app/ui/Theme.kt:14-36` · `PlayerScreen.kt:552-563`
 
 ### No theme control, no true black
+
+**Status 19 November.** Open, in [#24](https://github.com/lightheaded/lugu/issues/24).
 
 **Severity: medium.**
 
@@ -849,6 +968,8 @@ Where: `Theme.kt:25-27` · `SettingsScreen.kt (no theme entry)`
 
 ### Zero haptic feedback in an app full of gestures
 
+**Status 19 November.** The rail and the queue drag tick (`fix(library)`). A full set is in [#29](https://github.com/lightheaded/lugu/issues/29).
+
 **Severity: medium.**
 
 **Current.** No `HapticFeedback` usage exists in any UI code. The fast-scroll rail changes letters silently; queue drag gives no tick on pick-up or swap; bookmark add, selection toggles and chapter boundaries are all mute.
@@ -859,6 +980,8 @@ Where: `FastScrollRail.kt:126-133` · `QueueScreen.kt:180-217`
 
 ### Every transition is the stock crossfade; the cover never travels
 
+**Status 19 November.** Pages slide and fade, and the player comes up from the bottom (`fix(app)`). The cover travel is in [#23](https://github.com/lightheaded/lugu/issues/23).
+
 **Severity: medium.**
 
 **Current.** The NavHost declares no transitions; the tab switch is a hard cut; the cover appears at four sizes (grid, item header, mini player, full player) with no continuity. Predictive back previews a bland fade.
@@ -867,7 +990,9 @@ Where: `FastScrollRail.kt:126-133` · `QueueScreen.kt:180-217`
 
 Where: `MainActivity.kt:217` · `HomeScreen.kt:163-183`
 
-### Keyed lists never animate placement
+### ~~Keyed lists never animate placement~~
+
+**Done 19 November** in `fix(library)`. The grid, Downloads, the episode lists, the queue and Home's shelves use `animateItem`.
 
 **Severity: medium.**
 
@@ -879,6 +1004,8 @@ Where: `LibraryScreen.kt:189` · `QueueScreen.kt:225` · `DownloadsScreen.kt:208
 
 ### Covers are force-cropped to squares on the hero surfaces
 
+**Status 19 November.** Open, in [#23](https://github.com/lightheaded/lugu/issues/23).
+
 **Severity: medium.**
 
 **Current.** `aspectRatio(1f)` + Crop everywhere. Audiobook jackets are commonly 2:3; the crop removes title and author text from the artwork — worst on the player, the largest image in the app.
@@ -888,6 +1015,8 @@ Where: `LibraryScreen.kt:189` · `QueueScreen.kt:225` · `DownloadsScreen.kt:208
 Where: `PlayerScreen.kt:283-298` · `ItemDetailScreen.kt:170-178` · `LibraryScreen.kt:335-346`
 
 ### A failed cover is indistinguishable from a loading one
+
+**Status 19 November.** Open, in [#23](https://github.com/lightheaded/lugu/issues/23).
 
 **Severity: medium.**
 
@@ -899,6 +1028,8 @@ Where: `LuguApplication.kt:176-188` · `LibraryScreen.kt:341` · `PlayerScreen.k
 
 ### Loading states are bare text; play/pause never morphs; empty states are unstyled paragraphs
 
+**Status 19 November.** The "Loading…" texts are gone, and no screen shows a false empty state. The rest is in [#29](https://github.com/lightheaded/lugu/issues/29).
+
 **Severity: low.**
 
 **Current.** "Loading…" as literal centered text on item, episode, browse and collection pages. The app's most-pressed button hard-swaps its glyph in all three transports. Empty-state copy is excellent and rendered as raw body text.
@@ -909,6 +1040,8 @@ Where: `ItemDetailScreen.kt:153-156` · `PlayerScreen.kt:426, 618` · `QueueScre
 
 ### Typography, shapes and the launcher glyph are stock
 
+**Status 19 November.** Open, in [#29](https://github.com/lightheaded/lugu/issues/29).
+
 **Severity: low.**
 
 **Current.** No Typography, no Shapes; corner radii drift 6/8/12 dp ad hoc. The wordmark is plain displaySmall. The launcher foreground's 3 px arc thins to invisibility at 24 dp (the monochrome layer itself is correctly plumbed).
@@ -918,6 +1051,8 @@ Where: `ItemDetailScreen.kt:153-156` · `PlayerScreen.kt:426, 618` · `QueueScre
 Where: `Theme.kt:37` · `LoginScreen.kt:89` · `drawable/ic_launcher_foreground.xml`
 
 ### Top bars never respond to scroll; strings never left Kotlin
+
+**Status 19 November.** Open, in [#29](https://github.com/lightheaded/lugu/issues/29) and [#32](https://github.com/lightheaded/lugu/issues/32).
 
 **Severity: low.**
 
