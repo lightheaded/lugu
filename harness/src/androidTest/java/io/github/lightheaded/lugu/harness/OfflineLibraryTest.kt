@@ -27,9 +27,10 @@ import org.junit.runner.RunWith
  *
  * ### The account has to be real
  *
- * `isSignedIn` is an active `server` row **and** a token in encrypted preferences, so a
- * seeded row alone lands on the login screen and every assertion after it fails at "there is
- * no Library tab" — true, and about the fixture rather than about the app. The harness cannot
+ * `isSignedIn` is an active `server` row **and** a token in encrypted preferences. A seeded
+ * row alone is a lapsed account, so lugu pushes the sign-in screen over the library and the
+ * check below reads it as a request for credentials — true, and about the fixture rather
+ * than about the app. The harness cannot
  * plant a token anyway: lugu's preferences belong to lugu. So the account here is real. lugu
  * signs itself in from its own build configuration, the harness taps the button that is
  * already filled in, and the library that renders at the end is the library that the first

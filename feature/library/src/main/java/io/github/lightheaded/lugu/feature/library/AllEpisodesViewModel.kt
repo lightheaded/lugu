@@ -223,7 +223,7 @@ class AllEpisodesViewModel @Inject constructor(
             shown = true
             status.value = Status.Working("Fetching episodes — $done of $total", done.toFloat() / total)
         }.onFailure {
-            status.value = Status.Problem(it.message ?: "Could not fetch all the episodes")
+            status.value = Status.Problem(syncFailureText(it, "Could not fetch all the episodes"))
             return
         }
         if (shown) status.value = null
@@ -246,7 +246,7 @@ class AllEpisodesViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             downloadRepository.download(current, row.itemId, row.episodeId)
-                .onFailure { status.value = Status.Problem(it.message ?: "Could not start the download") }
+                .onFailure { status.value = Status.Problem(actionFailureText(it, "Could not start the download")) }
         }
     }
 

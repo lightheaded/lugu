@@ -13,6 +13,7 @@ import io.github.lightheaded.lugu.core.db.PositionHistoryEntity
 import io.github.lightheaded.lugu.core.db.ProgressDao
 import io.github.lightheaded.lugu.core.db.NOTHING_PUSHED_SEC
 import io.github.lightheaded.lugu.core.db.ProgressEntity
+import io.github.lightheaded.lugu.core.db.ServerCopyWrite
 import io.github.lightheaded.lugu.core.db.episodeKeyOf
 import io.github.lightheaded.lugu.core.db.toEpisodeIdOrNull
 import io.github.lightheaded.lugu.core.model.MediaProgress
@@ -20,6 +21,7 @@ import io.github.lightheaded.lugu.core.model.ProgressConflictResolver
 import io.github.lightheaded.lugu.core.model.ProgressKey
 import io.github.lightheaded.lugu.core.model.ProgressResolution
 import io.github.lightheaded.lugu.core.model.ServerCopySeen
+import io.github.lightheaded.lugu.core.model.SweepVerdict
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.util.concurrent.ConcurrentHashMap
@@ -161,11 +163,30 @@ class ProgressRepository @Inject constructor(
         progressDao.get(account.serverId, account.userId, itemId, episodeKeyOf(episodeId))?.toDomain()
 
     /**
-     * Bulk seed from a login or a full reconciliation sweep. Never clobbers dirty local rows.
+     * Bulk seed from a login or a full reconciliation sweep.
+     *
+     * A clean or absent row takes the server's copy, unless a push for it waits in the
+     * outbox: that push is newer than anything the sweep read. For a dirty row, newer
+     * listening wins: [ProgressConflictResolver.sweepVerdict] is the rule, and the one place
+     * to change which side wins. A copy this device accounted for, or one that this device
+     * listened clearly later than, leaves the row and its push alone. The push then goes
+     * out at the next flush, and a finished mark made offline goes with it.
+     *
+     * A row kept over another device's copy records that copy's stamp, so that the check
+     * at a session start reads it as accounted for and does not adopt the older position
+     * before the push went out. No history entry is written for it: nothing on the phone
+     * moved.
      *
      * [except] is the item in the player. Its position moves only through a session start,
      * which can seek the player and show the jump. A row written under a playing item is
      * overwritten by the next tick, which then pushes the old position over the new one.
+     *
+     * A dirty row that loses to the server's copy is handled as [settle] handles it: its
+     * queued push goes in the same write, and the position it held goes into the history
+     * as a jump from another device. The usual case is a position listened to while the
+     * sign-in had lapsed, met at the next sign-in by a position that another device wrote
+     * later. Nobody is in the player to be offered an Undo, so the history is where the
+     * listener finds the old position again.
      */
     suspend fun seedFromServer(
         account: ActiveAccount,
@@ -176,30 +197,66 @@ class ProgressRepository @Inject constructor(
         val existing = progressDao.dirty(account.serverId, account.userId)
             .associateBy { it.libraryItemId to it.episodeKey }
 
-        val rows = remote.mapNotNull { dto ->
+        // Dirty rows kept over another device's copy, with the stamp of that copy.
+        val outlistened = mutableListOf<Pair<ProgressEntity, Long>>()
+
+        val writes = remote.mapNotNull { dto ->
             if (except != null && except.libraryItemId == dto.libraryItemId && except.episodeId == dto.episodeId) {
                 return@mapNotNull null
             }
             val key = dto.libraryItemId to episodeKeyOf(dto.episodeId)
             val local = existing[key]
-            // A dirty local row is a change the server has not accepted yet. Leave it
-            // alone unless the server's copy came from somewhere other than here —
-            // decided by the same rule playback uses, on the server's clock alone. The
-            // old test compared the server's stamp with this device's and so handed a
-            // week of offline listening to whichever machine had the faster clock.
+            // A dirty local row is a change the server has not accepted yet. Which side
+            // wins is the resolver's to say: newer listening, judged across a margin wide
+            // enough that a modest clock error cannot pick the older side.
             val server = dto.toDomain()
-            if (local != null && !ProgressConflictResolver.serverCopyCameFromElsewhere(server, local.seenCopy())) {
-                return@mapNotNull null
+            if (local != null) {
+                when (ProgressConflictResolver.sweepVerdict(local.toDomain(), server, local.seenCopy())) {
+                    SweepVerdict.KEEP_LOCAL -> return@mapNotNull null
+                    SweepVerdict.KEEP_LOCAL_NEWER -> {
+                        outlistened += local to server.lastUpdateMs
+                        return@mapNotNull null
+                    }
+                    SweepVerdict.TAKE_SERVER -> Unit
+                }
             }
-            server.toEntity(
-                account = account,
-                isDirty = false,
-                serverLastUpdateMs = server.lastUpdateMs,
-                pushedTimeSec = local?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
-                pushedFinished = local?.pushedFinished ?: false,
+            ServerCopyWrite(
+                row = server.toEntity(
+                    account = account,
+                    isDirty = false,
+                    serverLastUpdateMs = server.lastUpdateMs,
+                    pushedTimeSec = local?.pushedTimeSec ?: NOTHING_PUSHED_SEC,
+                    pushedFinished = local?.pushedFinished ?: false,
+                ),
+                replacedLastUpdateMs = local?.lastUpdateMs,
+                queuedPushKey = dedupeKeyOf(dto.libraryItemId, dto.episodeId),
             )
         }
-        progressDao.upsertAll(rows)
+        val written = progressDao.writeServerCopies(writes)
+
+        outlistened.forEach { (row, serverStamp) ->
+            progressDao.noteOutlistenedServerStamp(
+                serverId = row.serverId,
+                userId = row.userId,
+                itemId = row.libraryItemId,
+                episodeKey = row.episodeKey,
+                readServerLastUpdateMs = row.serverLastUpdateMs,
+                serverLastUpdateMs = serverStamp,
+            )
+        }
+
+        written.forEach { write ->
+            if (write.replacedLastUpdateMs == null) return@forEach
+            val replaced = existing[write.row.libraryItemId to write.row.episodeKey] ?: return@forEach
+            recordJump(
+                account = account,
+                itemId = write.row.libraryItemId,
+                episodeId = write.row.episodeKey.toEpisodeIdOrNull(),
+                fromSec = replaced.currentTimeSec,
+                toSec = write.row.currentTimeSec,
+                reason = OTHER_DEVICE_REASON,
+            )
+        }
     }
 
     /**
@@ -545,6 +602,9 @@ class ProgressRepository @Inject constructor(
             episodeKey = episodeKeyOf(payload.episodeId),
             pushedTimeSec = payload.currentTime,
             pushedFinished = payload.isFinished,
+            // A row written while the PATCH was in flight has a newer push waiting, and
+            // stays dirty until that one goes. See ProgressDao.markClean.
+            pushedLastUpdateMs = payload.lastUpdateMs,
         )
         return true
     }
@@ -559,6 +619,13 @@ class ProgressRepository @Inject constructor(
         fun dedupeKeyOf(itemId: String, episodeId: String?): String = "$itemId#${episodeKeyOf(episodeId)}"
 
         fun holdKeyOf(serverId: String, userId: String, dedupeKey: String): String = "$serverId|$userId|$dedupeKey"
+
+        /**
+         * The history reason for a position replaced by another device's. The same stored
+         * string as `SeekReasons.OTHER_DEVICE` in playback, which the history screen reads
+         * as "From another device".
+         */
+        const val OTHER_DEVICE_REASON = "other-device"
 
         /** Below this, a position change is ordinary listening rather than a jump. */
         const val MIN_NOTABLE_JUMP_SEC = 45.0

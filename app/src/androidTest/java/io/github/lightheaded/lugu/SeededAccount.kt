@@ -11,14 +11,16 @@ import kotlinx.coroutines.runBlocking
  *
  * A row in `server` is **not** enough to make lugu consider itself signed in. `isSignedIn`
  * is `serverDao.active() != null && tokenStore.tokens() != null`, and the token lives in
- * encrypted preferences rather than in Room — so a test that seeds only the database gets
- * the login screen, and every assertion about the app then fails somewhere far away from
- * the reason. [AutoBrowseTreeTest] does not need this because it binds a `MediaBrowser` and
- * never goes through the UI; anything that drives a screen does.
+ * encrypted preferences rather than in Room. A test that seeds only the database gets a
+ * lapsed account: Home, with the sign-in screen pushed on top of it. Every assertion about
+ * the screen under it then fails somewhere far away from the reason. [AutoBrowseTreeTest]
+ * does not need this because it binds a `MediaBrowser` and never goes through the UI;
+ * anything that drives a screen does. [LapsedSessionTest] seeds no token on purpose.
  *
- * Found the hard way: the first run of the grid tests passed on a device that still had a
- * real token from an earlier suite, and every run after the app was reinstalled failed at
- * "there is no Library tab" — which is true, and says nothing about why.
+ * Found the hard way, when a row alone still opened the login screen: the first run of the
+ * grid tests passed on a device that still had a real token from an earlier suite, and
+ * every run after the app was reinstalled failed at "there is no Library tab" — which is
+ * true, and says nothing about why.
  *
  * The token is nonsense on purpose. Nothing here may reach a server: every test that uses
  * this points its account at a domain that cannot resolve, so a token that would be
@@ -47,7 +49,7 @@ internal class PlantedToken private constructor(
          * that uses this plants its token *before* it makes its own server row active. So
          * a plant aimed at the active account would land on whatever the device was signed
          * in to, the test's own account would have no token, and `isSignedIn` would be
-         * false — which is the login screen, and every assertion then failing a long way
+         * false — which is the sign-in screen on top, and every assertion then failing a long way
          * from the reason. That is the same failure this file's own KDoc was written about,
          * arriving by a new route.
          *

@@ -81,6 +81,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 
 @AndroidEntryPoint
@@ -310,11 +311,30 @@ private val pagePopExit: AnimatedContentTransitionScope<NavBackStackEntry>.() ->
 }
 
 internal object Routes {
-    /** The sign-in screen, with an optional account to sign in to again. See [LoginArgs]. */
-    const val LOGIN = "login?${LoginArgs.ACCOUNT}={${LoginArgs.ACCOUNT}}"
+    /** The nav argument that marks the sign-in the lapse effect pushed. See [LOGIN]. */
+    const val LOGIN_OFFER = "offer"
 
-    fun login(serverId: String? = null): String =
-        if (serverId == null) "login" else "login?${LoginArgs.ACCOUNT}=${LoginArgs.encode(serverId)}"
+    /**
+     * The sign-in screen, with an optional account to sign in to again. See [LoginArgs].
+     *
+     * [LOGIN_OFFER] is true only on the screen that the lapse effect pushed. That screen,
+     * and no other sign-in, offers "Not now" and lets a notification tap open the player
+     * over it. Read from the entry, and not guessed from the route under it, because the
+     * same route under it (Accounts, say) can mean a lapse or a choice to add an account.
+     */
+    const val LOGIN = "login?${LoginArgs.ACCOUNT}={${LoginArgs.ACCOUNT}}&$LOGIN_OFFER={$LOGIN_OFFER}"
+
+    fun login(serverId: String? = null, offer: Boolean = false): String {
+        val query = listOfNotNull(
+            serverId?.let { "${LoginArgs.ACCOUNT}=${LoginArgs.encode(it)}" },
+            "$LOGIN_OFFER=true".takeIf { offer },
+        )
+        return if (query.isEmpty()) "login" else "login?" + query.joinToString("&")
+    }
+
+    /** True when [entry] is the sign-in screen that the lapse effect pushed. */
+    fun isLapseOffer(entry: NavBackStackEntry?): Boolean =
+        entry?.destination?.route == LOGIN && entry.arguments?.getBoolean(LOGIN_OFFER) == true
 
     /**
      * The signed-in destination. It hosts both Home — the computed shelves, answering
@@ -411,12 +431,16 @@ private fun LuguApp(
     val openPlayerRequested by pendingOpenPlayer.collectAsStateWithLifecycle()
     val oidcRedirect by pendingOidcRedirect.collectAsStateWithLifecycle()
 
-    // Wait for the signed-in check before choosing a start destination, so a returning
-    // user never sees the login screen flash past.
+    // Wait for the account check before choosing a start destination, so a returning
+    // user never sees the login screen flash past. An account whose sign-in has ended
+    // still starts on Home: its downloads play and its library reads from Room, and the
+    // sign-in is offered on top by the lapse effect below. Starting it on the sign-in
+    // screen left nothing under that screen, so Back closed the app and the downloads
+    // were out of reach (maintainer, 25 November 2026).
     val start = when (startState) {
         StartupState.Checking -> return
-        StartupState.SignedIn -> Routes.HOME
-        StartupState.SignedOut -> Routes.LOGIN
+        StartupState.HasAccount -> Routes.HOME
+        StartupState.NoAccount -> Routes.LOGIN
     }
 
     /*
@@ -425,10 +449,23 @@ private fun LuguApp(
      * screen, unable to load, and the only way out was Sign out, which deletes the
      * downloads (issue #12).
      *
-     * Opened once per lapse, on top of whatever is on screen, rather than in place of it.
-     * Back returns to the library, where the downloads still play and the Accounts screen
-     * can switch to another account. The account that lapsed is remembered across a
-     * rotation, so turning the phone does not push the screen a second time.
+     * Opened on top of whatever is on screen, rather than in place of it, once per lapse
+     * for as long as this activity lives. Back, or the sign-in screen's own "Not now",
+     * returns to the screen under it, where the downloads still play and the Accounts
+     * screen can switch to another account. The account that lapsed is remembered across a
+     * rotation, so turning the phone does not push the screen a second time. A new launch
+     * of the activity asks again.
+     *
+     * Never over the player: while the player is on top, the offer waits, and it comes when
+     * the player closes. A tap on the media notification after the activity was gone opens
+     * the player at once, and the lapse is read a moment later; the offer then came up over
+     * the book the tap asked for. `lapseOffer` holds the rule, and its test the cases.
+     *
+     * A lapse present at launch is answered here too, because the start destination is
+     * Home for it. The effect can run before the graph has a destination, so it waits for
+     * an entry instead of reading `currentDestination` once. The lapse counts as answered
+     * only once the screen is pushed (or found on top), so an effect cancelled during a
+     * wait — a rotation with the player open — leaves it to the next run.
      */
     val lapsed by startViewModel.lapsedAccount.collectAsStateWithLifecycle()
     var answeredLapse by rememberSaveable { mutableStateOf<String?>(null) }
@@ -438,14 +475,17 @@ private fun LuguApp(
             answeredLapse = null
             return@LaunchedEffect
         }
-        if (serverId == answeredLapse) return@LaunchedEffect
-        answeredLapse = serverId
-        // No destination yet means the graph is still being set up, and then the start
-        // destination already answered: a lapse at launch reads as signed out and starts
-        // on the sign-in screen.
-        val route = navController.currentDestination?.route ?: return@LaunchedEffect
-        if (route != Routes.LOGIN) {
-            navController.navigate(Routes.login()) { launchSingleTop = true }
+        // Each change of the screen on top asks again, so a wait ends when the player closes.
+        val offer = navController.currentBackStackEntryFlow
+            .map { lapseOffer(it.destination.route, serverId, answeredLapse) }
+            .first { it != LapseOffer.WAIT }
+        when (offer) {
+            LapseOffer.PUSH -> {
+                answeredLapse = serverId
+                navController.navigate(Routes.login(offer = true)) { launchSingleTop = true }
+            }
+            LapseOffer.ALREADY_SHOWN -> answeredLapse = serverId
+            LapseOffer.NONE, LapseOffer.WAIT -> Unit
         }
     }
 
@@ -583,8 +623,24 @@ private fun LuguApp(
                         nullable = true
                         defaultValue = null
                     },
+                    navArgument(Routes.LOGIN_OFFER) {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
                 ),
-            ) {
+            ) { entry ->
+                // "Not now" is offered on the screen the lapse effect pushed, at launch or
+                // later, and only with a screen under it to return to. Not on the start
+                // destination, and not on a sign-in somebody chose on the Accounts screen:
+                // Back is the way out of a choice. Decided once per entry and before the
+                // screen draws, so the button never appears under a thumb that is already
+                // on its way to a field.
+                val offersLibrary = remember(entry) {
+                    offersNotNow(
+                        pushedForLapse = Routes.isLapseOffer(entry),
+                        hasEntryUnder = navController.previousBackStackEntry != null,
+                    )
+                }
                 // The redirect is handed to this screen's own view model, because the
                 // attempt it has to be matched against belongs to the sign-in in progress.
                 // Read here rather than in the activity so it reaches the same view model
@@ -596,6 +652,17 @@ private fun LuguApp(
                         navController.navigate(Routes.HOME) {
                             popUpTo(0) { inclusive = true }
                         }
+                    },
+                    // Only from a settled screen: a second tap during the pop would take
+                    // the library off the stack as well, and Back would close the app.
+                    onNotNow = if (offersLibrary) {
+                        {
+                            if (entry.lifecycle.currentState == Lifecycle.State.RESUMED) {
+                                navController.popBackStack()
+                            }
+                        }
+                    } else {
+                        null
                     },
                     providerRedirect = oidcRedirect,
                     onProviderRedirectHandled = onOidcHandled,
@@ -871,8 +938,16 @@ private fun LuguApp(
     /*
      * A tap on the media notification or the widget opens the player, on top of Home, so
      * that Back reaches the library from a cold start too. It waits a moment for the
-     * session to say what is loaded. With nothing loaded, or nobody signed in, the tap
-     * opens the app where it was.
+     * session to say what is loaded. With nothing loaded, or no account, the tap opens
+     * the app where it was.
+     *
+     * A sign-in screen on top normally keeps the player out: somebody adding an account
+     * is in the middle of something. The sign-in that the lapse effect pushed is the
+     * exception, and only that entry, whatever lapse state is read now. A
+     * downloaded book plays through a lapse, and a tap on its notification asks for that
+     * book, so the player opens over the offer, and Back from the player still finds it.
+     * When the player opens first, the lapse effect above waits for it to close, so the
+     * player is on top in either order.
      */
     LaunchedEffect(openPlayerRequested, start) {
         if (!openPlayerRequested) return@LaunchedEffect
@@ -880,7 +955,8 @@ private fun LuguApp(
             val loaded = withTimeoutOrNull(PLAYER_WAIT_MS) {
                 playback.nowPlaying.first { it != null }
             }
-            if (loaded != null && navController.currentDestination?.route != Routes.LOGIN) {
+            val top = navController.currentBackStackEntry
+            if (loaded != null && playerMayOpenOver(top?.destination?.route, Routes.isLapseOffer(top))) {
                 navController.openPlayer()
             }
         }

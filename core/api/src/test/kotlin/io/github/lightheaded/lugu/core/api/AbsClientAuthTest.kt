@@ -142,6 +142,24 @@ class AbsClientAuthTest {
         assertThat(store.tokens()).isNull()
     }
 
+    /**
+     * Tokens with no refresh token cannot be renewed. They go, so that the account reads as
+     * lapsed and the app offers the sign-in, and nothing is asked of the server.
+     */
+    @Test
+    fun `an expired token with no refresh token clears the stored credentials`() = runTest {
+        val store = InMemoryTokenStore(
+            AuthTokens("old", refreshToken = null, accessTokenExpiresAtMs = 0L),
+        )
+        val engine = MockEngine { error("No request is expected: there is nothing to refresh with") }
+
+        val failure = runCatching { client(store, handler = engine).validAccessToken() }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(AuthExpiredException::class.java)
+        assertThat((failure as AuthExpiredException).reason).isEqualTo(AuthExpiredException.Reason.ENDED)
+        assertThat(store.tokens()).isNull()
+    }
+
     @Test
     fun `a refresh that ends after a sign-out writes nothing`() = runTest {
         val store = InMemoryTokenStore(

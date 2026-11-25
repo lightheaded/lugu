@@ -222,6 +222,165 @@ class ProgressConflictResolverTest {
         }
     }
 
+    // -- The sweep's rule for a dirty row: newer listening wins --------------------------
+
+    private val margin = ProgressConflictResolver.NEWER_LISTENING_MARGIN_MS
+
+    /** The server stamp of the copy this device last read, before anybody listened. */
+    private val readStamp = 1_699_000_000_000L
+
+    /**
+     * The maintainer's case. The phone listened for days while the sign-in had lapsed, and
+     * another device wrote an older position before that. The phone's position goes out.
+     */
+    @Test
+    fun `a sweep keeps a dirty row that was written days after another device's copy`() {
+        val verdict = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp + 3 * DAY_MS),
+            server = progress(1_800.0, lastUpdate = readStamp + DAY_MS),
+            seen = read(serverStamp = readStamp),
+        )
+
+        assertThat(verdict).isEqualTo(SweepVerdict.KEEP_LOCAL_NEWER)
+    }
+
+    /** Another device listened after the phone did, so its copy wins, as it always did. */
+    @Test
+    fun `a sweep takes another device's copy that was written after the dirty row`() {
+        val verdict = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp + DAY_MS),
+            server = progress(1_800.0, lastUpdate = readStamp + 3 * DAY_MS),
+            seen = read(serverStamp = readStamp),
+        )
+
+        assertThat(verdict).isEqualTo(SweepVerdict.TAKE_SERVER)
+    }
+
+    /** A finished mark is listening too: made offline and newer, it survives. */
+    @Test
+    fun `a sweep keeps a newer finished mark made offline`() {
+        val verdict = ProgressConflictResolver.sweepVerdict(
+            local = progress(3_600.0, lastUpdate = readStamp + 2 * DAY_MS, finished = true),
+            server = progress(1_800.0, lastUpdate = readStamp + DAY_MS),
+            seen = read(serverStamp = readStamp),
+        )
+
+        assertThat(verdict).isEqualTo(SweepVerdict.KEEP_LOCAL_NEWER)
+    }
+
+    /**
+     * The margin is the line, on both sides. Newer by exactly the margin is not newer
+     * enough; one millisecond more is.
+     */
+    @Test
+    fun `the phone must be newer by more than the margin to win a sweep`() {
+        val server = progress(1_800.0, lastUpdate = readStamp + DAY_MS)
+        fun verdictAt(localMs: Long) = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = localMs),
+            server = server,
+            seen = read(serverStamp = readStamp),
+        )
+
+        assertThat(verdictAt(server.lastUpdateMs + margin)).isEqualTo(SweepVerdict.TAKE_SERVER)
+        assertThat(verdictAt(server.lastUpdateMs + margin + 1)).isEqualTo(SweepVerdict.KEEP_LOCAL_NEWER)
+    }
+
+    /**
+     * Listening on two devices at about the same time is not clear, so it keeps the rule
+     * from before: the server's copy wins, and the phone's position goes into the history.
+     */
+    @Test
+    fun `a dirty row only minutes newer than another device's copy does not win a sweep`() {
+        val verdict = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp + DAY_MS + 5 * MINUTE_MS),
+            server = progress(1_800.0, lastUpdate = readStamp + DAY_MS),
+            seen = read(serverStamp = readStamp),
+        )
+
+        assertThat(verdict).isEqualTo(SweepVerdict.TAKE_SERVER)
+    }
+
+    /**
+     * What the margin is for. The other device really listened later, and the phone's
+     * clock runs ahead of the server's by up to the margin. Over random histories, the
+     * phone's older position never wins.
+     */
+    @Test
+    fun `a phone clock ahead by up to the margin never makes an older position win`() {
+        val random = Random(seed = 20261125)
+        repeat(2_000) {
+            val phoneListenedAt = readStamp + random.nextLong(0, 7 * DAY_MS)
+            val otherListenedAt = phoneListenedAt + random.nextLong(1, 3 * DAY_MS)
+            val phoneClockAhead = random.nextLong(0, margin + 1)
+
+            val verdict = ProgressConflictResolver.sweepVerdict(
+                local = progress(600.0, lastUpdate = phoneListenedAt + phoneClockAhead),
+                server = progress(1_800.0, lastUpdate = otherListenedAt),
+                seen = read(serverStamp = readStamp),
+            )
+
+            assertThat(verdict).isEqualTo(SweepVerdict.TAKE_SERVER)
+        }
+    }
+
+    /** No time on one side is no evidence, so the server's copy wins as before. */
+    @Test
+    fun `a sweep with a missing time on either side takes the server's copy`() {
+        val withoutServerTime = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp + DAY_MS),
+            server = progress(1_800.0, lastUpdate = 0L),
+            seen = read(serverStamp = readStamp),
+        )
+        val withoutLocalTime = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = 0L),
+            server = progress(1_800.0, lastUpdate = readStamp - DAY_MS),
+            seen = ServerCopySeen(),
+        )
+
+        assertThat(withoutServerTime).isEqualTo(SweepVerdict.TAKE_SERVER)
+        assertThat(withoutLocalTime).isEqualTo(SweepVerdict.TAKE_SERVER)
+    }
+
+    /**
+     * A copy this device accounted for never replaces the row, whatever the times say.
+     * Its stamp can read days ahead on a server whose clock runs fast.
+     */
+    @Test
+    fun `a sweep keeps a dirty row over a copy this device accounted for`() {
+        val sameStamp = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp),
+            server = progress(300.0, lastUpdate = readStamp + 3 * DAY_MS),
+            seen = read(serverStamp = readStamp + 3 * DAY_MS),
+        )
+        val ownPush = ProgressConflictResolver.sweepVerdict(
+            local = progress(600.0, lastUpdate = readStamp),
+            server = progress(300.0, lastUpdate = readStamp + 3 * DAY_MS),
+            seen = pushed(timeSec = 300.0, serverStamp = readStamp),
+        )
+
+        assertThat(sameStamp).isEqualTo(SweepVerdict.KEEP_LOCAL)
+        assertThat(ownPush).isEqualTo(SweepVerdict.KEEP_LOCAL)
+    }
+
+    /**
+     * The sweep and the check at a session start agree on a copy the sweep kept the row
+     * over. The sweep records that copy's stamp; with it, [ProgressConflictResolver.resolve]
+     * keeps the row too, so the push is not dropped before it goes out.
+     */
+    @Test
+    fun `a copy the sweep kept the row over is not adopted at the next session start`() {
+        val local = progress(600.0, lastUpdate = readStamp + 3 * DAY_MS)
+        val server = progress(1_800.0, lastUpdate = readStamp + DAY_MS)
+        val before = read(serverStamp = readStamp)
+        assertThat(ProgressConflictResolver.sweepVerdict(local, server, before))
+            .isEqualTo(SweepVerdict.KEEP_LOCAL_NEWER)
+
+        val noted = before.copy(lastUpdateMs = server.lastUpdateMs)
+
+        assertThat(ProgressConflictResolver.resolve(local, server, noted))
+            .isInstanceOf(ProgressResolution.KeepLocal::class.java)
+    }
+
     /** Resolution must be stable: resolving twice cannot flip the decision. */
     @Test
     fun `resolution is idempotent`() {
@@ -249,5 +408,10 @@ class ProgressConflictResolverTest {
             assertThat(ProgressConflictResolver.resolve(settled, server, settledSeen))
                 .isNotInstanceOf(ProgressResolution.AdoptServer::class.java)
         }
+    }
+
+    private companion object {
+        const val MINUTE_MS = 60 * 1_000L
+        const val DAY_MS = 24 * 60 * MINUTE_MS
     }
 }

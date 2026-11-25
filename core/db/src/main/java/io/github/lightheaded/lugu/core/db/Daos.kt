@@ -1415,16 +1415,54 @@ interface ProgressDao {
     )
 
     /**
+     * Records the stamp of a server copy that a sweep judged and kept a dirty row over,
+     * because this device listened later. See `ProgressConflictResolver.sweepVerdict`.
+     *
+     * Without it, the check at the next session start meets the same copy, finds a stamp it
+     * has never read, and adopts the older position over the newer one before its push
+     * went out. With it, the copy reads as accounted for, as one this device pushed does.
+     *
+     * The write happens only while the row is still dirty and still holds the stamp the
+     * sweep read ([readServerLastUpdateMs]). A row that a session start settled in between
+     * holds a newer server copy, and the older stamp must not go back over it.
+     */
+    @Query(
+        """
+        UPDATE progress SET serverLastUpdateMs = :serverLastUpdateMs
+        WHERE serverId = :serverId AND userId = :userId
+          AND libraryItemId = :itemId AND episodeKey = :episodeKey
+          AND isDirty = 1 AND serverLastUpdateMs = :readServerLastUpdateMs
+        """,
+    )
+    suspend fun noteOutlistenedServerStamp(
+        serverId: String,
+        userId: String,
+        itemId: String,
+        episodeKey: String,
+        readServerLastUpdateMs: Long,
+        serverLastUpdateMs: Long,
+    )
+
+    /**
      * The server accepted a push. Records *what* it accepted, not when.
      *
      * `serverLastUpdateMs` is deliberately left alone: the PATCH answers with an empty
      * body, so the stamp the server just gave the row is unknown here, and writing this
      * device's clock into a column that holds the server's is the mistake that put a
      * resumed book behind where it was left.
+     *
+     * The row is clean only while it still holds what was pushed: [pushedLastUpdateMs] is
+     * the `lastUpdateMs` of the pushed position, and a row written since then stays dirty.
+     * A tick or "Mark finished" can land while the PATCH is in flight, and its push then
+     * waits in the outbox. Marked clean all the same, the row looked settled while that push
+     * waited, so a sweep wrote the server's older copy over it and dropped the push with it.
+     * What the server accepted is recorded either way, because it did accept it.
      */
     @Query(
         """
-        UPDATE progress SET isDirty = 0, pushedTimeSec = :pushedTimeSec, pushedFinished = :pushedFinished
+        UPDATE progress
+        SET isDirty = CASE WHEN lastUpdateMs = :pushedLastUpdateMs THEN 0 ELSE isDirty END,
+            pushedTimeSec = :pushedTimeSec, pushedFinished = :pushedFinished
         WHERE serverId = :serverId AND userId = :userId
           AND libraryItemId = :itemId AND episodeKey = :episodeKey
         """,
@@ -1436,8 +1474,73 @@ interface ProgressDao {
         episodeKey: String,
         pushedTimeSec: Double,
         pushedFinished: Boolean,
+        pushedLastUpdateMs: Long,
     )
+
+    // These two read the outbox from here, and not through OutboxDao, because the sweep's
+    // write below is a Room @Transaction on this DAO and can only call its own methods.
+    // Moving the transaction up into the repository would need the database itself there,
+    // which nothing in core:sync holds today.
+    @Query("DELETE FROM outbox WHERE serverId = :serverId AND userId = :userId AND kind = :kind AND dedupeKey = :dedupeKey")
+    suspend fun deleteQueuedPush(serverId: String, userId: String, kind: String, dedupeKey: String)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM outbox WHERE serverId = :serverId AND userId = :userId AND kind = :kind AND dedupeKey = :dedupeKey)")
+    suspend fun hasQueuedPush(serverId: String, userId: String, kind: String, dedupeKey: String): Boolean
+
+    /**
+     * Writes the server's copies from a sweep, and drops the queued push of each one, in
+     * one transaction. Returns the writes that were made.
+     *
+     * The push has to go with the row. A row replaced by the server's copy can still have
+     * a push in the outbox — a position listened to while the sign-in had lapsed is the
+     * usual one — and that push holds the position the server's copy has just replaced.
+     * Sent after the sweep, it put the old position back on the server while Room showed
+     * the new one, so the other device's listening was lost after all.
+     *
+     * Only a push that the sweep judged goes: the one of a dirty row that lost to the
+     * server's copy. A row the sweep read as clean or absent had no push to judge, so a push
+     * found for it now is newer than the read — a position recorded since, or one whose row
+     * an older push marked clean — and the row and its push both stay.
+     *
+     * A write is skipped when the row moved after the sweep read it, so that the sweep
+     * never puts the server's copy over listening it did not judge: a row that was clean
+     * and is dirty now or has a push waiting, or a dirty row whose `lastUpdateMs` is no
+     * longer the one the decision was made on. The next sweep decides those.
+     */
+    @Transaction
+    suspend fun writeServerCopies(writes: List<ServerCopyWrite>): List<ServerCopyWrite> =
+        writes.filter { write ->
+            val row = write.row
+            val current = get(row.serverId, row.userId, row.libraryItemId, row.episodeKey)
+            val judged = write.replacedLastUpdateMs
+            val unchanged = if (judged == null) {
+                current?.isDirty != true &&
+                    !hasQueuedPush(row.serverId, row.userId, OutboxKind.PROGRESS_UPDATE, write.queuedPushKey)
+            } else {
+                current != null && current.isDirty && current.lastUpdateMs == judged
+            }
+            if (unchanged) {
+                upsert(row)
+                if (judged != null) {
+                    deleteQueuedPush(row.serverId, row.userId, OutboxKind.PROGRESS_UPDATE, write.queuedPushKey)
+                }
+            }
+            unchanged
+        }
 }
+
+/**
+ * One server copy for [ProgressDao.writeServerCopies].
+ *
+ * [replacedLastUpdateMs] is the `lastUpdateMs` of the dirty local row this copy replaces,
+ * or null when the row was clean or absent. [queuedPushKey] is the outbox dedupe key of
+ * the item's progress push.
+ */
+data class ServerCopyWrite(
+    val row: ProgressEntity,
+    val replacedLastUpdateMs: Long?,
+    val queuedPushKey: String,
+)
 
 @Dao
 interface SessionLedgerDao {
@@ -1585,6 +1688,18 @@ interface OutboxDao {
 
     @Query("UPDATE outbox SET attempts = attempts + 1, lastAttemptAtMs = :nowMs, lastError = :error WHERE rowId = :rowId")
     suspend fun recordFailure(rowId: Long, nowMs: Long, error: String?)
+
+    /**
+     * Notes a send that could not be tried, without counting it as an attempt.
+     *
+     * An entry is dropped after a number of attempts, so that one the server refuses cannot
+     * wedge the queue. A send blocked because the sign-in ended says nothing about the
+     * entry. Counted as attempts, the blocked sends of a long lapse used them all up, and
+     * the entry was then dropped at its first ordinary failure after the next sign-in,
+     * where it would otherwise have been tried again.
+     */
+    @Query("UPDATE outbox SET lastAttemptAtMs = :nowMs, lastError = :error WHERE rowId = :rowId")
+    suspend fun recordBlocked(rowId: Long, nowMs: Long, error: String?)
 
     /**
      * A later position for the same item supersedes an earlier queued one: there is no

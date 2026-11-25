@@ -37,6 +37,7 @@ connected tests, which uninstall lugu when they finish. Both rules are in
 | `SearchEverythingTest` | No |
 | `RememberedListControlsTest` | No |
 | `RotationTest` | No |
+| `LapsedSessionTest` | No |
 | `CoverCacheTest` | No |
 | `core:db` `DeviceMigrationTest` | No |
 | `SignInTest` | Yes |
@@ -68,10 +69,12 @@ Two things had to be learned for it to work through the *UI* rather than through
 `MediaBrowser`:
 
 - **A `server` row is not a signed-in account.** `isSignedIn` is `serverDao.active() != null
-  && tokenStore.tokens() != null`, and the token lives in encrypted preferences. Seeding only
-  Room gets you the login screen, and then every assertion fails at "there is no Library tab"
-  — which is true and says nothing. `PlantedToken` writes a nonsense token and hands back
-  whatever the device already held.
+  && tokenStore.tokens() != null`, and the token lives in encrypted preferences. A row with no
+  token is a lapsed account: the app opens Home and pushes the sign-in screen on top of it.
+  Every assertion about the screen under it then fails, or taps the sign-in instead — which
+  is true and says nothing. `PlantedToken` writes a nonsense token and hands back whatever the
+  device already held. `LapsedSessionTest` seeds a row with no token on purpose, because the
+  lapse is what it checks.
 - **Launch the activity yourself.** `createAndroidComposeRule` launches before `@Before`
   runs, so the screen composes against an empty database and has nothing to bring it back:
   its first sync goes to an address that cannot resolve. These use `createEmptyComposeRule`

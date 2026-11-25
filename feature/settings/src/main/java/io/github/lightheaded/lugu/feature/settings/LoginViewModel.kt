@@ -19,6 +19,7 @@ import io.github.lightheaded.lugu.core.sync.ActiveAccount
 import io.github.lightheaded.lugu.core.sync.CredentialLossReport
 import io.github.lightheaded.lugu.core.sync.SignInMemory
 import io.github.lightheaded.lugu.core.sync.credentialLossMessage
+import io.github.lightheaded.lugu.core.download.DownloadScheduler
 import io.github.lightheaded.lugu.core.sync.SyncScheduler
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -49,8 +50,21 @@ object LoginArgs {
     }
 }
 
-/** Said on the sign-in screen when it opened because a sign-in ended on its own. */
-const val SESSION_ENDED_NOTICE = "Your session ended — sign in again."
+/**
+ * Said on the sign-in screen when the session of the account in use ended on its own.
+ *
+ * It says that the downloads still play, because that is the question on somebody's mind
+ * here, and the answer is the reason "Not now" exists. It is said here and not on that
+ * button, because the button can return to any screen, and this stays true on all of them.
+ */
+const val SESSION_ENDED_NOTICE = "Your session ended. Sign in again. Your downloads still play."
+
+/**
+ * The same, for an account that is not the one in use, which the Accounts screen's "Sign in
+ * again" can name. Its downloads are kept, but they play only once it is in use again, and
+ * it can be put in use only by signing in. So this says nothing about the downloads.
+ */
+const val OTHER_SESSION_ENDED_NOTICE = "The session of this account ended. Sign in again."
 
 data class LoginUiState(
     val serverUrl: String = "",
@@ -196,8 +210,13 @@ class LoginViewModel @Inject constructor(
         val address = lapsed?.baseUrl ?: last?.baseUrl
         val headers = address?.let { runCatching { connectionPrefs.headers(it) }.getOrNull() }
         // A snapshot, not a subscription. See [LoginUiState.lossNotice].
-        val lossNotice = credentialLossMessage(credentialLosses.lost.value)
-            ?: SESSION_ENDED_NOTICE.takeIf { lapsed != null }
+        val lapsedInUse = lapsed != null &&
+            runCatching { authRepository.account()?.serverId }.getOrNull() == lapsed.serverId
+        val lossNotice = credentialLossMessage(credentialLosses.lost.value) ?: when {
+            lapsed == null -> null
+            lapsedInUse -> SESSION_ENDED_NOTICE
+            else -> OTHER_SESSION_ENDED_NOTICE
+        }
         _state.update {
             it.copy(
                 serverUrl = address ?: it.serverUrl,
@@ -319,6 +338,13 @@ class LoginViewModel @Inject constructor(
                     // going to do it: the only on-demand sync belongs to the Library tab,
                     // and this screen hands over to Home.
                     SyncScheduler.syncNow(context)
+                    // Positions listened to while the session was over wait in the outbox,
+                    // and nothing else sends them until the next play. Sent now, so another
+                    // device sees where the listener got to.
+                    SyncScheduler.flushNow(context)
+                    // Feeds and download rules too: a pass during a lapse ended without a
+                    // retry, and the periodic one may not come for hours.
+                    DownloadScheduler.runNow(context)
                     // The reason for asking is history once the listener has answered it.
                     credentialLosses.acknowledge()
                     // Drop the password from memory the moment it is no longer needed.
@@ -380,6 +406,10 @@ class LoginViewModel @Inject constructor(
                 .onSuccess { account ->
                     signInMemory.remember(account.baseUrl, account.username)
                     SyncScheduler.syncNow(context)
+                    // The outbox and the download pass too, for the reasons the password
+                    // route gives.
+                    SyncScheduler.flushNow(context)
+                    DownloadScheduler.runNow(context)
                     credentialLosses.acknowledge()
                     _state.update { LoginUiState(signedIn = true) }
                 }

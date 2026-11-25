@@ -5,8 +5,10 @@ package io.github.lightheaded.lugu.core.model
  *
  * [lastUpdateMs] is written by whoever produced the value, on *their* clock: the
  * server's `lastUpdate` on a value read from the API, and this device's clock on a
- * value read out of Room. The two are not comparable, and comparing them is what put a
- * resumed book thirty seconds behind where it was left — see [ProgressConflictResolver].
+ * value read out of Room. The two are not directly comparable, and comparing them
+ * without care is what put a resumed book thirty seconds behind where it was left — see
+ * [ProgressConflictResolver]. The one place that compares them, a sweep meeting a dirty
+ * row, does so only across a wide margin: [ProgressConflictResolver.sweepVerdict].
  */
 data class MediaProgress(
     val libraryItemId: String,
@@ -60,6 +62,22 @@ sealed interface ProgressResolution {
 
     /** Nothing to do — the two agree closely enough. */
     data object InSync : ProgressResolution
+}
+
+/** What a sweep does with a dirty local row. See [ProgressConflictResolver.sweepVerdict]. */
+enum class SweepVerdict {
+    /** The server's copy is one this device already accounted for. The row and its push stay. */
+    KEEP_LOCAL,
+
+    /**
+     * The server's copy came from another device, but this device listened clearly later.
+     * The row and its push stay, and the server's copy now counts as accounted for, so
+     * that the next check of the same copy does not adopt it after all.
+     */
+    KEEP_LOCAL_NEWER,
+
+    /** The server's copy replaces the row, and the row's queued push goes with it. */
+    TAKE_SERVER,
 }
 
 /**
@@ -148,5 +166,49 @@ object ProgressConflictResolver {
         val echoes = kotlin.math.abs(server.currentTimeSec - pushed) < ECHO_TOLERANCE_SEC &&
             server.isFinished == seen.pushedFinished
         return !echoes
+    }
+
+    /**
+     * How much later this device's listening must be than the server's copy before it
+     * wins a sweep. See [sweepVerdict].
+     *
+     * The two times come off two clocks, and nothing in lugu measures the gap between them.
+     * The margin is what makes a clock error safe: a phone clock that runs ahead of the
+     * server's by less than this can never make an older phone position win. A phone clock
+     * that runs behind only hands more cases to the server, which is the rule from before
+     * and leaves the phone's position in the history. The cost is a phone position that
+     * ends less than this after the other device's last write; that is listening on two
+     * devices at the same time, and the server's copy keeps it as it always did.
+     */
+    const val NEWER_LISTENING_MARGIN_MS: Long = 10 * 60 * 1_000L
+
+    /**
+     * The sweep's rule for a dirty local row: **newer listening wins** (maintainer,
+     * 25 November 2026).
+     *
+     * A copy this device already accounted for never replaces the row, as in [resolve].
+     * A copy from another device replaces it unless the row was written more than
+     * [NEWER_LISTENING_MARGIN_MS] after it. Then the phone listened later — the usual case
+     * is days of offline listening while the sign-in had lapsed — and its position, finished
+     * mark included, goes to the server.
+     *
+     * This compares a device time with a server time, which [resolve] never does. It is
+     * sound here only because of what a dirty row is: `ProgressRepository.record` is the
+     * one writer of a dirty row, and it stamps it with this device's clock when the
+     * listening happened. A missing time on either side is not evidence, so the server's
+     * copy wins as before.
+     *
+     * Playback's own check at a session start ([resolve]) still decides by origin alone.
+     * The sweep marks a copy it kept the row over as accounted for, so the two agree on that
+     * copy: a play before the push went out does not adopt the older copy after all.
+     */
+    fun sweepVerdict(local: MediaProgress, server: MediaProgress, seen: ServerCopySeen): SweepVerdict {
+        if (!serverCopyCameFromElsewhere(server, seen)) return SweepVerdict.KEEP_LOCAL
+        val known = local.lastUpdateMs > 0L && server.lastUpdateMs > 0L
+        return if (known &&local.lastUpdateMs - server.lastUpdateMs > NEWER_LISTENING_MARGIN_MS) {
+            SweepVerdict.KEEP_LOCAL_NEWER
+        } else {
+            SweepVerdict.TAKE_SERVER
+        }
     }
 }

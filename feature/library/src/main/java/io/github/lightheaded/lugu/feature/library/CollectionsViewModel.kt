@@ -115,7 +115,7 @@ class CollectionsViewModel @Inject constructor(
             syncing.value = true
             error.value = null
             collectionRepository.sync(current, force)
-                .onFailure { error.value = it.message ?: "Could not reach the server" }
+                .onFailure { error.value = syncFailureText(it, "Could not reach the server") }
             syncing.value = false
         }
     }

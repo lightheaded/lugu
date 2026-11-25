@@ -18,8 +18,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -312,22 +314,15 @@ class Realtime @Inject constructor(
      * Starts watching for a reason to connect. Safe to call more than once; only the
      * first call does anything.
      */
-    // The per-value debounce is what makes the grace period one-sided: connecting is
-    // immediate and disconnecting waits. The fixed-delay overload is stable but would
-    // delay both, which would mean ten seconds of nothing every time the app is opened.
-    @OptIn(FlowPreview::class)
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
         scope.launch {
-            combine(authRepository.observeAccount(), foreground, playing) { account, onScreen, loaded ->
-                account.takeIf { onScreen || loaded }
-            }
-                // A rotation, or a glance at another app, must not tear the socket down
-                // and build it back up. Debouncing before distinctUntilChanged means a
-                // flap inside the grace period collapses to no change at all.
-                .debounce { wanted -> if (wanted == null) BACKGROUND_GRACE_MS else 0L }
-                .distinctUntilChanged()
-                .collectLatest { account -> if (account != null) supervise(account) }
+            RealtimeWanted.of(
+                account = authRepository.observeAccount(),
+                lapsed = authRepository.observeLapsedAccount(),
+                foreground = foreground,
+                playing = playing,
+            ).collectLatest { account -> if (account != null) supervise(account) }
         }
     }
 
@@ -444,8 +439,55 @@ class Realtime @Inject constructor(
         const val EVENT_BUFFER = 64
         const val CONNECT_TIMEOUT_MS = 20_000L
         const val REAUTH_INTERVAL_MS = 15 * 60 * 1000L
-
-        /** How long the app has to come back before the socket is given up. */
-        const val BACKGROUND_GRACE_MS = 10_000L
     }
+}
+
+/**
+ * The account the socket should be connected to right now, or null for no socket.
+ *
+ * Each new value starts a fresh [Realtime.supervise], and with it a fresh backoff, so a
+ * change here is the only thing that reconnects at once. That is why a lapsed session
+ * counts as "no socket" and not as an account to keep knocking for. While the account was
+ * kept, every attempt failed on the missing token and the backoff climbed to its ceiling.
+ * The sign-in that ended the lapse often left the account flow silent, because a sign-in
+ * to the same account writes an equal row, so the socket sat out the five-minute ceiling of an
+ * old backoff. Now the lapse ending is itself the change: null turns back into the account,
+ * and the socket connects at once.
+ *
+ * The lapse and not the token store's revision, because the revision also moves on every
+ * hourly refresh. Restarting on it would tear down a healthy socket each time.
+ */
+internal object RealtimeWanted {
+    /** How long the app has to come back before the socket is given up. */
+    const val BACKGROUND_GRACE_MS = 10_000L
+
+    // The per-value debounce is what makes the grace period one-sided: connecting is
+    // immediate and disconnecting waits. The fixed-delay overload is stable but would
+    // delay both, which would mean ten seconds of nothing every time the app is opened.
+    @OptIn(FlowPreview::class)
+    fun of(
+        account: Flow<ActiveAccount?>,
+        lapsed: Flow<ActiveAccount?>,
+        foreground: Flow<Boolean>,
+        playing: Flow<Boolean>,
+    ): Flow<ActiveAccount?> =
+        combine(account, lapsed, foreground, playing) { active, lapsedAccount, onScreen, loaded ->
+            Wanted(
+                account = active.takeIf { (onScreen || loaded) && lapsedAccount == null },
+                lapsed = lapsedAccount != null,
+            )
+        }
+            // A rotation, or a glance at another app, must not tear the socket down
+            // and build it back up. Debouncing before distinctUntilChanged means a
+            // flap inside the grace period collapses to no change at all.
+            //
+            // A lapse is not a flap, and it goes through at once. Held for the grace
+            // period, a sign-in inside it collapsed lapse and sign-in to no change, so the
+            // old supervisor kept the backoff it built while the token was gone.
+            .debounce { wanted -> if (wanted.account == null && !wanted.lapsed) BACKGROUND_GRACE_MS else 0L }
+            .map { it.account }
+            .distinctUntilChanged()
+
+    /** One value of [of], with the cause of a null that must not wait for the grace period. */
+    private data class Wanted(val account: ActiveAccount?, val lapsed: Boolean)
 }

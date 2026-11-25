@@ -9,6 +9,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.lightheaded.lugu.core.api.AuthExpiredException
 import io.github.lightheaded.lugu.core.model.Chapter
 import io.github.lightheaded.lugu.core.model.Chapters
 import io.github.lightheaded.lugu.core.model.MediaType
@@ -95,14 +96,24 @@ internal fun startErrorMessage(cause: Throwable): String = when {
     cause is java.net.SocketTimeoutException -> TIMEOUT_MESSAGE
     cause is java.io.IOException -> NO_CONNECTION_MESSAGE
     cause is io.github.lightheaded.lugu.core.api.AbsHttpException -> "The server could not start this. Try again later."
-    cause.message == NOT_SIGNED_IN -> "Sign in to play."
-    else -> "Playback could not start. Try again."
+    cause is AuthExpiredException -> when (cause.reason) {
+        // A downloaded item never reaches this, so the line says what still works.
+        AuthExpiredException.Reason.ENDED -> SESSION_ENDED_MESSAGE
+        AuthExpiredException.Reason.NO_ACCOUNT -> NO_ACCOUNT_MESSAGE
+        // A refresh that raced a switch or a sign-out: the next press reads the new state.
+        AuthExpiredException.Reason.CHANGED,
+        AuthExpiredException.Reason.REFUSED,
+        -> START_FAILED_MESSAGE
+    }
+    else -> START_FAILED_MESSAGE
 }
 
 private const val NO_CONNECTION_MESSAGE = "No connection. Downloaded books still play."
 private const val TIMEOUT_MESSAGE = "The server took too long to answer. Try again."
 private const val FILE_MESSAGE = "This file could not be played."
-private const val NOT_SIGNED_IN = "Not signed in"
+private const val START_FAILED_MESSAGE = "Playback could not start. Try again."
+internal const val NO_ACCOUNT_MESSAGE = "Sign in to play."
+internal const val SESSION_ENDED_MESSAGE = "Your session ended. Sign in again to stream this. Downloads still play."
 
 /**
  * The UI's handle on the playback service.
@@ -390,7 +401,7 @@ class PlaybackConnection @Inject constructor(
         // Read again rather than passed in: a sign-out can land while an earlier request
         // was resolving, and this is the read that the resolution acts for.
         val account = authRepository.account()
-            ?: return Result.failure(IllegalStateException(NOT_SIGNED_IN))
+            ?: return Result.failure(AuthExpiredException("No account", AuthExpiredException.Reason.NO_ACCOUNT))
 
         val resolved = withContext(Dispatchers.IO) {
             mediaResolver.resolve(account, libraryItemId, episodeId)

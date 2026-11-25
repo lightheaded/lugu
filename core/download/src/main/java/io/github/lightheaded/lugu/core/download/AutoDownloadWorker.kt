@@ -6,7 +6,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -18,6 +20,7 @@ import io.github.lightheaded.lugu.core.sync.AuthRepository
 import io.github.lightheaded.lugu.core.sync.DownloadPrefs
 import io.github.lightheaded.lugu.core.sync.NewEpisode
 import io.github.lightheaded.lugu.core.sync.PodcastRefresher
+import io.github.lightheaded.lugu.core.sync.SyncRetry
 import java.util.concurrent.TimeUnit
 
 /**
@@ -50,16 +53,25 @@ class AutoDownloadWorker @AssistedInject constructor(
         if (!settings.hasAutoDownloadRule && !settings.notifyNewEpisodes) return Result.success()
 
         val account = authRepository.account() ?: return Result.success()
+        // Nothing here can reach the server without a token: every feed refresh and every
+        // download would fail one by one. The pass ends instead. The sign-in that ends the
+        // lapse runs it again at once (DownloadScheduler.runNow), so new episodes do not
+        // wait for the next period. See SyncRetry.
+        if (authRepository.lapsedAccount() != null) return Result.success()
 
         if (wantsEpisodes) {
             val new = runCatching { podcastRefresher.refreshFollowed(account) }
-                .getOrElse { return Result.retry() }
+                .getOrElse { return retryUnlessLapsed(it) }
             if (settings.notifyNewEpisodes) notifier.notify(account, new, descriptionsOf(account, new))
         }
 
-        runCatching { autoDownloader.run(account) }.getOrElse { return Result.retry() }
+        runCatching { autoDownloader.run(account) }.getOrElse { return retryUnlessLapsed(it) }
         return Result.success()
     }
+
+    /** The session can also end during the pass, when the server refuses a refresh. */
+    private fun retryUnlessLapsed(error: Throwable): Result =
+        if (SyncRetry.worthRetrying(error)) Result.retry() else Result.success()
 
     /**
      * The feed descriptions for the snippet, read from the rows the refresh just wrote.
@@ -80,6 +92,7 @@ class AutoDownloadWorker @AssistedInject constructor(
 
 object DownloadScheduler {
     private const val AUTO_DOWNLOAD_WORK = "lugu-auto-download"
+    private const val AUTO_DOWNLOAD_NOW_WORK = "lugu-auto-download-now"
 
     /**
      * Unmetered and idle-friendly regardless of the Wi-Fi-only setting.
@@ -99,5 +112,27 @@ object DownloadScheduler {
             .build()
         WorkManager.getInstance(context)
             .enqueueUniquePeriodicWork(AUTO_DOWNLOAD_WORK, ExistingPeriodicWorkPolicy.KEEP, request)
+    }
+
+    /**
+     * One pass now, because a sign-in has just made the server reachable.
+     *
+     * A pass during a lapse ends without a retry, and the periodic one keeps `KEEP`, so
+     * without this a new episode waited up to six hours after the sign-in. The constraints
+     * are the periodic pass's own, for the reason [schedulePeriodic] gives. A pass with
+     * nothing switched on returns at once, so this costs nothing on an untouched install.
+     */
+    fun runNow(context: Context) {
+        val request = OneTimeWorkRequestBuilder<AutoDownloadWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.UNMETERED)
+                    .setRequiresBatteryNotLow(true)
+                    .build(),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
+            .build()
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(AUTO_DOWNLOAD_NOW_WORK, ExistingWorkPolicy.REPLACE, request)
     }
 }

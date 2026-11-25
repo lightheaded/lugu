@@ -129,21 +129,21 @@ class RealtimeSync @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
     private val clock: Clock,
+    private val playing: PlayingItem,
 ) {
     private val started = AtomicBoolean(false)
     private val scope = AtomicReference<CoroutineScope?>(null)
     private val lastCatchUpMs = AtomicLong(0L)
-    private val playing = AtomicReference<ProgressKey?>(null)
     private val itemFetches = RealtimeRateLimit(MAX_ITEM_FETCHES_PER_WINDOW, RATE_WINDOW_MS)
     private val progressFetches = RealtimeRateLimit(MAX_PROGRESS_FETCHES_PER_WINDOW, RATE_WINDOW_MS)
 
     /**
      * What the player is on, so its progress can be left alone. Null when nothing is
      * loaded. Set from the application, which is the only place that can see both the
-     * player and this.
+     * player and this. The sign-in and the periodic sweep read the same [PlayingItem].
      */
     fun setNowPlaying(libraryItemId: String?, episodeId: String?) {
-        playing.set(libraryItemId?.let { ProgressKey(it, episodeId) })
+        playing.set(libraryItemId, episodeId)
     }
 
     /**

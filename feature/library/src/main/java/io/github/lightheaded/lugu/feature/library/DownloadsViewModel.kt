@@ -402,7 +402,7 @@ class DownloadsViewModel @Inject constructor(
             val current = authRepository.account() ?: return@launch
             downloadRepository.download(current, status.libraryItemId, status.episodeId)
                 .onFailure { failure ->
-                    message.value = failure.message ?: "That download could not be started again"
+                    message.value = actionFailureText(failure, "That download could not be started again")
                 }
         }
     }

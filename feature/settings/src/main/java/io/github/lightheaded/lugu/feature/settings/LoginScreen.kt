@@ -88,6 +88,12 @@ fun LoginScreen(
     /** What came back on `lugu://oauth`, or null. See [LoginViewModel.onProviderRedirect]. */
     providerRedirect: String? = null,
     onProviderRedirectHandled: () -> Unit = {},
+    /**
+     * Leaves the sign-in for later and returns to the screen under this one. Null hides the
+     * button, which is right wherever there is nothing under the screen to return to.
+     * See [NOT_NOW_LABEL].
+     */
+    onNotNow: (() -> Unit)? = null,
     devServerUrl: String = "",
     devUsername: String = "",
     devPassword: String = "",
@@ -181,6 +187,21 @@ fun LoginScreen(
                         .padding(12.dp)
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
+            }
+        }
+
+        // The way back, for a sign-in offered on top of another screen. A session that
+        // ended never blocks the downloads, and Back alone did not say so: the screen read
+        // as a wall. The notice above says what still works; this is the way to it.
+        //
+        // Directly under the reason and above the fields, so it is on screen without a
+        // scroll and before the keyboard opens. Added and removed for the reason the notice
+        // gives: whether it shows is decided by the caller before the screen draws, and it
+        // arrives in the same frame as the fields, so nothing moves under a thumb.
+        onNotNow?.let { notNow ->
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = notNow, modifier = Modifier.fillMaxWidth()) {
+                Text(NOT_NOW_LABEL)
             }
         }
 
@@ -361,6 +382,13 @@ fun LoginScreen(
     state.draft?.let { draft -> LoginHeaderDialog(draft, state.draftProblem, viewModel) }
     if (state.pendingCertificate != null) LoginCertificateDialog(state, viewModel)
 }
+
+/**
+ * The label of the way back. Plain, because it can return to any screen — the library, an
+ * item page, the player, Settings — and the account may have no downloads at all. What
+ * still works is said once, in [SESSION_ENDED_NOTICE], which is true wherever this leads.
+ */
+const val NOT_NOW_LABEL = "Not now"
 
 private val LOGIN_CERTIFICATE_TYPES =
     arrayOf("application/x-pkcs12", "application/pkcs12", "application/octet-stream")

@@ -478,7 +478,7 @@ class ItemDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             downloadRepository.download(current, itemId, episodeId)
-                .onFailure { message.value = it.message ?: "Could not start the download" }
+                .onFailure { message.value = actionFailureText(it, "Could not start the download") }
         }
     }
 
@@ -546,7 +546,7 @@ class ItemDetailViewModel @Inject constructor(
                     var refusal: String? = null
                     shown.cancelled.forEach { episodeId ->
                         downloadRepository.download(account, itemId, episodeId)
-                            .onFailure { refusal = refusal ?: (it.message ?: "Could not start the download") }
+                            .onFailure { refusal = refusal ?: actionFailureText(it, "Could not start the download") }
                     }
                     refusal?.let { message.value = it }
                 }
@@ -712,7 +712,7 @@ class ItemDetailViewModel @Inject constructor(
             var refusal: String? = null
             chosen.forEach { row ->
                 downloadRepository.download(current, itemId, row.episode.id)
-                    .onFailure { failure -> refusal = refusal ?: failure.message }
+                    .onFailure { failure -> refusal = refusal ?: actionFailureText(failure, "Could not start the download") }
             }
             message.value = refusal ?: "Downloading ${countOf(chosen.size)}"
             clearSelection()
@@ -810,7 +810,7 @@ class ItemDetailViewModel @Inject constructor(
             }
             message.value = result.fold(
                 onSuccess = { collectionChangeLine(name, inCollection) },
-                onFailure = { it.message ?: "Could not change the collection" },
+                onFailure = { actionFailureText(it, "Could not change the collection") },
             )
         }
     }
@@ -861,7 +861,7 @@ class ItemDetailViewModel @Inject constructor(
                 serverEpisodeFetchRepository.checkAndFetchNewEpisodes(itemId).fold(
                     onSuccess = { message.value = serverFetchLine(it.size) },
                     onFailure = {
-                        message.value = it.message ?: "The server could not fetch new episodes."
+                        message.value = actionFailureText(it, "The server could not fetch new episodes.")
                     },
                 )
             } finally {

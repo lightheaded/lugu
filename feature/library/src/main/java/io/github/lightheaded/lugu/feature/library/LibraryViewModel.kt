@@ -538,7 +538,7 @@ class LibraryViewModel @Inject constructor(
             var refusal: String? = null
             chosen.forEach { row ->
                 downloadRepository.download(current, row.item.id, null)
-                    .onFailure { failure -> refusal = refusal ?: failure.message }
+                    .onFailure { failure -> refusal = refusal ?: actionFailureText(failure, "Could not start the download") }
             }
             message.value = refusal ?: "Downloading ${countOf(chosen.size)}"
             clearSelection()
@@ -626,7 +626,7 @@ class LibraryViewModel @Inject constructor(
                     message.value = collectionBatchLine(name, plan, held)
                     clearSelection()
                 },
-                onFailure = { message.value = it.message ?: "Could not change the collection" },
+                onFailure = { message.value = actionFailureText(it, "Could not change the collection") },
             )
         }
     }
@@ -755,7 +755,7 @@ class LibraryViewModel @Inject constructor(
      */
     private fun reportUnlessCancelled(failure: Throwable, fallback: String) {
         if (failure is CancellationException) return
-        error.value = failure.message ?: fallback
+        error.value = syncFailureText(failure, fallback)
     }
 
     /**

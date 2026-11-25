@@ -135,8 +135,45 @@ object ServerUrl {
     fun isCleartext(input: String): Boolean = normalise(input)?.startsWith("http://") == true
 }
 
-/** Raised when the server rejects our credentials and a fresh login is required. */
-class AuthExpiredException(message: String = "Session expired") : Exception(message)
+/**
+ * Raised when a request cannot be made as the account, and a sign-in is the way on.
+ *
+ * [reason] says which of the cases this is. The words of the message are for a log; code
+ * that has to tell the cases apart reads the reason, because a message can be reworded
+ * without anybody noticing what matched on it. The reason has no default: with one, a new
+ * throw site that forgot to choose became a lapse, and a lapse sends the listener to the
+ * sign-in screen.
+ */
+class AuthExpiredException(
+    message: String,
+    val reason: Reason,
+) : Exception(message) {
+
+    enum class Reason {
+        /**
+         * The session of the active account is over: its tokens are gone or the server
+         * refused to renew them. This is the lapse the app answers with the sign-in screen,
+         * and the account, its library and its downloads all stay.
+         */
+        ENDED,
+
+        /**
+         * The tokens changed under a refresh that was in flight: a sign-out, a switch, or a
+         * sign-in with newer tokens. A moment's race and not a lapse. The next request reads
+         * the new state.
+         */
+        CHANGED,
+
+        /** There is no active account to make the request as. */
+        NO_ACCOUNT,
+
+        /** The server or the identity provider refused a sign-in that somebody just tried. */
+        REFUSED,
+    }
+
+    /** True for the case the app calls a lapse. See [Reason.ENDED]. */
+    val isSessionEnded: Boolean get() = reason == Reason.ENDED
+}
 
 /** Raised for non-2xx responses that are not an auth problem. */
 class AbsHttpException(val status: Int, message: String) : Exception(message)

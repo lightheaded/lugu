@@ -149,6 +149,35 @@ runs when the app comes on screen and when the socket connects. Anything that mu
 ask the server runs after the start, as `checkPositionLate` does, and must keep
 pull-before-push safe: hold the item's pushes until the answer is in.
 
+## A session that ended never blocks the downloads
+
+**When the sign-in lapses, the library still opens, downloaded items still play, and the
+sign-in is offered and can be dismissed** (maintainer, 25 November 2026: "when the session
+is expired, I should still be able to listen to offline files"). A lapsed account keeps its
+row, its mirror and its downloads, so:
+
+- The start destination is Home whenever an account is active, tokens or not
+  (`AuthRepository.hasActiveAccount`). Only a device with no account starts on sign-in.
+- The sign-in screen is pushed on top of the screen in use, once per lapse for each launch
+  of the activity (a rotation does not push it again). "Not now" and Back both return to
+  the screen under it. Only the sign-in that the lapse pushed has "Not now" (a nav argument
+  marks it), also when it was pushed over Accounts. A sign-in somebody opened from the
+  Accounts screen has none, and Back returns to Accounts.
+- Nothing on the play path of a downloaded item may need a token. A send that a lapse
+  blocks stays in the outbox, is not counted as an attempt, and goes out after the next
+  sign-in.
+- A screen that cannot sync, or an action that fails, says that the session ended and
+  that the downloads still play. It never blocks the screen. Only a real lapse
+  (`AuthExpiredException.Reason.ENDED`) says this, never a refresh race or no account.
+- **Newer listening wins** (maintainer, 25 November 2026). When a sweep meets a position
+  that is not sent yet and a server copy from another device, the side written later
+  wins. A newer phone position, a finished mark included, stays and goes to the server. An
+  older one is replaced and goes into the history as "From another device". The two clocks
+  differ, so the phone wins only when it is newer by more than
+  `ProgressConflictResolver.NEWER_LISTENING_MARGIN_MS`. The rule is
+  `ProgressConflictResolver.sweepVerdict`. The check at a session start still decides by
+  origin, and the sweep records the copy it judged so that the two agree.
+
 ## Compose overlay rule
 
 **A clickable overlay must not cover fixed interactive controls.** `StatusStrip` is

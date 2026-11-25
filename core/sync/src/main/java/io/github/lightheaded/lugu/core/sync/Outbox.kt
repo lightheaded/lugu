@@ -65,9 +65,21 @@ class OutboxFlusher @Inject constructor(
                 outcome.isSuccess -> outboxDao.delete(entry.rowId)
 
                 outcome.exceptionOrNull() is AuthExpiredException -> {
-                    // Credentials are gone: retrying the rest now just burns battery.
-                    outboxDao.recordFailure(entry.rowId, clock.nowMs(), "auth expired")
-                    return FlushResult.AuthRequired
+                    // Not counted as an attempt, whatever the reason: the send was never
+                    // tried, so it says nothing about the entry. When every blocked flush
+                    // of a lapse counted, the attempts were used up by the time the next
+                    // sign-in let the entry go out, and its first ordinary failure after
+                    // that dropped it instead of trying again.
+                    outboxDao.recordBlocked(entry.rowId, clock.nowMs(), "auth expired")
+                    // A sign-in that changed during a refresh is a race: the next request
+                    // reads the new tokens, so this one is retried with the rest. Any
+                    // other reason waits for a person, and the rest would only fail the
+                    // same way and burn battery.
+                    if (SyncRetry.worthRetrying(outcome.exceptionOrNull()!!)) {
+                        failed += 1
+                    } else {
+                        return FlushResult.AuthRequired
+                    }
                 }
 
                 entry.attempts >= MAX_ATTEMPTS -> {
@@ -121,6 +133,34 @@ class OutboxWorker @AssistedInject constructor(
     }
 }
 
+/**
+ * Whether a background pass that failed is worth WorkManager's backoff.
+ *
+ * A session that ended is not. Every request of the pass fails on the missing token until
+ * somebody signs in again, so a retry only wakes the phone to fail the same way, again and
+ * again for as long as the lapse lasts. The pass ends instead, and the sign-in brings the
+ * work back: [SyncScheduler.syncNow] runs the reconcile at once, [SyncScheduler.flushNow]
+ * sends the outbox, and the periodic work stays scheduled and runs at its next period.
+ */
+object SyncRetry {
+    /**
+     * Not worth a retry only for the reasons that wait for a person: a session that ended,
+     * no account, or a sign-in that was refused. A sign-in that changed under a refresh is a
+     * race, and the next attempt reads the new tokens, so it retries like a network fault.
+     * The `when` lists every reason, so a new one cannot get a rule by accident.
+     */
+    fun worthRetrying(error: Throwable): Boolean = when (error) {
+        is AuthExpiredException -> when (error.reason) {
+            AuthExpiredException.Reason.CHANGED -> true
+            AuthExpiredException.Reason.ENDED,
+            AuthExpiredException.Reason.NO_ACCOUNT,
+            AuthExpiredException.Reason.REFUSED,
+            -> false
+        }
+        else -> true
+    }
+}
+
 /** Periodic reconciliation: re-pulls progress and re-mirrors libraries. */
 @HiltWorker
 class ReconcileWorker @AssistedInject constructor(
@@ -130,14 +170,22 @@ class ReconcileWorker @AssistedInject constructor(
     private val libraryRepository: LibraryRepository,
     private val progressRepository: ProgressRepository,
     private val newBooks: NewBookWatch,
+    private val playingItem: PlayingItem,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val account = authRepository.account() ?: return Result.success()
+        // Checked before the first request, for the reason [SyncRetry] gives. A success and
+        // not a retry: the periodic work keeps its period, and the sign-in runs this again.
+        if (authRepository.lapsedAccount() != null) return Result.success()
         // The sync that a sign-in starts. Everything it finds is the library, not news.
         if (inputData.getBoolean(SIGN_IN, false)) runCatching { newBooks.startSession() }
-        val libraries = libraryRepository.syncLibraries(account).getOrElse { return Result.retry() }
+        val libraries = libraryRepository.syncLibraries(account).getOrElse { error ->
+            // The session can also end during the pass, when the server refuses a refresh.
+            return if (SyncRetry.worthRetrying(error)) Result.retry() else Result.success()
+        }
         libraries.forEach { libraryRepository.syncLibraryItems(account, it.id) }
-        progressRepository.reconcile(account)
+        // The item in the player is left out, as every sweep leaves it out. See PlayingItem.
+        progressRepository.reconcile(account, except = playingItem.get())
         return Result.success()
     }
 

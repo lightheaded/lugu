@@ -247,7 +247,8 @@ class ProgressClockSkewTest {
     fun `accepting a push records what the server took and not when`() = runTest {
         givenPushed(positionSec = 19.829)
         repository.record(account, ITEM, null, positionSec = 42.0, durationSec = 90.0)
-        assertThat(db.progressDao().get(account.serverId, account.userId, ITEM, "")?.isDirty).isTrue()
+        val recorded = requireNotNull(db.progressDao().get(account.serverId, account.userId, ITEM, ""))
+        assertThat(recorded.isDirty).isTrue()
 
         db.progressDao().markClean(
             serverId = account.serverId,
@@ -256,6 +257,7 @@ class ProgressClockSkewTest {
             episodeKey = "",
             pushedTimeSec = 42.0,
             pushedFinished = false,
+            pushedLastUpdateMs = recorded.lastUpdateMs,
         )
 
         val row = db.progressDao().get(account.serverId, account.userId, ITEM, "")

@@ -1,15 +1,18 @@
 package io.github.lightheaded.lugu.core.sync
 
+import android.util.Log
 import io.github.lightheaded.lugu.core.api.AbsClient
 import io.github.lightheaded.lugu.core.api.AbsOidc
 import io.github.lightheaded.lugu.core.api.AuthExpiredException
 import io.github.lightheaded.lugu.core.api.LoginResult
+import io.github.lightheaded.lugu.core.api.MediaProgressDto
 import io.github.lightheaded.lugu.core.api.ServerUrl
 import io.github.lightheaded.lugu.core.db.AccountDataDao
 import io.github.lightheaded.lugu.core.db.ServerDao
 import io.github.lightheaded.lugu.core.db.ServerEntity
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -43,6 +46,7 @@ class AuthRepository @Inject constructor(
     private val tokenStore: AccountTokenStore,
     private val progressRepository: ProgressRepository,
     private val serverUrlProvider: ActiveServerUrlProvider,
+    private val playingItem: PlayingItem = PlayingItem(),
 ) {
     /**
      * The identity-provider sign-in in progress, if any.
@@ -77,11 +81,6 @@ class AuthRepository @Inject constructor(
         val result = client.login(url, username, password)
 
         val serverId = "${url}#${result.userId}"
-        // Stored under the account it belongs to, before that account is made active.
-        // `save` resolves the active account at write time, and at this moment the active
-        // account is either nothing at all or the one being signed in *beside*, so it
-        // would put these tokens on the wrong account. See EncryptedTokenStore.saveFor.
-        tokenStore.saveFor(serverId, result.tokens)
         // Signing in again on the same account must not throw away a second address that
         // was already configured: a re-login after an expired refresh token is routine.
         // Looked up by id and not through `active()`, because with more than one account
@@ -101,13 +100,46 @@ class AuthRepository @Inject constructor(
             isActive = true,
             lanBaseUrl = existingLan,
         )
-        serverDao.setActive(server)
 
         // The login response already carries every progress row; seeding Room from it
         // means the first library screen has continue-listening without another call.
-        progressRepository.seedFromServer(server.toAccount(), result.progress)
+        // Before the tokens: the seed drops each queued push that a newer position from
+        // another device replaces, and with no token yet, no flush can send one first.
+        seedAtSignIn(server.toAccount(), result.progress)
+        // Stored under the account it belongs to, before that account is made active.
+        // `save` resolves the active account at write time, and at this moment the active
+        // account is either nothing at all or the one being signed in *beside*, so it
+        // would put these tokens on the wrong account. See EncryptedTokenStore.saveFor.
+        tokenStore.saveFor(serverId, result.tokens)
+        serverDao.setActive(server)
 
         server.toAccount()
+    }
+
+    /**
+     * Seeds Room with the positions the sign-in answered with.
+     *
+     * The item in the player is left out, as every sweep leaves it out: a sign-in while a
+     * lapsed download plays wrote the server's copy under it, dropped its push and wrote a
+     * false "From another device" entry, and the next tick put the position back.
+     *
+     * A failure here does not stop the sign-in. The server has accepted the password, and
+     * the sign-in screen must always get the listener in. The trade-off: when the seed fails,
+     * a push queued during a lapse is not judged before the tokens land, so the flush after
+     * the sign-in can send a position older than one from another device. The reconcile
+     * that the sign-in starts seeds again, and a failed seed is rare (a write to the local
+     * database). Nothing in this code base reports a swallowed failure beyond the device:
+     * crash reporting sends crashes only. So the failure goes to logcat, by its class name
+     * only, with no account or address in it.
+     */
+    private suspend fun seedAtSignIn(account: ActiveAccount, progress: List<MediaProgressDto>) {
+        try {
+            progressRepository.seedFromServer(account, progress, except = playingItem.get())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            runCatching { Log.w(LOG_TAG, "progress seed at sign-in failed: ${e.javaClass.simpleName}") }
+        }
     }
 
     /**
@@ -118,7 +150,6 @@ class AuthRepository @Inject constructor(
      */
     private suspend fun adoptSignedInUser(url: String, result: LoginResult): ActiveAccount {
         val serverId = "${url}#${result.userId}"
-        tokenStore.saveFor(serverId, result.tokens)
         val existing = serverDao.byId(serverId)
         val server = ServerEntity(
             serverId = serverId,
@@ -130,8 +161,10 @@ class AuthRepository @Inject constructor(
             isActive = true,
             lanBaseUrl = existing?.lanBaseUrl,
         )
+        // The seed before the tokens, for the reason `login` gives.
+        seedAtSignIn(server.toAccount(), result.progress)
+        tokenStore.saveFor(serverId, result.tokens)
         serverDao.setActive(server)
-        progressRepository.seedFromServer(server.toAccount(), result.progress)
         return server.toAccount()
     }
 
@@ -317,8 +350,26 @@ class AuthRepository @Inject constructor(
     /** True when we hold credentials that still stand a chance of working. */
     suspend fun isSignedIn(): Boolean = serverDao.active() != null && tokenStore.tokens() != null
 
+    /**
+     * True when an account is active, whether or not its sign-in still stands.
+     *
+     * This, and not [isSignedIn], is what decides whether the app opens on the library. A
+     * lapsed account keeps its row, its mirror and its downloads, and every one of them
+     * still works without a token: the downloads play from disk and the library reads from
+     * Room. Opening such an account on a bare sign-in screen hid all of that behind a form
+     * with no way past it (maintainer, 25 November 2026). The sign-in is offered on top of
+     * the library instead — see [observeLapsedAccount].
+     *
+     * Reads the row only. No token store is touched, so a broken encrypted store cannot
+     * turn a launch with an account into a launch without one.
+     */
+    suspend fun hasActiveAccount(): Boolean = serverDao.active() != null
+
     suspend fun ensureUsable(): Result<Unit> = runCatching {
-        if (!isSignedIn()) throw AuthExpiredException("Not signed in")
+        if (serverDao.active() == null) {
+            throw AuthExpiredException("No account", AuthExpiredException.Reason.NO_ACCOUNT)
+        }
+        if (!isSignedIn()) throw AuthExpiredException("Not signed in", AuthExpiredException.Reason.ENDED)
         client.validAccessToken()
         Unit
     }
@@ -332,3 +383,5 @@ internal fun ServerEntity.toAccount() = ActiveAccount(
     defaultLibraryId = defaultLibraryId,
     lanBaseUrl = lanBaseUrl,
 )
+
+private const val LOG_TAG = "LuguAuth"

@@ -252,6 +252,10 @@ data class ProgressEntity(
      *
      * **Never use it to decide a conflict.** That is what [serverLastUpdateMs] is for, and
      * doing it here is what put a resumed book thirty seconds behind where it was left.
+     * The one exception is a sweep that meets a dirty row, where newer listening wins
+     * across a wide margin (`ProgressConflictResolver.sweepVerdict`). A dirty row's value is
+     * always this device's clock at the time of the listening, because only a local
+     * position write makes a row dirty.
      */
     val lastUpdateMs: Long,
     val startedAtMs: Long,

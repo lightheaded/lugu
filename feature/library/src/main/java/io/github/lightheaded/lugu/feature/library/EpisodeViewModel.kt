@@ -155,7 +155,7 @@ internal class RowUndos(
                     downloadRepository.restoreDeferred(account, shown.deferred)
                 } else {
                     downloadRepository.download(account, shown.itemId, shown.episodeId)
-                        .onFailure { onMessage(it.message ?: "Could not start the download") }
+                        .onFailure { onMessage(actionFailureText(it, "Could not start the download")) }
                 }
 
                 // False when something newer wrote the row; the newer state stands.
@@ -293,7 +293,7 @@ class EpisodeViewModel @Inject constructor(
         viewModelScope.launch {
             val current = authRepository.account() ?: return@launch
             downloadRepository.download(current, itemId, episodeId)
-                .onFailure { message.value = it.message ?: "Could not start the download" }
+                .onFailure { message.value = actionFailureText(it, "Could not start the download") }
         }
     }
 
